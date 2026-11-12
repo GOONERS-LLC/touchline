@@ -10,6 +10,10 @@
 - **Live match board** showing a top-down replay of every minute, with key moments announced to VoiceOver.
 - **Full football pyramid** with promotion, relegation, play-offs, continental cups and international tournaments.
 - **Transfer market, contract renewals, youth academy and AI clubs** that scout, bid and manage their own squads.
+- **Full-time story.** Match Facts, Ratings and Stats tabs, then Player of the Match, then the rest of your division.
+- **A living crowd and haptics.** Fans react to every chance, foul and goal; your phone feels them too.
+- **Kit Designer.** Real colours and famous patterns, sponsors on the shirt, and supporters who judge your redesigns.
+- **Real 2026-27 squads** for 34 leagues, scraped from Transfermarkt by tools/scrape-transfermarkt.js.
 - **Procedural crests and faces.** No real badges or likenesses are used, and the game needs no network connection.
 - **Floodlight design.** A night-match palette of deep navy, cobalt and amber with high-contrast text throughout.
 
@@ -32,6 +36,9 @@ open Touchline.xcodeproj
 Choose an iOS 17 simulator or device and run.
 
 ## Releases
+
+After each release, run node tools/publish-website.js to put the new IPA on the Gooners LLC website.
+
 
 Every push to `main` runs **Build iOS App** in GitHub Actions. It builds an unsigned `Touchline.ipa`, attaches it with a `release-manifest.json` (version, commit and SHA-256) to a new GitHub Release, and bumps the minor version. Sideload the IPA with a tool such as Feather.
 
