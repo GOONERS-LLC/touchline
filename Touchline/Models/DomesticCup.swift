@@ -10,6 +10,18 @@
 
 import Foundation
 
+/// What kind of domestic trophy a cup is.
+public enum CupKind: String, Codable, Hashable {
+    /// The open national cup (FA Cup, Copa del Rey).
+    case national
+    /// The league cup for professional clubs (EFL Cup, Scottish League Cup).
+    case league
+    /// A lower-division trophy (EFL Trophy, Scottish Challenge Cup).
+    case trophy
+    /// Champions against cup winners before the season (Community Shield).
+    case superCup
+}
+
 public struct DomesticCupState: Codable, Hashable, Identifiable {
     public var id: String { name }
     public let country: LeagueCountry
@@ -23,8 +35,10 @@ public struct DomesticCupState: Codable, Hashable, Identifiable {
     /// Clubs that skip the first round.
     public var byeClubIds: [UUID]
     public var championClubId: UUID?
+    public var kind: CupKind = .national
 
-    public init(country: LeagueCountry, name: String, rounds: [String], roundWeeks: [Int], byeClubIds: [UUID]) {
+    public init(country: LeagueCountry, name: String, rounds: [String], roundWeeks: [Int], byeClubIds: [UUID], kind: CupKind = .national) {
+        self.kind = kind
         self.country = country
         self.name = name
         self.rounds = rounds
@@ -39,6 +53,23 @@ public struct DomesticCupState: Codable, Hashable, Identifiable {
     }
 
     public var isFinished: Bool { championClubId != nil }
+
+    private enum CodingKeys: String, CodingKey {
+        case country, name, rounds, roundWeeks, currentRoundIndex, byeClubIds, championClubId, kind
+    }
+
+    // Saves from before league cups existed load as national cups.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        country = try c.decode(LeagueCountry.self, forKey: .country)
+        name = try c.decode(String.self, forKey: .name)
+        rounds = try c.decode([String].self, forKey: .rounds)
+        roundWeeks = try c.decode([Int].self, forKey: .roundWeeks)
+        currentRoundIndex = try c.decode(Int.self, forKey: .currentRoundIndex)
+        byeClubIds = try c.decode([UUID].self, forKey: .byeClubIds)
+        championClubId = try c.decodeIfPresent(UUID.self, forKey: .championClubId)
+        kind = (try? c.decodeIfPresent(CupKind.self, forKey: .kind)) ?? .national
+    }
 }
 
 public enum DomesticCups {
@@ -70,6 +101,53 @@ public enum DomesticCups {
         case .mexico: return "Copa MX"
         case .unitedStates: return "U.S. Open Cup"
         default: return "\(country.displayName) Cup"
+        }
+    }
+
+    /// League cups for professional clubs: name and the divisions that enter.
+    public static func leagueCup(for country: LeagueCountry) -> (name: String, levels: ClosedRange<Int>)? {
+        switch country {
+        case .england: return ("EFL Cup", 1...4)
+        case .scotland: return ("Scottish League Cup", 1...4)
+        case .portugal: return ("Taça da Liga", 1...2)
+        case .japan: return ("J.League Cup", 1...3)
+        default: return nil
+        }
+    }
+
+    /// Lower-division trophies: name and the divisions that enter.
+    public static func trophy(for country: LeagueCountry) -> (name: String, levels: ClosedRange<Int>)? {
+        switch country {
+        case .england: return ("EFL Trophy", 3...4)
+        case .scotland: return ("Scottish Challenge Cup", 2...4)
+        default: return nil
+        }
+    }
+
+    /// Super cups: last season's champions against the cup winners.
+    public static func superCupName(for country: LeagueCountry) -> String? {
+        switch country {
+        case .england: return "Community Shield"
+        case .spain: return "Supercopa de España"
+        case .italy: return "Supercoppa Italiana"
+        case .germany: return "DFL-Supercup"
+        case .france: return "Trophée des Champions"
+        case .portugal: return "Supertaça Cândido de Oliveira"
+        case .netherlands: return "Johan Cruyff Shield"
+        case .turkey: return "Turkish Super Cup"
+        case .belgium: return "Belgian Super Cup"
+        case .brazil: return "Supercopa do Brasil"
+        case .argentina: return "Supercopa Argentina"
+        case .japan: return "Japanese Super Cup"
+        case .mexico: return "Campeón de Campeones"
+        case .russia: return "Russian Super Cup"
+        case .ukraine: return "Ukrainian Super Cup"
+        case .greece: return "Greek Super Cup"
+        case .poland: return "Polish Super Cup"
+        case .romania: return "Supercupa României"
+        case .saudiArabia: return "Saudi Super Cup"
+        case .southKorea: return "Korean Super Cup"
+        default: return nil
         }
     }
 

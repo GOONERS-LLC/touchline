@@ -24,6 +24,11 @@ struct TouchlineApp: App {
         let font = UIFont.systemFont(ofSize: 12, weight: .heavy)
         seg.setTitleTextAttributes([.foregroundColor: UIColor.white, .font: font], for: .normal)
         seg.setTitleTextAttributes([.foregroundColor: UIColor(red: 0.027, green: 0.09, blue: 0.1, alpha: 1), .font: font], for: .selected)
+        // Crash-test start states (only with a -uitest- launch argument).
+        if let harness = UITestHarness.makeState() {
+            _gameState = State(initialValue: harness)
+            return
+        }
         // Attempt to load an existing autosave, otherwise bootstrap a new world.
         do {
             let savedState = try SaveManager.shared.loadAutoSave()

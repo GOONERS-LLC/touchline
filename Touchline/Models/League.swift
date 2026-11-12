@@ -237,7 +237,72 @@ public struct LeagueStanding: Codable, Hashable, Identifiable {
 // MARK: - Fixture Generator
 
 public struct FixtureGenerator {
-    
+
+    /// A league season with its real number of rounds, placed on the shared
+    /// season calendar (Saturdays, then free Wednesdays). The round-robin is
+    /// repeated as often as needed, venues swapping on every repeat, so the
+    /// Scottish Premiership plays 38 rounds and MLS 34.
+    public static func generateLeagueSeason(
+        clubIds: [UUID],
+        competitionName: String,
+        startDateString: String,
+        rounds: Int
+    ) -> [Fixture] {
+        var seen = Set<UUID>()
+        let uniqueClubs = clubIds.filter { seen.insert($0).inserted }
+        guard uniqueClubs.count >= 2, rounds >= 1 else { return [] }
+
+        var slots: [UUID?] = uniqueClubs.map { Optional($0) }
+        if !slots.count.isMultiple(of: 2) { slots.append(nil) }
+        let n = slots.count
+
+        // One full round-robin by the circle method.
+        var base: [[(UUID?, UUID?)]] = []
+        let stationary = slots[0]
+        var rotating = Array(slots[1...])
+        for round in 1...(n - 1) {
+            var pairs: [(UUID?, UUID?)] = []
+            for match in 0..<(n / 2) {
+                if match == 0 {
+                    pairs.append(round % 2 == 1 ? (stationary, rotating[0]) : (rotating[0], stationary))
+                } else {
+                    let a = rotating[match], b = rotating[rotating.count - match]
+                    pairs.append(match % 2 == 1 ? (a, b) : (b, a))
+                }
+            }
+            base.append(pairs)
+            if let last = rotating.popLast() { rotating.insert(last, at: 0) }
+        }
+
+        // Repeat it, swapping venues on every other pass, up to `rounds`.
+        var schedule: [[(UUID?, UUID?)]] = []
+        var pass = 0
+        while schedule.count < rounds {
+            for pairs in base where schedule.count < rounds {
+                schedule.append(pass.isMultiple(of: 2) ? pairs : pairs.map { ($0.1, $0.0) })
+            }
+            pass += 1
+        }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        let opening = formatter.date(from: startDateString) ?? Date()
+        let slotNumbers = SeasonCalendar.leagueSlots(rounds: rounds)
+
+        var fixtures: [Fixture] = []
+        for (index, pairs) in schedule.enumerated() {
+            let slot = slotNumbers[index]
+            let date = Calendar.current.date(byAdding: .day, value: SeasonCalendar.dayOffset(forSlot: slot), to: opening) ?? opening
+            let dateString = formatter.string(from: date)
+            for case let (home?, away?) in pairs {
+                fixtures.append(Fixture(homeClubId: home, awayClubId: away, matchWeek: slot,
+                                        date: dateString, competition: competitionName))
+            }
+        }
+        return fixtures
+    }
+
     /// Generates a complete double round-robin schedule for a given set of club IDs.
     /// Every club plays every other club exactly once at home and once away.
     ///

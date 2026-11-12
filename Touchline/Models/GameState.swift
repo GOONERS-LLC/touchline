@@ -295,12 +295,11 @@ public final class GameState: Codable {
 
         var allFixtures: [Fixture] = []
         for league in leagues {
-            allFixtures.append(contentsOf: FixtureGenerator.generateDoubleRoundRobin(
+            allFixtures.append(contentsOf: FixtureGenerator.generateLeagueSeason(
                 clubIds: league.clubIds,
                 competitionName: league.name,
                 startDateString: "2026-08-08",
-                skippingWeeks: Set(DomesticCups.cupWeeks),
-                singleRoundRobin: league.clubIds.count > 24
+                rounds: league.tier.seasonRounds(clubCount: league.clubIds.count)
             ))
         }
 
@@ -861,8 +860,12 @@ public final class GameState: Codable {
         var reputationByClub: [UUID: Int] = [:]
         for club in clubs { reputationByClub[club.id] = club.reputation }
         
+        // A Wednesday cup night is not a new week: no second round of wages,
+        // weekly income or training injuries.
+        let isCupNight = SeasonCalendar.isMidweek(season.currentWeek) && thisWeek.allSatisfy { $0.cupRound != nil }
+
         // 2. Weekly player fitness recovery & sharpness decay
-        for clubIdx in 0..<clubs.count {
+        for clubIdx in 0..<clubs.count where !isCupNight {
             let medical = clubs[clubIdx].medicalFacilityLevel
             for playerIdx in 0..<clubs[clubIdx].players.count {
                 clubs[clubIdx].players[playerIdx].advanceWeekRecovery()
@@ -922,8 +925,9 @@ public final class GameState: Codable {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        let gapToNextSlot = max(1, SeasonCalendar.dayOffset(forSlot: season.currentWeek + 1) - SeasonCalendar.dayOffset(forSlot: season.currentWeek))
         if let currentDate = formatter.date(from: season.currentDate),
-           let nextWeekDate = Calendar.current.date(byAdding: .day, value: 7, to: currentDate) {
+           let nextWeekDate = Calendar.current.date(byAdding: .day, value: gapToNextSlot, to: currentDate) {
             var next = formatter.string(from: nextWeekDate)
             // A midweek European game moves the date on a few days; snap back to
             // next week's domestic fixtures so the calendar never drifts.
@@ -1747,18 +1751,28 @@ public final class GameState: Codable {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        let openingDate = season.fixtures.first(where: { $0.matchWeek == 1 })?.date ?? season.currentDate
-        guard let base = formatter.date(from: openingDate),
-              let date = Calendar.current.date(byAdding: .day, value: (week - 1) * 7, to: base) else {
+        // The opening Saturday, worked back from any league fixture.
+        guard let reference = season.fixtures.first(where: { !$0.isEuropean && $0.cupRound == nil }),
+              let refDate = formatter.date(from: reference.date),
+              let opening = Calendar.current.date(byAdding: .day, value: -SeasonCalendar.dayOffset(forSlot: reference.matchWeek), to: refDate),
+              let date = Calendar.current.date(byAdding: .day, value: SeasonCalendar.dayOffset(forSlot: week), to: opening) else {
             return season.currentDate
         }
         return formatter.string(from: date)
     }
 
-    /// Creates each country's cup and draws its first round. The strongest
-    /// clubs (top division first, then reputation) receive byes so the bracket
-    /// is a power of two from the second round on.
+    /// Last season's champions and cup winners, captured when a new season
+    /// begins so the super cups can be drawn. Not saved: only used at seeding.
+    private var superCupSeeds: [LeagueCountry: [UUID]] = [:]
+
+    /// Creates each country's trophies and draws their first rounds:
+    /// the national cup, a league cup and lower-division trophy where the
+    /// country has one, and the super cup (champions against cup winners).
+    /// The strongest clubs (top division first, then reputation) receive byes
+    /// so each bracket is a power of two from the second round on.
     public func seedDomesticCups() {
+        let seeds = superCupSeeds
+        superCupSeeds = [:]
         domesticCups = []
         var clubsByCountry: [LeagueCountry: [Club]] = [:]
         for league in leagues {
@@ -1766,29 +1780,74 @@ public final class GameState: Codable {
             clubsByCountry[league.tier.country, default: []].append(contentsOf: members)
         }
         for (country, members) in clubsByCountry where members.count >= DomesticCups.minimumEntrants {
-            let seeded = members.sorted { lhs, rhs in
-                if lhs.leagueTier.level != rhs.leagueTier.level { return lhs.leagueTier.level < rhs.leagueTier.level }
-                return lhs.reputation > rhs.reputation
+            addKnockoutCup(country: country, name: DomesticCups.cupName(for: country), kind: .national, members: members)
+            if let leagueCup = DomesticCups.leagueCup(for: country) {
+                addKnockoutCup(country: country, name: leagueCup.name, kind: .league,
+                               members: members.filter { leagueCup.levels.contains($0.leagueTier.level) })
             }
-            let size = DomesticCups.bracketSize(for: seeded.count)
-            let byeCount = size - seeded.count
-            let roundCount = Int(log2(Double(size)).rounded())
-            // Play the rounds in the last cup weeks so every final lands together.
-            let weeks = Array(DomesticCups.cupWeeks.suffix(roundCount))
-            guard roundCount >= 2, weeks.count == roundCount else { continue }
-
-            var cup = DomesticCupState(
-                country: country,
-                name: DomesticCups.cupName(for: country),
-                rounds: DomesticCups.roundNames(count: roundCount),
-                roundWeeks: weeks,
-                byeClubIds: seeded.prefix(byeCount).map { $0.id }
-            )
-            let firstRoundClubs = seeded.dropFirst(byeCount).map { $0.id }
-            drawCupRound(&cup, entrants: firstRoundClubs)
-            domesticCups.append(cup)
+            if let trophy = DomesticCups.trophy(for: country) {
+                addKnockoutCup(country: country, name: trophy.name, kind: .trophy,
+                               members: members.filter { trophy.levels.contains($0.leagueTier.level) })
+            }
+            if let superCup = DomesticCups.superCupName(for: country) {
+                // First season: the two strongest top-flight clubs.
+                let pair = seeds[country] ?? Array(members.filter { $0.leagueTier.level == 1 }
+                    .sorted { $0.reputation > $1.reputation }.prefix(2).map { $0.id })
+                if pair.count == 2 {
+                    var cup = DomesticCupState(country: country, name: superCup, rounds: ["Final"],
+                                               roundWeeks: SeasonCalendar.cupNights(for: .superCup),
+                                               byeClubIds: [], kind: .superCup)
+                    drawCupRound(&cup, entrants: pair)
+                    domesticCups.append(cup)
+                }
+            }
         }
-        domesticCups.sort { $0.country.index < $1.country.index }
+        let order: [CupKind: Int] = [.national: 0, .league: 1, .trophy: 2, .superCup: 3]
+        domesticCups.sort { lhs, rhs in
+            lhs.country.index != rhs.country.index ? lhs.country.index < rhs.country.index
+                : (order[lhs.kind] ?? 0) < (order[rhs.kind] ?? 0)
+        }
+    }
+
+    /// Builds one knockout cup from `members` on its kind's cup nights.
+    private func addKnockoutCup(country: LeagueCountry, name: String, kind: CupKind, members: [Club]) {
+        guard members.count >= 4 else { return }
+        let seeded = members.sorted { lhs, rhs in
+            if lhs.leagueTier.level != rhs.leagueTier.level { return lhs.leagueTier.level < rhs.leagueTier.level }
+            return lhs.reputation > rhs.reputation
+        }
+        let size = DomesticCups.bracketSize(for: seeded.count)
+        let byeCount = size - seeded.count
+        let roundCount = Int(log2(Double(size)).rounded())
+        // Play the rounds on the last cup nights so every final lands together.
+        let weeks = Array(SeasonCalendar.cupNights(for: kind).suffix(roundCount))
+        guard roundCount >= 2, weeks.count == roundCount else { return }
+        var cup = DomesticCupState(
+            country: country,
+            name: name,
+            rounds: DomesticCups.roundNames(count: roundCount),
+            roundWeeks: weeks,
+            byeClubIds: seeded.prefix(byeCount).map { $0.id },
+            kind: kind
+        )
+        drawCupRound(&cup, entrants: seeded.dropFirst(byeCount).map { $0.id })
+        domesticCups.append(cup)
+    }
+
+    /// Champions and cup winners of the season just finished, per country.
+    private func capturedSuperCupSeeds() -> [LeagueCountry: [UUID]] {
+        var seeds: [LeagueCountry: [UUID]] = [:]
+        for league in leagues where league.tier.level == 1 {
+            let table = standings(for: league)
+            guard let champion = table.first?.clubId else { continue }
+            let cupWinner = domesticCups.first { $0.country == league.tier.country && $0.kind == .national }?.championClubId
+            if let cupWinner, cupWinner != champion {
+                seeds[league.tier.country] = [champion, cupWinner]
+            } else if table.count > 1 {
+                seeds[league.tier.country] = [champion, table[1].clubId]
+            }
+        }
+        return seeds
     }
 
     /// Pairs `entrants` at random into ties for the cup's current round.
@@ -3913,6 +3972,9 @@ public final class GameState: Codable {
         }
         let nextYear = "\(startYearInt)-\(String(format: "%02d", endYearInt % 100))"
         
+        // Champions and cup winners meet in the super cups.
+        superCupSeeds = capturedSuperCupSeeds()
+
         // Derive fixture start date and preseason date dynamically from the new season year.
         let seasonStartDate = String(format: "%d-08-09", startYearInt)
         let preseasonDate = String(format: "%d-08-01", startYearInt)
@@ -3920,12 +3982,11 @@ public final class GameState: Codable {
         // Regenerate fixtures for all leagues
         var allNewFixtures: [Fixture] = []
         for league in leagues {
-            let generated = FixtureGenerator.generateDoubleRoundRobin(
+            let generated = FixtureGenerator.generateLeagueSeason(
                 clubIds: league.clubIds,
                 competitionName: league.name,
                 startDateString: seasonStartDate,
-                skippingWeeks: Set(DomesticCups.cupWeeks),
-                singleRoundRobin: league.clubIds.count > 24
+                rounds: league.tier.seasonRounds(clubCount: league.clubIds.count)
             )
             allNewFixtures.append(contentsOf: generated)
         }
@@ -4619,7 +4680,7 @@ public final class GameState: Codable {
             }
             ucl += take(allocation.championsLeague)
             var europa = take(allocation.europaLeague)
-            if let cupWinner = domesticCups.first(where: { $0.country == country })?.championClubId,
+            if let cupWinner = domesticCups.first(where: { $0.country == country && $0.kind == .national })?.championClubId,
                order.contains(cupWinner), !ucl.contains(cupWinner), !europa.contains(cupWinner),
                !Array(order.prefix(cursor)).contains(cupWinner) {
                 europa.append(cupWinner)
@@ -4785,7 +4846,7 @@ public final class GameState: Codable {
         let position = index + 1
 
         var cupRun: String?
-        if let cup = domesticCups.first(where: { $0.country == league.tier.country }) {
+        if let cup = domesticCups.first(where: { $0.country == league.tier.country && $0.kind == .national }) {
             if cup.championClubId == club.id {
                 cupRun = "\(cup.name) winners"
             } else if let lastTie = season.fixtures.filter({ $0.competition == cup.name && $0.involves(clubId: club.id) }).last,

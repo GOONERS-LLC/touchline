@@ -142,7 +142,7 @@ jobs:
             -scheme Touchline \
             -destination "id=$SIM" \
             -resultBundlePath "$RUNNER_TEMP/TouchlineTests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | tail -200
+            CODE_SIGNING_ALLOWED=NO 2>&1 | grep -E "Test Case|error:|crash|Crash|Terminating|fatal|Assertion|t = " | tail -1500
 
       - name: Upload test results
         if: failure()

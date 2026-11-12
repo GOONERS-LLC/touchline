@@ -1581,6 +1581,8 @@ public struct StandingsView: View {
     @State private var selectedLeagueId: UUID?
     /// Table, domestic cup or player leaderboards.
     @State private var view: LeagueView = .table
+    /// Which of the country's trophies the Cup tab shows.
+    @State private var selectedCupName: String?
     @State private var leaderboard: Leaderboard = .goals
 
     enum LeagueView: String, CaseIterable { case table = "Table", cup = "Cup", stats = "Stats" }
@@ -1627,7 +1629,16 @@ public struct StandingsView: View {
                         .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                 }
 
-                if view == .cup, let cup = gameState.domesticCups.first(where: { $0.country == league.tier.country }) {
+                let countryCups = gameState.domesticCups.filter { $0.country == league.tier.country }
+                if view == .cup, let cup = countryCups.first(where: { $0.name == selectedCupName }) ?? countryCups.first {
+                    if countryCups.count > 1 {
+                        Section {
+                            GFTabs(selection: Binding(get: { cup.name }, set: { selectedCupName = $0 }),
+                                   options: countryCups.map { ($0.name, $0.name) }, compact: true)
+                                .listRowBackground(Color.clear)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                        }
+                    }
                     cupSections(cup)
                 } else if view == .stats {
                     leaderboardSections(league)
