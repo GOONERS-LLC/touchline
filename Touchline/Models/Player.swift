@@ -47,6 +47,15 @@ public struct Player: Codable, Identifiable, Hashable {
     // Financial & Valuation
     public var contract: Contract?
     public var value: Int           // Market valuation in GBP
+
+    // Loan spell (nil when the player is at his own club)
+    public var loan: LoanSpell?
+
+    // The manager's stance on selling him (nil = available)
+    public var transferStatus: TransferStatus?
+
+    // Season-by-season record (newest last); kept for notable players.
+    public var careerLog: [PlayerSeasonLine]?
     
     // MARK: - Initializer
     
@@ -116,8 +125,9 @@ public struct Player: Codable, Identifiable, Hashable {
         return "\(firstChar). \(lastName)"
     }
     
+    /// Single-name players (e.g. "Richarlison") have an empty first name.
     public var fullName: String {
-        return "\(firstName) \(lastName)"
+        return firstName.isEmpty ? lastName : "\(firstName) \(lastName)"
     }
 
     /// Stable signature used to detect the same player appearing more than once.
@@ -167,6 +177,16 @@ public struct Player: Codable, Identifiable, Hashable {
     public var wage: Int {
         return contract?.wage ?? 0
     }
+
+    /// True while the player is spending a season on loan at another club.
+    public var isOnLoan: Bool { loan != nil }
+
+    /// The weekly amount the club he is playing for actually pays. A
+    /// borrowing club covers only its agreed share of a loanee's wage.
+    public var payrollWage: Int {
+        guard let loan else { return wage }
+        return wage * max(0, min(100, loan.wageSharePercent)) / 100
+    }
     
     public var formattedValue: String {
         return Player.formatCurrency(value)
@@ -191,10 +211,18 @@ public struct Player: Codable, Identifiable, Hashable {
         if suspendedMatches > 0 {
             return "Suspended (\(suspendedMatches) \(suspendedMatches == 1 ? "match" : "matches"))"
         }
+        let moraleNote = morale == .content ? "" : " • \(morale.displayName)"
         if matchFitness < 70 {
-            return "Tired (\(Int(matchFitness))%)"
+            return "Tired (\(Int(matchFitness))%)\(moraleNote)"
         }
-        return "Available"
+        return "Fitness \(Int(matchFitness))%\(moraleNote)"
+    }
+
+    /// Severity of the player's current status, for colour-coding.
+    public var statusSeverity: Int {
+        if injury != nil || suspendedMatches > 0 { return 2 }
+        if matchFitness < 70 || morale == .unhappy || morale == .furious { return 1 }
+        return 0
     }
     
     // MARK: - State Mutation Methods
@@ -394,10 +422,13 @@ public struct Player: Codable, Identifiable, Hashable {
         }()
         let levelFactor: Double = {
             switch tier.level {
+            // Lower divisions pay less, but not the near-minimum wages the
+            // steep ability curve alone produced (League Two players were on
+            // £500 a week; the real average is nearer £1,500).
             case 1: return 1.0
             case 2: return 0.35
-            case 3: return 0.18
-            default: return 0.10
+            case 3: return 0.40
+            default: return 0.50
             }
         }()
         // Younger players earn slightly less for the same ability.
@@ -741,6 +772,44 @@ public struct SeasonStats: Codable, Hashable {
 
 // MARK: - Contract
 
+/// One season of a player's career.
+public struct PlayerSeasonLine: Codable, Hashable, Identifiable {
+    public var id: String { season + club }
+    public var season: String
+    public var club: String
+    public var appearances: Int
+    public var goals: Int
+    public var assists: Int
+    public var averageRating: Double
+    public var overall: Int
+}
+
+/// A season-long loan: the player trains and plays for the borrowing club,
+/// which pays an agreed share of his wage, and returns to his parent club
+/// when the season ends (or when he is recalled in a transfer window).
+public struct LoanSpell: Codable, Hashable {
+    public var parentClubId: UUID
+    public var parentClubName: String
+    public var startDate: String
+    public var wageSharePercent: Int
+    public var loanFee: Int
+    /// The borrowing club may sign him permanently for this fee.
+    public var buyOptionFee: Int?
+    /// The borrowing club must sign him for this fee when the loan ends.
+    public var obligationFee: Int?
+
+    public init(parentClubId: UUID, parentClubName: String, startDate: String, wageSharePercent: Int, loanFee: Int = 0,
+                buyOptionFee: Int? = nil, obligationFee: Int? = nil) {
+        self.parentClubId = parentClubId
+        self.parentClubName = parentClubName
+        self.startDate = startDate
+        self.wageSharePercent = wageSharePercent
+        self.loanFee = loanFee
+        self.buyOptionFee = buyOptionFee
+        self.obligationFee = obligationFee
+    }
+}
+
 public struct Contract: Codable, Hashable {
     public var wage: Int                  // Weekly in GBP
     public var yearsRemaining: Int
@@ -782,5 +851,146 @@ public struct Injury: Codable, Hashable {
     
     public var description: String {
         return "\(type.displayName) (\(weeksRemaining) \(weeksRemaining == 1 ? "week" : "weeks") remaining)"
+    }
+}
+
+// MARK: - Seasonal Development
+
+extension PlayerAttributes {
+    /// Every attribute, for uniform seasonal adjustments.
+    fileprivate static let allKeyPaths: [WritableKeyPath<PlayerAttributes, Int>] = [
+        \.passing, \.shooting, \.dribbling, \.firstTouch, \.crossing, \.freeKicks,
+        \.penalties, \.heading, \.longShots, \.tackling, \.marking,
+        \.pace, \.stamina, \.strength, \.agility, \.jumping, \.balance,
+        \.vision, \.composure, \.decisions, \.workRate, \.aggression, \.leadership,
+        \.teamwork, \.positioning, \.offTheBall, \.concentration,
+        \.reflexes, \.handling, \.gkPositioning, \.oneOnOnes, \.kicking, \.commandOfArea
+    ]
+
+    /// Physical attributes fade first as a player ages.
+    fileprivate static let physicalKeyPaths: [WritableKeyPath<PlayerAttributes, Int>] = [
+        \.pace, \.stamina, \.agility, \.balance, \.jumping
+    ]
+
+    /// Mental attributes keep improving into a player's late twenties.
+    fileprivate static let mentalKeyPaths: [WritableKeyPath<PlayerAttributes, Int>] = [
+        \.decisions, \.composure, \.positioning, \.leadership, \.concentration
+    ]
+
+    /// Shifts all attributes by `delta`, ageing physical and mental traits
+    /// realistically: veterans lose pace before vision, young players gain
+    /// composure as they mature.
+    fileprivate mutating func applySeasonalChange(delta: Int, age: Int) {
+        for keyPath in Self.allKeyPaths {
+            self[keyPath: keyPath] = Swift.min(99, Swift.max(1, self[keyPath: keyPath] + delta))
+        }
+        if age >= 30 {
+            for keyPath in Self.physicalKeyPaths {
+                self[keyPath: keyPath] = Swift.max(1, self[keyPath: keyPath] - 1)
+            }
+        }
+        if age <= 27 {
+            for keyPath in Self.mentalKeyPaths {
+                self[keyPath: keyPath] = Swift.min(99, self[keyPath: keyPath] + 1)
+            }
+        }
+    }
+}
+
+extension Player {
+    /// Ages a player through one summer of development. Young players grow
+    /// toward their potential (faster with regular football), peak-age players
+    /// hold steady, and veterans decline. Market value is re-rated to match.
+    ///
+    /// Call after `age` has been incremented for the new season. `appearances`
+    /// is last season's league appearance count.
+    public mutating func applySeasonalDevelopment(appearances: Int, trainingLevel: Int = 2) {
+        let headroom = Swift.max(0, potential - overall)
+        var delta: Int
+        switch age {
+        case ..<20: delta = Int.random(in: 1...5)
+        case 20...22: delta = Int.random(in: 0...3)
+        case 23...25: delta = Int.random(in: -1...2)
+        case 26...29: delta = Int.random(in: -1...1)
+        case 30...31: delta = Int.random(in: -2...0)
+        case 32...33: delta = Int.random(in: -3...(-1))
+        default: delta = Int.random(in: -5...(-2))
+        }
+
+        // Regular first-team football accelerates development of young players;
+        // without it, prospects stall and their ceiling erodes. (Every young
+        // player reaching his potential inflated ratings across the world.)
+        if age <= 22 && appearances >= 20 { delta += 1 }
+        // The training ground: elite facilities (4-5) give young players an
+        // extra chance to improve; poor ones (1) hold them back.
+        if age <= 23 {
+            // Only below elite level, or every big club's academy turns
+            // out superstars (85+ players nearly doubled in five seasons).
+            if trainingLevel >= 4 && overall < 82 && Double.random(in: 0..<1) < Double(trainingLevel - 3) * 0.15 { delta += 1 }
+            if trainingLevel <= 1 && delta > 0 && Double.random(in: 0..<1) < 0.4 { delta -= 1 }
+        }
+        if age <= 23 && appearances < 10 {
+            if delta > 0 { delta = delta / 2 }
+            potential = Swift.max(overall, potential - 1)
+        }
+        // Improving gets harder near the top of the game: growth halves above
+        // 83 and is at most one point a season above 87. (Without this the
+        // number of 85+ players grew by two-thirds in two seasons.)
+        if delta > 0 && overall >= 83 { delta = (delta + 1) / 2 }
+        if delta > 0 && overall >= 87 { delta = Swift.min(delta, 1) }
+        // Growth can never exceed the player's ceiling.
+        if delta > 0 { delta = Swift.min(delta, headroom) }
+
+        overall = Swift.min(99, Swift.max(1, overall + delta))
+        attributes.applySeasonalChange(delta: delta, age: age)
+        if delta < 0 {
+            // A declining player's ceiling falls with them.
+            potential = Swift.max(overall, potential + delta)
+        }
+        potential = Swift.max(potential, overall)
+        value = Player.calculateMarketValue(
+            overall: overall,
+            potential: potential,
+            age: age,
+            position: primaryPosition
+        )
+    }
+
+    /// Probability that a player hangs up his boots this summer.
+    public var retirementChance: Double {
+        switch age {
+        case ..<33: return 0
+        case 33: return overall >= 75 ? 0.03 : 0.10
+        case 34: return overall >= 75 ? 0.10 : 0.25
+        case 35: return overall >= 75 ? 0.30 : 0.45
+        case 36: return 0.65
+        case 37: return 0.85
+        default: return 1.0
+        }
+    }
+}
+
+// MARK: - Match rating
+
+extension Player {
+    /// How good the player is likely to be in the next match: the base
+    /// rating adjusted for match fitness, sharpness, recent form and morale.
+    public var matchRating: Int {
+        var r = Double(overall)
+        if matchFitness < 92 { r -= (92 - matchFitness) * 0.15 }
+        r += (sharpness - 80) * 0.04
+        let recent = form.suffix(3)
+        if !recent.isEmpty {
+            let avg = recent.reduce(0, +) / Double(recent.count)
+            r += max(-2.5, min(2.5, (avg - 6.7) * 1.6))
+        }
+        switch morale {
+        case .delighted: r += 1
+        case .happy: r += 0.5
+        case .content: break
+        case .unhappy: r -= 1
+        case .furious: r -= 2
+        }
+        return Int(max(Double(overall) - 10, min(Double(overall) + 5, r)).rounded())
     }
 }

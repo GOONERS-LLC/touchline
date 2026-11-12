@@ -32,8 +32,14 @@ public enum EuropeanCompetitionBuilder {
 
     /// Builds all three European competitions from the loaded clubs, seeding real
     /// participants first and padding with the strongest eligible top-flight clubs.
-    public static func build(from clubs: [Club]) -> [EuropeanCompetitionState] {
-        let dataFile = loadParticipantData()
+    ///
+    /// `qualifiers`, when given, replaces the bundled 2025-26 entry list with
+    /// the clubs that earned their places last season.
+    public static func build(
+        from clubs: [Club],
+        qualifiers: [EuropeanCompetition: [UUID]]? = nil
+    ) -> [EuropeanCompetitionState] {
+        let dataFile = qualifiers == nil ? loadParticipantData() : nil
         var results: [EuropeanCompetitionState] = []
         var alreadyEntered = Set<UUID>()
 
@@ -42,14 +48,24 @@ public enum EuropeanCompetitionBuilder {
             var participants: [UUID] = []
             var usedNames = Set<String>()
 
-            // 1. Real seeds, matched to loaded clubs by normalised name. A club
+            // 1a. Clubs that qualified on merit last season.
+            let target = competition.leaguePhaseCount
+            for id in qualifiers?[competition] ?? [] where participants.count < target {
+                guard let club = clubs.first(where: { $0.id == id }),
+                      !usedNames.contains(club.name), !alreadyEntered.contains(id) else { continue }
+                participants.append(id)
+                usedNames.insert(club.name)
+            }
+
+            // 1b. Real seeds, matched to loaded clubs by normalised name. A club
             //    already entered in a stronger competition cannot be seeded twice.
             for name in seedNames {
-                if let club = clubs.first(where: {
-                    matches($0, name: name)
-                        && !usedNames.contains($0.name)
-                        && !alreadyEntered.contains($0.id)
-                }) {
+                let available: (Club) -> Bool = { !usedNames.contains($0.name) && !alreadyEntered.contains($0.id) }
+                // Exact (normalised) names first; loose matching only among top
+                // flights, so "Rangers" can never resolve to Queens Park Rangers.
+                let exact = clubs.first { normalise($0.name) == normalise(name) && available($0) }
+                let loose = clubs.first { $0.leagueTier.isTopFlight && matches($0, name: name) && available($0) }
+                if let club = exact ?? loose {
                     participants.append(club.id)
                     usedNames.insert(club.name)
                 }
@@ -57,14 +73,30 @@ public enum EuropeanCompetitionBuilder {
 
             // 2. Pad with the strongest remaining clubs from top flights, ignoring any
             //    already entered in a stronger competition.
-            let target = competition.leaguePhaseCount
             if participants.count < target {
-                let eligible = clubs
-                    .filter { $0.leagueTier.isTopFlight && !usedNames.contains($0.name) && !alreadyEntered.contains($0.id) }
-                    .sorted { $0.reputation > $1.reputation }
-                for club in eligible where participants.count < target {
+                // Pad with the strongest remaining top-flight clubs, spreading
+                // places across countries: a country already well represented
+                // waits behind one that is not, so the big leagues cannot take
+                // every spare place.
+                var perCountry: [LeagueCountry: Int] = [:]
+                for club in clubs where alreadyEntered.contains(club.id) || participants.contains(club.id) {
+                    perCountry[club.leagueTier.country, default: 0] += 1
+                }
+                var eligible = clubs.filter {
+                    $0.leagueTier.isTopFlight && $0.leagueTier.country.competesInEurope
+                        && !usedNames.contains($0.name) && !alreadyEntered.contains($0.id)
+                }
+                while participants.count < target, !eligible.isEmpty {
+                    let pickIndex = eligible.indices.min { lhs, rhs in
+                        let lc = perCountry[eligible[lhs].leagueTier.country, default: 0]
+                        let rc = perCountry[eligible[rhs].leagueTier.country, default: 0]
+                        if lc != rc { return lc < rc }
+                        return eligible[lhs].reputation > eligible[rhs].reputation
+                    } ?? eligible.startIndex
+                    let club = eligible.remove(at: pickIndex)
                     participants.append(club.id)
                     usedNames.insert(club.name)
+                    perCountry[club.leagueTier.country, default: 0] += 1
                 }
             }
 

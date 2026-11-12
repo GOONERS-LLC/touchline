@@ -19,8 +19,10 @@ public struct InjuryEngine {
         matchMinute: Int,
         intensity: Double = 1.0
     ) -> Injury? {
-        // Base injury chance per event opportunity (~0.4% per check)
-        var baseProbability = 0.004
+        // Base chance per injury opportunity (about 1.5 per match). Tuned over
+        // full simulated seasons to roughly 0.7 match injuries per game; at
+        // 0.4% injuries were almost non-existent (0.01 per match).
+        var baseProbability = 0.25
         
         // 1. Match fitness factor (fatigued players run much higher injury risk)
         if player.matchFitness < 50.0 {
@@ -54,7 +56,7 @@ public struct InjuryEngine {
         
         // Roll for injury
         let roll = Double.random(in: 0.0...1.0)
-        guard roll < baseProbability else { return nil }
+        guard roll < min(0.85, baseProbability) else { return nil }
         
         // Determine injury type based on weighted distribution
         let typeRoll = Double.random(in: 0.0...100.0)
@@ -84,6 +86,17 @@ public struct InjuryEngine {
         return Injury(type: injuryType, weeksRemaining: max(1, weeks))
     }
     
+    /// Occasional training-ground injury for a fit player (about one a
+    /// fortnight across a 25-man squad). Better medical facilities help.
+    public static func trainingInjury(player: Player, medicalLevel: Int) -> Injury? {
+        guard player.injury == nil else { return nil }
+        let chance = 0.002 * (1.2 - Double(max(1, min(5, medicalLevel))) * 0.08)
+        guard Double.random(in: 0..<1) < chance else { return nil }
+        let type: InjuryType = Double.random(in: 0..<1) < 0.7 ? .muscleStrain : .hamstring
+        let range = type.recoveryWeeksRange
+        return Injury(type: type, weeksRemaining: max(1, Int.random(in: range.lowerBound...range.upperBound)))
+    }
+
     // MARK: - Pre-Match Injury Risk Calculator
     
     /// Returns calculated percentage risk (0.0% to 100.0%) for squad management display.

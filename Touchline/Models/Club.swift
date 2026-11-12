@@ -46,8 +46,6 @@ public struct Club: Codable, Identifiable, Hashable {
     
     // Completed Match Logs
     public var seasonResults: [MatchResult]
-    /// A custom home kit. nil means the club wears its traditional kit.
-    public var kit: KitDesign? = nil
     
     // MARK: - Initializer
     
@@ -155,7 +153,7 @@ public struct Club: Codable, Identifiable, Hashable {
     }
     
     public var totalPlayerWageBill: Int {
-        return players.reduce(0) { $0 + ($1.contract?.wage ?? 0) }
+        return players.reduce(0) { $0 + $1.payrollWage }
     }
     
     public var totalStaffWageBill: Int {
@@ -190,6 +188,17 @@ public struct Club: Codable, Identifiable, Hashable {
         }
     }
     
+    /// Clubs budget around the wages they already pay. A starting wage budget
+    /// below the existing bill left a club unable to sign anyone (78 of 688
+    /// clubs, including all of League Two), so keep about 12% headroom.
+    public mutating func ensureWageHeadroom() {
+        finances.currentWageBill = totalWeeklyWageBill
+        let minimum = Int(Double(totalWeeklyWageBill) * 1.12)
+        if finances.wageBudget < minimum {
+            finances.wageBudget = minimum
+        }
+    }
+
     public mutating func addPlayer(_ newPlayer: Player) {
         if !players.contains(where: { $0.id == newPlayer.id }) {
             players.append(newPlayer)
@@ -325,9 +334,11 @@ public struct Club: Codable, Identifiable, Hashable {
     public mutating func expandStadium() -> Bool {
         guard finances.balance >= stadiumExpansionCost else { return false }
         finances.balance -= stadiumExpansionCost
+        let previous = max(1, stadiumCapacity)
         stadiumCapacity += max(1_500, Int(Double(stadiumCapacity) * 0.15))
         finances.stadiumCapacity = stadiumCapacity
-        finances.matchdayIncome = max(finances.matchdayIncome, stadiumCapacity * finances.averageTicketPrice)
+        // More seats sell proportionally more tickets and hospitality.
+        finances.matchdayIncome = Int(Double(finances.matchdayIncome) * Double(stadiumCapacity) / Double(previous))
         return true
     }
 
@@ -337,10 +348,118 @@ public struct Club: Codable, Identifiable, Hashable {
         return "\(first.randomElement() ?? "Alan") \(last.randomElement() ?? "Carr")"
     }
 
-    private static func randomStaffName(role: StaffRole) -> String {
-        let first = ["Avery", "Casey", "Harper", "Jordan", "Morgan", "Riley", "Sam", "Taylor"]
-        let last = ["Bennett", "Carter", "Davies", "Hughes", "Khan", "Murphy", "Patel", "Reid"]
-        return "\(first.randomElement() ?? "Alex") \(last.randomElement() ?? "Reid")"
+    static func randomStaffName(role: StaffRole, country: LeagueCountry? = nil) -> String {
+        // Mostly local names, with the odd hire from abroad.
+        let pools = [NamePools.england, NamePools.spain, NamePools.italy, NamePools.germany,
+                     NamePools.france, NamePools.portugal, NamePools.netherlands, NamePools.scotland]
+        let pool: NamePool
+        if let country, Double.random(in: 0..<1) < 0.75 {
+            pool = NamePools.pool(for: country)
+        } else {
+            pool = pools.randomElement() ?? NamePools.england
+        }
+        let name = pool.randomName()
+        return "\(name.first) \(name.last)"
+    }
+
+    /// Older saves gave every club the same five real-world staff. Gives them
+    /// fresh names and a spread of ability.
+    public mutating func replaceLegacyStaff() {
+        let legacy: Set<String> = ["John Terry", "Michael Carrick", "Steve Walsh", "Gary Lewin", "Neil Bath"]
+        guard staff.contains(where: { legacy.contains($0.name) }) else { return }
+        for idx in staff.indices where legacy.contains(staff[idx].name) {
+            staff[idx].name = Club.randomStaffName(role: staff[idx].role, country: leagueTier.country)
+            staff[idx].quality = max(1, min(5, staff[idx].quality + Int.random(in: -1...1)))
+        }
+    }
+
+    // MARK: Staff market
+
+    /// Number of people a club can employ in a role.
+    public static func staffLimit(_ role: StaffRole) -> Int {
+        switch role {
+        case .coach, .scout: return 3
+        default: return 1
+        }
+    }
+
+    /// People available for a role this month. The list is stable for four
+    /// weeks and pitched at the club's level: a fourth-tier side rarely
+    /// attracts a five-star coach.
+    public func staffCandidates(role: StaffRole, seasonYear: String, week: Int) -> [StaffCandidate] {
+        let seedText = "\(id.uuidString)-\(role.rawValue)-\(seasonYear)-\(week / 4)"
+        var rng = SeededGenerator(seed: UInt64(seedText.hashValueStable))
+        let level = leagueTier.level
+        let range: ClosedRange<Int>
+        switch level {
+        case 1: range = 2...5
+        case 2: range = 2...4
+        case 3: range = 1...4
+        default: range = 1...3
+        }
+        let baseWage: Int
+        switch level {
+        case 1: baseWage = 4_000
+        case 2: baseWage = 1_800
+        case 3: baseWage = 900
+        case 4: baseWage = 500
+        default: baseWage = 300
+        }
+        let specialties = StaffCandidate.specialties(for: role)
+        let pool = NamePools.pool(for: leagueTier.country)
+        let abroad = [NamePools.spain, NamePools.italy, NamePools.germany, NamePools.france, NamePools.portugal, NamePools.netherlands]
+        var result: [StaffCandidate] = []
+        for index in 0..<5 {
+            let names = (rng.next() % 4 == 0) ? abroad[Int(rng.next() % UInt64(abroad.count))] : pool
+            let first = names.firstNames[Int(rng.next() % UInt64(names.firstNames.count))]
+            let last = names.lastNames[Int(rng.next() % UInt64(names.lastNames.count))]
+            var stars = range.lowerBound + Int(rng.next() % UInt64(range.count))
+            // A rare stand-out who wants to step up.
+            if rng.next() % 12 == 0 { stars = min(5, range.upperBound + 1) }
+            let spread = 0.85 + Double(rng.next() % 30) / 100.0
+            let wage = Int(Double(baseWage) * (0.5 + Double(stars) * 0.35) * spread)
+            let age = 29 + Int(rng.next() % 35)
+            let specialty = specialties[Int(rng.next() % UInt64(specialties.count))]
+            result.append(StaffCandidate(
+                id: "\(seedText)-\(index)",
+                name: "\(first) \(last)",
+                role: role,
+                quality: stars,
+                wage: max(150, wage / 10 * 10),
+                fee: max(2_000, wage * 20 / 1_000 * 1_000),
+                age: age,
+                specialty: specialty
+            ))
+        }
+        return result.sorted { $0.quality > $1.quality }
+    }
+
+    /// Hires a candidate. In a one-person role they replace whoever holds
+    /// it. Returns a message for the UI.
+    public mutating func hire(_ candidate: StaffCandidate) -> String {
+        if staff.contains(where: { $0.name == candidate.name && $0.role == candidate.role }) {
+            return "\(candidate.name) already works here."
+        }
+        let current = staff.filter { $0.role == candidate.role }
+        let limit = Club.staffLimit(candidate.role)
+        if limit > 1 && current.count >= limit {
+            return "You already employ \(limit) people in this role. Release one first."
+        }
+        guard finances.balance >= candidate.fee else {
+            return "The club cannot afford the \(Player.formatCurrency(candidate.fee)) fee."
+        }
+        finances.balance -= candidate.fee
+        var replaced: String? = nil
+        if limit == 1, let outgoing = current.first {
+            staff.removeAll { $0.id == outgoing.id }
+            replaced = outgoing.name
+        }
+        staff.append(StaffMember(name: candidate.name, role: candidate.role, quality: candidate.quality, wage: candidate.wage))
+        finances.currentWageBill = totalWeeklyWageBill
+        if let replaced {
+            return "\(candidate.name) replaces \(replaced) as \(candidate.role.displayName)."
+        }
+        return "\(candidate.name) joins as \(candidate.role.displayName)."
     }
 
     @discardableResult
@@ -375,16 +494,34 @@ public struct Club: Codable, Identifiable, Hashable {
         
         let requiredPositions = tactics.formation.defaultPositions
         
-        // 1. Fill each designated position with the best suited player available
+        // 1. Fill each designated position with the best suited player
+        // available. A natural in the role is preferred, but a clearly better
+        // player from the same area of the pitch (a left winger in a left
+        // midfield slot) gets the shirt rather than sitting out all season.
         for targetPos in requiredPositions {
-            // Find best exact match
-            if let bestIdx = pool.firstIndex(where: { $0.positions.contains(targetPos) }) {
-                let chosen = pool.remove(at: bestIdx)
-                selectedStarters.append(chosen.id)
-            } else if let bestCatIdx = pool.firstIndex(where: { $0.primaryPosition.category == targetPos.category }) {
-                // Secondary fallback: same general position category
-                let chosen = pool.remove(at: bestCatIdx)
-                selectedStarters.append(chosen.id)
+            func fit(_ p: Player) -> Int? {
+                if targetPos == .GK {
+                    if p.primaryPosition == .GK { return p.overall + 100 }
+                    if p.positions.contains(.GK) { return p.overall + 50 }
+                    // No keeper fit to play: the best shot-stopper among the rest.
+                    let a = p.attributes
+                    return (a.reflexes + a.handling + a.gkPositioning) / 3 - 60
+                }
+                guard p.primaryPosition != .GK else { return nil }
+                if p.positions.contains(targetPos) { return p.overall }
+                if p.primaryPosition.category == targetPos.category { return p.overall - 4 }
+                return nil
+            }
+            var bestIdx: Int?
+            var bestScore = Int.min
+            for idx in pool.indices {
+                if let score = fit(pool[idx]), score > bestScore {
+                    bestScore = score
+                    bestIdx = idx
+                }
+            }
+            if let bestIdx {
+                selectedStarters.append(pool.remove(at: bestIdx).id)
             } else if !pool.isEmpty {
                 // Fallback to highest overall player remaining (excluding GKs unless slot is GK)
                 let nonGkPool = pool.filter { targetPos == .GK ? $0.primaryPosition == .GK : $0.primaryPosition != .GK }
@@ -431,6 +568,56 @@ public struct Club: Codable, Identifiable, Hashable {
         }
     }
     
+    /// AI squad rotation: a starter short of match fitness is rested for a
+    /// fresh squad player in the same area of the pitch who is not much worse.
+    /// Keeps congested schedules (league, cup and Europe) from wearing the
+    /// same eleven down, as a real manager would.
+    /// How an AI manager prepares for a match: the best available side
+    /// (so new signings, loanees and players back from injury get picked),
+    /// then tired starters are rested.
+    /// Every club needs two goalkeepers. Missing ones are added at roughly
+    /// the squad's level (an emergency signing from the free market).
+    @discardableResult
+    public mutating func ensureGoalkeepers(minimum: Int = 2) -> Int {
+        let keepers = players.filter { $0.primaryPosition == .GK }.count
+        guard keepers < minimum else { return 0 }
+        let ratings = players.map(\.overall).sorted(by: >).prefix(18)
+        let level = ratings.isEmpty ? 55 : ratings.reduce(0, +) / ratings.count
+        let added = DataLoader.generateProceduralSquad(targetCount: minimum - keepers, tier: leagueTier,
+                                                       quality: max(40, level - 4))
+        players.append(contentsOf: added)
+        finances.currentWageBill = totalWeeklyWageBill
+        return added.count
+    }
+
+    public mutating func prepareAIMatchday() {
+        ensureGoalkeepers()
+        autoPickStartingXI()
+        rotateTiredStarters()
+    }
+
+    public mutating func rotateTiredStarters() {
+        ensureTacticalIntegrity()
+        let starters = Set(tactics.startingXI)
+        for (slot, starterId) in tactics.startingXI.enumerated() {
+            guard let starter = players.first(where: { $0.id == starterId }),
+                  starter.matchFitness < 72 else { continue }
+            let replacement = players
+                .filter {
+                    !starters.contains($0.id) && $0.isAvailable && $0.matchFitness >= 85
+                        && $0.primaryPosition.category == starter.primaryPosition.category
+                        && $0.overall >= starter.overall - 6
+                }
+                .max { $0.overall < $1.overall }
+            guard let fresh = replacement else { continue }
+            tactics.startingXI[slot] = fresh.id
+            tactics.substitutes.removeAll { $0 == fresh.id }
+            if !tactics.substitutes.contains(starterId) && tactics.substitutes.count < 7 {
+                tactics.substitutes.append(starterId)
+            }
+        }
+    }
+
     /// Validates and repairs startingXI and bench arrays, removing nonexistent, injured,
     /// or suspended players and replenishing from the available reserves.
     public mutating func ensureTacticalIntegrity() {
@@ -509,7 +696,7 @@ public struct Club: Codable, Identifiable, Hashable {
         case primaryColor, secondaryColor, leagueTier, reputation, isUserClub
         case players, manager, academyProspects, finances, staff
         case trainingFacilityLevel, youthAcademyLevel, medicalFacilityLevel
-        case tactics, seasonResults, kit
+        case tactics, seasonResults
     }
 
     public init(from decoder: Decoder) throws {
@@ -535,7 +722,6 @@ public struct Club: Codable, Identifiable, Hashable {
         medicalFacilityLevel = try c.decode(Int.self, forKey: .medicalFacilityLevel)
         tactics = try c.decode(Tactics.self, forKey: .tactics)
         seasonResults = try c.decode([MatchResult].self, forKey: .seasonResults)
-        kit = try c.decodeIfPresent(KitDesign.self, forKey: .kit)
 
         // Repair stale derived values from older saves: the gate model and wage
         // headroom must reflect the club's real stadium and current squad.
@@ -620,12 +806,14 @@ public struct ClubFinances: Codable, Hashable {
     }
 
     /// Gate receipts for a single home match (tickets + matchday hospitality).
+    /// `matchdayIncome` is the club's calibrated average per home game, so the
+    /// gate swings around it with the size of the crowd the visitors draw.
+    /// (Pricing every seat from capacity used to pay clubs two to four times
+    /// their real matchday income, and balances ballooned season after season.)
     public func matchdayRevenue(opponentReputation: Int) -> Int {
-        let gate = expectedAttendance(opponentReputation: opponentReputation)
-        let ticketRevenue = gate * averageTicketPrice
-        // Food, drink and matchday hospitality add roughly a third again.
-        let hospitality = Int(Double(ticketRevenue) * 0.35)
-        return ticketRevenue + hospitality
+        let typical = Double(max(1, expectedAttendance(opponentReputation: 60)))
+        let crowd = Double(expectedAttendance(opponentReputation: opponentReputation))
+        return Int(Double(matchdayIncome) * crowd / typical)
     }
 
     /// Processes weekly financial ledger: payroll debits and steady
@@ -638,16 +826,29 @@ public struct ClubFinances: Codable, Hashable {
         if isHomeMatchThisWeek {
             weeklyIncome += (gateReceipts > 0 ? gateReceipts : matchdayIncome)
         }
-        let weeklyExpense = currentWageBill
+        let weeklyExpense = currentWageBill + weeklyOperatingCosts
         balance += (weeklyIncome - weeklyExpense)
+    }
+
+    /// Non-wage running costs: staff, stadium operations, travel, academy,
+    /// administration. Roughly a third of turnover, as at real clubs; without
+    /// it every club banked huge profits and balances inflated without limit.
+    public var weeklyOperatingCosts: Int {
+        let annualTurnover = tvIncome + sponsorshipIncome + merchandiseIncome + matchdayIncome * 19
+        return Int(Double(annualTurnover) * 0.33 / 52.0)
     }
 
     /// Treasury top-up between seasons: boards reinvest a share of the balance
     /// into a fresh transfer kitty sized by club stature.
+    /// New-season transfer kitty: a quarter of central and commercial income
+    /// or 30% of cash in hand, whichever is larger, but never more than the
+    /// club actually has. (This used to top the bank balance up for free
+    /// every summer, inflating the economy and bailing out indebted clubs.)
     public mutating func rolloverForNewSeason(reputation: Int) {
-        let kitty = max(transferBudget, Int(Double(tvIncome + sponsorshipIncome) * 0.25))
-        transferBudget = kitty
-        balance = max(balance, kitty / 2)
+        let fromIncome = Int(Double(tvIncome + sponsorshipIncome) * 0.25)
+        let fromCash = max(0, balance) * 3 / 10
+        let kitty = max(transferBudget, fromIncome, fromCash)
+        transferBudget = max(0, min(kitty, max(0, balance)))
     }
 
     // MARK: - Realistic baseline from club stature
@@ -700,7 +901,11 @@ public struct ClubFinances: Codable, Hashable {
 
         // Ticket pricing and attendance scale with stature.
         let rep = max(20, min(95, reputation))
-        let ticketPrice = max(12, Int(15.0 + Double(rep - 20) * 0.9))
+        // Top-flight prices run from about £20 to £60; below that, roughly £15
+        // to £35, in line with real ticketing.
+        let ticketPrice = tier.level == 1
+            ? max(20, Int(20.0 + Double(rep - 20) * 0.55))
+            : max(12, Int(12.0 + Double(rep - 20) * 0.4))
         let attendancePct = min(0.98, 0.55 + Double(rep - 20) / 120.0)
         let gamesPerSeason = 19
         let perGameMatchday = max(120_000, matchdayAnnual / gamesPerSeason)
@@ -746,6 +951,28 @@ public struct ClubFinances: Codable, Hashable {
 
 // MARK: - Staff Member
 
+/// Someone the club could appoint to its backroom staff.
+public struct StaffCandidate: Identifiable, Hashable {
+    public let id: String
+    public let name: String
+    public let role: StaffRole
+    public let quality: Int
+    public let wage: Int
+    public let fee: Int
+    public let age: Int
+    public let specialty: String
+
+    static func specialties(for role: StaffRole) -> [String] {
+        switch role {
+        case .assistantManager: return ["Tactician", "Man-manager", "Motivator", "Opposition analyst", "Disciplinarian", "Former club captain"]
+        case .coach: return ["Attacking coach", "Defensive coach", "Set-piece specialist", "Goalkeeping coach", "Fitness coach", "Technical coach"]
+        case .scout: return ["Domestic leagues", "South America", "Youth talent", "Data analyst", "Lower leagues", "Europe-wide network"]
+        case .physio: return ["Injury prevention", "Rehabilitation", "Sports scientist", "Nutritionist", "Recovery specialist"]
+        case .youthCoach: return ["Academy builder", "Talent spotter", "Coach educator", "Local schools network", "Pathway planner"]
+        }
+    }
+}
+
 public struct StaffMember: Codable, Identifiable, Hashable {
     public let id: UUID
     public var name: String
@@ -778,12 +1005,19 @@ public struct StaffMember: Codable, Identifiable, Hashable {
         default: baseQuality = 2; baseWage = 600
         }
         
+        // Every club gets its own people, of varying ability.
+        func member(_ role: StaffRole, _ wageOffset: Int) -> StaffMember {
+            let quality = max(1, min(5, baseQuality + Int.random(in: -1...1)))
+            let wage = max(200, baseWage - wageOffset + (quality - baseQuality) * baseWage / 5)
+            return StaffMember(name: Club.randomStaffName(role: role, country: tier.country), role: role,
+                               quality: quality, wage: wage)
+        }
         return [
-            StaffMember(name: "John Terry", role: .assistantManager, quality: baseQuality, wage: baseWage),
-            StaffMember(name: "Michael Carrick", role: .coach, quality: baseQuality, wage: baseWage - 100),
-            StaffMember(name: "Steve Walsh", role: .scout, quality: baseQuality, wage: baseWage - 200),
-            StaffMember(name: "Gary Lewin", role: .physio, quality: baseQuality, wage: baseWage - 150),
-            StaffMember(name: "Neil Bath", role: .youthCoach, quality: baseQuality, wage: baseWage - 200)
+            member(.assistantManager, 0),
+            member(.coach, 100),
+            member(.scout, 200),
+            member(.physio, 150),
+            member(.youthCoach, 200)
         ]
     }
 }

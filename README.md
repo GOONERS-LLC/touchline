@@ -1,63 +1,142 @@
-# Touchline
+# ⚽ Touchline — iOS Association Football Management
 
-**Touchline** is an offline football management game for iPhone and iPad, made by Gooners LLC. Found a club and run it from the boardroom, or take a manager's job and win matches from the dugout. It is built in SwiftUI for iOS 17 and designed from the start to be fully playable with VoiceOver.
+**Touchline** is a pure SwiftUI football (soccer) management simulation built for iOS 17.0+. Experience the journey of creating your own club, replacing an existing team in English League Two, and navigating tactical adjustments, squad recruitment, training development, and dynamic match simulations to climb to the Premier League.
 
-## Highlights
+---
 
-- **Two careers.** *Own a New Club* is a boardroom career: appoint managers, hire staff, sign sponsors and build facilities. *Manage Existing Club* puts you in charge of tactics, selection, training and matchday.
-- **A calendar that breathes.** Continue to Match Day walks you through the days before each fixture; Play Match only appears when the day actually arrives.
-- **Minute-by-minute match engine** with possession, shots, expected goals, cards, injuries, fatigue, commentary and player ratings.
-- **Live match board** showing a top-down replay of every minute, with key moments announced to VoiceOver.
-- **Full football pyramid** with promotion, relegation, play-offs, continental cups and international tournaments.
-- **Transfer market, contract renewals, youth academy and AI clubs** that scout, bid and manage their own squads.
-- **Full-time story.** Match Facts, Ratings and Stats tabs, then Player of the Match, then the rest of your division.
-- **A living crowd and haptics.** Fans react to every chance, foul and goal; your phone feels them too.
-- **Kit Designer.** Real colours and famous patterns, sponsors on the shirt, and supporters who judge your redesigns.
-- **Real 2026-27 squads** for 34 leagues, scraped from Transfermarkt by tools/scrape-transfermarkt.js.
-- **Procedural crests and faces.** No real badges or likenesses are used, and the game needs no network connection.
-- **Floodlight design.** A night-match palette of deep navy, cobalt and amber with high-contrast text throughout.
+## 🌟 Key Features
 
-## Accessibility
+- **Distinct Career Roles**: *Own a New Club* is an owner-first career with a boardroom, manager appointments, staff recruitment, facilities and stadium investment. *Manage Existing Club* is a head-coach career centred on tactics, squad selection and matchdays, with job offers available from the overflow menu for later moves.
+- **Dynamic State Engine (`@Observable GameState`)**: Built on modern iOS 17 Observation macros for seamless, reactive data updates across all views.
+- **Deep Player Simulation**: Over 30 technical, physical, mental, and goalkeeping attributes generated using position-specific procedural templates with randomized variance and specialty overrides.
+- **Procedural Faces & Crests**: Every player portrait and club badge is generated deterministically from a stable seed — no real likenesses or trademarked imagery are used, keeping the build fully offline and asset-free.
+- **Minute-by-Minute Match Engine**: Simulated tactical matches calculating possession, shots, xG, fouls, cards, injuries, fatigue depletion, dynamic crowd reaction text, and player ratings (1.0–10.0).
+- **Position-Cam Match Replay**: A top-down pitch animation replays each match minute-by-minute with 22 interpolated player dots and the ball, announcing key events for VoiceOver as they occur.
+- **English Football Pyramid**: Features 92 English clubs across 4 tiers (Premier League, Championship, League One, League Two) with real club and player names, plus promotions, relegations, and play-offs each season.
+- **Working Transfer Market**: Bid for players at other clubs or sign free agents, with budget, wage, and valuation checks resolved by the selling club.
+- **Autonomous AI Management**: Competitor clubs scout players, renew contracts, manage finances, rotate squads, and make bids during summer and winter transfer windows.
+- **First-Class VoiceOver Accessibility**: Custom accessibility modifiers, descriptive spoken summaries for cards and stats, rotor actions, event announcements, and Dynamic Type scaling.
+- **Persistence & Save Management**: Robust multi-slot JSON persistence (3 manual slots + autosave) in the app's local Documents container. Zero external dependencies or network calls required.
 
-- Club abbreviations are shown on screen but never spoken. VoiceOver always reads the full club name, on crests, scoreboards, fixtures and commentary.
-- No emoji or symbol characters are used for meaning; stars and arrows are written as words.
-- Ratings are spoken as words ("Excellent", "Average") as well as numbers.
-- Every metric pairs colour with text, and all screens scale with Dynamic Type.
+---
 
-## Building
-
-Requirements: macOS 14 or later, Xcode 15 or later, and XcodeGen (`brew install xcodegen`).
-
-```bash
-xcodegen generate
-open Touchline.xcodeproj
-```
-
-Choose an iOS 17 simulator or device and run.
-
-## Releases
-
-After each release, run node tools/publish-website.js to put the new IPA on the Gooners LLC website.
-
-
-Every push to `main` runs **Build iOS App** in GitHub Actions. It builds an unsigned `Touchline.ipa`, attaches it with a `release-manifest.json` (version, commit and SHA-256) to a new GitHub Release, and bumps the minor version. Sideload the IPA with a tool such as Feather.
-
-From Windows, `tools/Push-And-FetchIPA.ps1` pushes, waits for the build and downloads the verified IPA.
-
-## Project layout
+## 🏗 Architecture & Code Structure
 
 ```
 Touchline/
-  App/            entry point and screens
-  Models/         game state, clubs, players, leagues, careers
-  Engine/         match engine, commentary, injuries
-  Data/           bundled league data and builders
-  Views/          theme, crests, faces, pitch and live match
-  Persistence/    save slots and autosave
-  Accessibility/  VoiceOver helpers
-tools/            data and icon generators, release helpers
+├── project.yml                          # XcodeGen specification
+├── README.md                            # Documentation
+├── .github/
+│   └── workflows/
+│       └── build.yml                    # Automated CI/CD pipeline (macOS-15 runner)
+└── Touchline/
+    ├── App/
+    │   ├── TouchlineApp.swift          # Main entrypoint with environment injection
+    │   └── ContentView.swift            # Root navigation coordinator & screen routing
+    ├── Models/
+    │   ├── Enums.swift                  # Positions, tactics, match events, tiers, screen states
+    │   ├── Player.swift                 # Player, PlayerAttributes, SeasonStats, Contract, Injury
+    │   ├── Club.swift                   # Club, ClubFinances, StaffMember, Tactics
+    │   ├── League.swift                 # League, Season, Fixture, LeagueStanding, FixtureGenerator
+    │   ├── Match.swift                  # MatchResult, MatchEvent, MatchStats
+    │   ├── Transfer.swift               # TransferOffer, TransferRecord
+    │   └── GameState.swift              # @Observable root state with calendar advancement
+    ├── Data/
+    │   ├── DataLoader.swift             # Bundle JSON decoding & procedural attribute generator
+    │   └── Resources/                   # Bundled tier1–tier4 league datasets (92 clubs, 2,208 players)
+    ├── Engine/
+    │   ├── MatchEngine.swift            # Minute-by-minute match simulation
+    │   ├── Commentary.swift             # Dynamic commentary text generation
+    │   └── InjuryEngine.swift           # Injury risk and weekly recovery
+    ├── Views/
+    │   ├── Common/
+    │   │   ├── Theme.swift              # Design tokens & preview mocks
+    │   │   ├── CrestView.swift          # Procedural club crest renderer
+    │   │   └── FaceView.swift           # Procedural player portrait renderer
+    │   └── LiveMatch/
+    │       └── PitchReplayView.swift    # Position-cam match replay & live match screen
+    ├── Persistence/
+    │   └── SaveManager.swift            # Documents directory multi-slot JSON persistence
+    └── Accessibility/
+        └── AccessibilityHelpers.swift   # VoiceOver modifiers, formatters, and Dynamic Type helpers
 ```
 
-## License
+---
 
-MIT. Copyright Gooners LLC.
+## 🎮 Game Modes
+
+| Mode | Description |
+| --- | --- |
+| **Own a New Club** | Found a club, set its long-term vision, appoint or dismiss the manager, hire specialist staff and invest in training, academy, medical and stadium infrastructure. |
+| **Manage Existing Club** | Create a manager, then take charge of an existing club's tactics, squad, training and matchdays. Job offers remain available from the overflow menu. |
+
+---
+
+## 🛠 Local Setup & Building
+
+### Prerequisites
+
+1. **macOS Sonoma (14.0+)** with **Xcode 15.0+** (Swift 5.9+).
+2. **XcodeGen** installed via Homebrew:
+   ```bash
+   brew install xcodegen
+   ```
+
+### Generating the Xcode Project
+
+1. Navigate to the repository root:
+   ```bash
+   cd "path/to/Touchline"
+   ```
+2. Generate the `.xcodeproj` file:
+   ```bash
+   xcodegen generate
+   ```
+3. Open `Touchline.xcodeproj` in Xcode:
+   ```bash
+   open Touchline.xcodeproj
+   ```
+4. Select an iOS 17.0+ Simulator or physical device and press **Cmd + R** to run.
+
+### Publishing and retrieving a release IPA
+
+Push releases through the included PowerShell helper from the repository root:
+
+```powershell
+.\tools\Push-And-FetchIPA.ps1
+```
+
+It pushes `main`, waits for the matching **Build iOS App** GitHub Actions run,
+fails loudly if the workflow does not succeed, and downloads the published
+`Touchline.ipa` to the repository root. The download is checked against the
+release's SHA-256 manifest and verified to contain the expected iOS app payload.
+`Touchline.ipa` is intentionally gitignored.
+
+---
+
+## 🚀 Continuous Integration (GitHub Actions)
+
+A GitHub Actions workflow is preconfigured in `.github/workflows/build.yml`:
+- Triggered automatically on push to `main` or via **Run workflow** manual dispatch.
+- Runs on GitHub's `macos-14` runner.
+- Generates the Xcode project with XcodeGen, executes `xcodebuild archive`, packages `Touchline.ipa`, and uploads it as an artifact.
+- Publishes both the IPA and a `release-manifest.json` containing the build
+  version, commit SHA and IPA checksum, so the local retrieval helper can
+  verify that the release asset is complete and unmodified.
+- Supports Apple Developer code signing secrets (`BUILD_CERTIFICATE_BASE64`, `BUILD_PROVISION_PROFILE_BASE64`, `KEYCHAIN_PASSWORD`) or generates unsigned builds for ad-hoc testing.
+
+---
+
+## ♿ Accessibility Standards
+
+Touchline is built from the ground up for VoiceOver users:
+- **Semantic Structure**: Player cards use `.accessibilityElement(children: .combine)` with custom action rotors ("View Profile", "Make Substitution").
+- **Stat Readouts**: Numerical ratings (1–99) are translated into qualitative speech ratings ("World Class", "Excellent", "Average").
+- **Non-Color Dependence**: Every metric combines visual color indicators with iconography and explicit text labels.
+- **Dynamic Type**: All views scale responsively up to `.accessibility3` sizes using `.dynamicTypeBounds()`.
+
+---
+
+## 📄 License
+
+Touchline is distributed under the MIT License.

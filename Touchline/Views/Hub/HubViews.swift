@@ -1,0 +1,408 @@
+//
+//  HubViews.swift
+//  Touchline
+//
+//  The manager's home: a short header, one line about the next match, a
+//  grid of small tiles (each opens its own screen) and one button that moves
+//  the career on. Everything that used to crowd the home screen now lives
+//  on its own minimal screen.
+//
+
+import SwiftUI
+
+// MARK: - Shared hub pieces
+
+/// Adds a "Home" back button and an inline title to a screen opened from a hub.
+struct HubScreenModifier: ViewModifier {
+    @Environment(GameState.self) private var gameState
+    let title: String
+
+    func body(content: Content) -> some View {
+        content
+            .stadiumBackground()
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        gameState.currentScreen = .dashboard
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "chevron.left")
+                            Text("Home")
+                        }
+                    }
+                    .accessibilityLabel("Back to home")
+                }
+            }
+    }
+}
+
+extension View {
+    func hubScreen(_ title: String) -> some View { modifier(HubScreenModifier(title: title)) }
+}
+
+/// A small square tile: icon over a short caption, optional badge.
+struct HubTile: View {
+    let title: String
+    let icon: String
+    var badge: Int = 0
+    var highlight: Bool = false
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .semibold))
+                .frame(height: 20)
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .foregroundStyle(highlight ? Color.gfNight : Color.white)
+        .frame(maxWidth: .infinity, minHeight: 50)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(highlight ? Color.gfMint : Color.gfSurface))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.gfStroke, lineWidth: 1))
+        .overlay(alignment: .topTrailing) {
+            if badge > 0 {
+                Text("\(min(badge, 99))")
+                    .font(.system(size: 10, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.red))
+                    .offset(x: -3, y: 3)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(badge > 0 ? "\(title), \(badge) new" : title)
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// Four small tiles per row.
+struct HubGrid<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+            content()
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// "Arsenal (H) · Premier League · Sat 21 Sep" in one compact row.
+struct NextMatchLine: View {
+    @Environment(GameState.self) private var gameState
+    let verb: String
+
+    var body: some View {
+        if let club = gameState.userClub {
+            if let fixture = gameState.nextUserFixture,
+               let opponentId = fixture.opponentId(for: club.id),
+               let opponent = gameState.club(withId: opponentId) {
+                let today = fixture.date == gameState.season.currentDate
+                let venue = fixture.homeClubId == club.id ? "home" : "away"
+                let round = fixture.cupRound.map { "\(fixture.competition), \($0)" } ?? fixture.competition
+                HStack(spacing: 8) {
+                    CrestView(club: opponent, size: 22)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(today ? "MATCH DAY · vs \(opponent.name)" : "Next: vs \(opponent.name)")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Text("\(venue.capitalized) · \(round) · \(DashboardView.shortDate(fixture.date))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(today ? Color.gfMint.opacity(0.18) : Color.gfSurface))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(today
+                    ? "Match day. \(verb) \(opponent.name), \(venue), \(round)."
+                    : "Next match: \(opponent.name), \(venue), \(round), \(DashboardView.longDate(fixture.date)).")
+            } else if !gameState.isEndOfSeason {
+                Text("No fixtures left this season.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
+/// The single button at the bottom of a hub: title plus a short caption.
+struct HubContinueLabel: View {
+    let title: String
+    var caption: String? = nil
+    var body: some View {
+        VStack(spacing: 1) {
+            Text(title)
+            if let caption {
+                Text(caption)
+                    .font(.system(size: 10, weight: .semibold))
+                    .textCase(nil)
+                    .opacity(0.85)
+            }
+        }
+    }
+}
+
+// MARK: - Manager home
+
+public struct DashboardView: View {
+    @Environment(GameState.self) private var gameState
+    @State private var showingCalendar = false
+
+    public var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                header
+                if gameState.isUnemployed {
+                    Button {
+                        gameState.generateJobOffers(maxCount: 5)
+                        gameState.currentScreen = .jobOffers
+                    } label: {
+                        HubContinueLabel(title: "Find a Job",
+                                         caption: gameState.jobOffers.isEmpty ? "You are out of work" : "\(gameState.jobOffers.count) clubs interested")
+                    }
+                    .buttonStyle(.gfPrimary)
+                    HubGrid {
+                        tile("Profile", "person.crop.circle", .managerProfile)
+                        tile("News", "newspaper.fill", .news)
+                        tile("Settings", "gearshape.fill", .settings)
+                        tile("Menu", "house.fill", .mainMenu)
+                    }
+                } else {
+                    NextMatchLine(verb: "Play")
+                    if gameState.isEndOfSeason, let review = gameState.lastSeasonReview {
+                        NavigationLink {
+                            ScrollView { SeasonReviewCard(review: review).padding() }
+                                .stadiumBackground()
+                                .navigationTitle("Season Review")
+                                .navigationBarTitleDisplayMode(.inline)
+                        } label: {
+                            Label("Season review ready", systemImage: "star.circle.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(Color.gfSurface))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    managerTiles
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 6)
+        }
+        .safeAreaInset(edge: .bottom) {
+            if !gameState.isUnemployed {
+                Button(action: primaryAction) {
+                    HubContinueLabel(title: primaryTitle, caption: primaryCaption)
+                }
+                .buttonStyle(.gfPrimary)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 8)
+                .accessibilityLabel(primaryCaption.map { "\(primaryTitle). \($0)" } ?? primaryTitle)
+            }
+        }
+        .stadiumBackground()
+        .navigationTitle(gameState.userClub?.name ?? "Home")
+        .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(isPresented: $showingCalendar) {
+            CalendarAdvanceView { _ in
+                showingCalendar = false
+                try? SaveManager.shared.autoSave(gameState: gameState)
+            }
+        }
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            if let club = gameState.userClub { CrestView(club: club, size: 30) }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(Self.longDate(gameState.season.currentDate))
+                    .font(.subheadline.weight(.semibold))
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var subtitle: String {
+        guard let club = gameState.userClub else { return "\(gameState.manager.fullName) · Unemployed" }
+        let table = gameState.currentLeagueStandings
+        if let index = table.firstIndex(where: { $0.clubId == club.id }) {
+            return "\(club.leagueTier.displayName) · \(index + 1)\(Self.ordinal(index + 1)) · \(table[index].points) pts"
+        }
+        return club.leagueTier.displayName
+    }
+
+    // MARK: Tiles
+
+    private var hasEurope: Bool {
+        gameState.europeanCompetitions.contains { comp in
+            comp.fixtures.contains { $0.homeClubId == gameState.userClubId || $0.awayClubId == gameState.userClubId }
+        }
+    }
+
+    private var managerTiles: some View {
+        HubGrid {
+            Group {
+                tile("Inbox", "tray.full.fill", .mailbox, badge: gameState.unreadMailCount)
+                tile("News", "newspaper.fill", .news)
+                tile("Squad", "person.3.fill", .squad)
+                tile("Tactics", "list.bullet.clipboard.fill", .tactics)
+                tile("Training", "figure.run", .training)
+                tile("Table", "list.number", .standings)
+                tile("Fixtures", "calendar", .matchHistory)
+                tile("Transfers", "arrow.left.arrow.right", .transferHub)
+            }
+            Group {
+                tile("Finances", "sterlingsign.circle.fill", .finances)
+                tile("Staff", "person.2.badge.gearshape.fill", .staff)
+                tile("Youth", "figure.and.child.holdinghands", .youthAcademy)
+                NavigationLink { ManagerStatusView() } label: { HubTile(title: "Board", icon: "building.columns.fill") }
+                if hasEurope { tile("Europe", "star.circle.fill", .europeanCompetitions) }
+                tile("History", "trophy.fill", .history)
+                tile("Nations", "flag.2.crossed.fill", .international)
+                tile("Profile", "person.crop.circle", .managerProfile)
+            }
+            Group {
+                tile(gameState.jobOffers.isEmpty ? "Jobs" : "Jobs (\(gameState.jobOffers.count))", "briefcase.fill", .jobOffers)
+                tile("Settings", "gearshape.fill", .settings)
+                tile("Menu", "house.fill", .mainMenu)
+            }
+        }
+    }
+
+    private func tile(_ title: String, _ icon: String, _ screen: AppScreen, badge: Int = 0) -> some View {
+        Button { gameState.currentScreen = screen } label: { HubTile(title: title, icon: icon, badge: badge) }
+    }
+
+    // MARK: Primary action
+
+    private var primaryTitle: String {
+        if gameState.isEndOfSeason { return "Start New Season" }
+        if let fixture = gameState.todaysUserFixture, let opponent = opponent(of: fixture) {
+            return "Play vs \(opponent.name)"
+        }
+        if gameState.nextUserFixture == nil { return "Finish Season" }
+        return "Continue"
+    }
+
+    private var primaryCaption: String? {
+        if gameState.isEndOfSeason { return "Season \(gameState.season.year) is over" }
+        if let fixture = gameState.todaysUserFixture {
+            return fixture.cupRound.map { "\(fixture.competition) · \($0)" } ?? "\(fixture.competition) · Matchweek \(fixture.matchWeek)"
+        }
+        if let fixture = gameState.nextUserFixture { return "To match day · \(DashboardView.shortDate(fixture.date))" }
+        return nil
+    }
+
+    private func opponent(of fixture: Fixture) -> Club? {
+        guard let club = gameState.userClub, let id = fixture.opponentId(for: club.id) else { return nil }
+        return gameState.club(withId: id)
+    }
+
+    private func primaryAction() {
+        if gameState.isEndOfSeason {
+            gameState.startNewSeason()
+            try? SaveManager.shared.autoSave(gameState: gameState)
+        } else if gameState.todaysUserFixture != nil {
+            // Today's fixture, freshly selected, so the last match can never reopen.
+            if gameState.selectTodaysUserFixture() { gameState.currentScreen = .matchDay }
+        } else if gameState.matchSettings.animateCalendar && gameState.nextUserFixture != nil {
+            showingCalendar = true
+        } else {
+            // Stops on match day; the button then offers the match.
+            gameState.continueToMatchDay()
+        }
+    }
+
+    // MARK: Dates
+
+    private static let parser: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
+    static func longDate(_ s: String) -> String {
+        guard let d = parser.date(from: s) else { return s }
+        let f = DateFormatter()
+        f.dateFormat = "EEEE d MMMM yyyy"
+        return f.string(from: d)
+    }
+
+    static func shortDate(_ s: String) -> String {
+        guard let d = parser.date(from: s) else { return s }
+        let f = DateFormatter()
+        f.dateFormat = "EEE d MMM"
+        return f.string(from: d)
+    }
+
+    static func ordinal(_ n: Int) -> String {
+        if (11...13).contains(n % 100) { return "th" }
+        switch n % 10 {
+        case 1: return "st"
+        case 2: return "nd"
+        case 3: return "rd"
+        default: return "th"
+        }
+    }
+}
+
+// MARK: - Board & readiness (its own screen)
+
+struct ManagerStatusView: View {
+    @Environment(GameState.self) private var gameState
+
+    var body: some View {
+        List {
+            if let club = gameState.userClub {
+                let starters = club.startingXIPlayers
+                let available = starters.filter { $0.injury == nil && $0.suspendedMatches == 0 }
+                let fitness = starters.isEmpty ? 0 : Int(starters.map(\.matchFitness).reduce(0, +) / Double(starters.count))
+                let sharpness = starters.isEmpty ? 0 : Int(starters.map(\.sharpness).reduce(0, +) / Double(starters.count))
+                Section("Board") {
+                    LabeledContent("Status", value: gameState.jobSecurity.status)
+                    LabeledContent("Confidence", value: "\(gameState.jobSecurity.boardConfidence)%")
+                    if let target = gameState.boardTarget(for: club) {
+                        let table = gameState.currentLeagueStandings
+                        let position = (table.firstIndex { $0.clubId == club.id } ?? 0) + 1
+                        LabeledContent("Target", value: target.goal)
+                        LabeledContent("Now", value: "\(position)\(DashboardView.ordinal(position)) · \(position <= target.position ? "on track" : "behind")")
+                    }
+                }
+                Section("Match Readiness") {
+                    LabeledContent("Starters available", value: "\(available.count) of \(starters.count)")
+                    LabeledContent("Fitness", value: "\(fitness)%")
+                    LabeledContent("Sharpness", value: "\(sharpness)%")
+                }
+                Section("Money") {
+                    LabeledContent("Bank", value: Player.formatCurrency(club.finances.balance))
+                    LabeledContent("Transfer budget", value: Player.formatCurrency(club.finances.transferBudget))
+                    LabeledContent("Wage room", value: "\(Player.formatCurrency(club.finances.weeklyWageSurplus))/w")
+                }
+            }
+        }
+        .stadiumBackground()
+        .navigationTitle("Board")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}

@@ -11,12 +11,15 @@ import SwiftUI
 
 public struct ContentView: View {
     @Environment(GameState.self) private var gameState
-    @State private var selectedTab: TabDestination = .dashboard
-    
+    @AppStorage("gfStadiumTheme") private var stadiumTheme = true
+
     public init() {}
-    
+
+    private var isOwner: Bool { gameState.gameMode == .createClub }
+
     public var body: some View {
         NavigationStack {
+            Group {
             switch gameState.currentScreen {
             case .mainMenu:
                 MainMenuView()
@@ -30,33 +33,24 @@ public struct ContentView: View {
                 JobOffersView()
             case .managerProfile:
                 ManagerProfileView()
-            case .dashboard, .fixtures, .results, .staff:
-                if gameState.gameMode == .createClub {
-                    OwnerCareerTabView()
-                } else {
-                    InGameTabView(selectedTab: $selectedTab)
-                }
+            case .staff:
+                if isOwner { OwnerCareerTabView() } else { StaffView() }
+            case .dashboard, .fixtures, .results:
+                if isOwner { OwnerCareerTabView() } else { DashboardView() }
             case .news:
-                if gameState.gameMode == .createClub {
-                    NewsFeedView()
-                } else {
-                    InGameTabView(selectedTab: $selectedTab)
-                        .onAppear { selectedTab = .news }
-                }
+                NewsFeedView()
+            case .history:
+                HistoryView()
             case .squad:
-                careerTab(.squad)
+                if isOwner { OwnerCareerTabView() } else { SquadView().hubScreen("Squad") }
             case .tactics:
-                careerTab(.tactics)
+                if isOwner { OwnerCareerTabView() } else { TacticsView().hubScreen("Tactics") }
             case .standings:
-                careerTab(.league)
+                StandingsView().hubScreen("League Table")
             case .transferHub, .playerSearch:
-                careerTab(.transfers)
+                if isOwner { OwnerCareerTabView() } else { TransferHubView().hubScreen("Transfers") }
             case .training:
-                if gameState.gameMode == .createClub {
-                    OwnerCareerTabView()
-                } else {
-                    TrainingView()
-                }
+                if isOwner { OwnerCareerTabView() } else { TrainingView() }
             case .finances:
                 FinancesView()
             case .matchDay:
@@ -82,181 +76,15 @@ public struct ContentView: View {
             case .playerDetail(let playerId):
                 PlayerDetailView(playerId: playerId)
             }
+            }
+            .stadiumBackground()
         }
+        .groupBoxStyle(GFGroupBoxStyle())
+        .environment(\.stadiumTheme, stadiumTheme)
+        .preferredColorScheme(stadiumTheme ? .dark : nil)
+        .tint(stadiumTheme ? Color(hex: "7FD99A") : nil)
+        .toolbarBackground(stadiumTheme ? Color(hex: "0A1830").opacity(0.92) : Color(UIColor.systemBackground), for: .navigationBar)
         .dynamicTypeBounds()
-        .touchlineChrome()
-    }
-
-    @ViewBuilder
-    private func careerTab(_ destination: TabDestination) -> some View {
-        if gameState.gameMode == .createClub {
-            OwnerCareerTabView()
-        } else {
-            InGameTabView(selectedTab: $selectedTab)
-                .onAppear { selectedTab = destination }
-        }
-    }
-}
-
-// MARK: - In-Game Tab Destinations
-
-public enum TabDestination: String, CaseIterable, Identifiable {
-    case dashboard = "Home"
-    case news = "News"
-    case squad = "Squad"
-    case tactics = "Tactics"
-    case league = "League"
-    case transfers = "Transfers"
-    
-    public var id: String { rawValue }
-    
-    public var iconName: String {
-        switch self {
-        case .dashboard: return "house.fill"
-        case .news: return "newspaper.fill"
-        case .squad: return "person.3.fill"
-        case .tactics: return "list.bullet.clipboard.fill"
-        case .league: return "trophy.fill"
-        case .transfers: return "arrow.left.arrow.right"
-        }
-    }
-}
-
-// MARK: - In-Game Tab Navigation
-
-public struct InGameTabView: View {
-    @Environment(GameState.self) private var gameState
-    @Binding var selectedTab: TabDestination
-    @State private var showingKitDesigner = false
-
-    public var body: some View {
-        TabView(selection: $selectedTab) {
-            DashboardView()
-                .tabItem {
-                    Label(TabDestination.dashboard.rawValue, systemImage: TabDestination.dashboard.iconName)
-                }
-                .tag(TabDestination.dashboard)
-            
-            NewsFeedView()
-                .tabItem {
-                    Label(TabDestination.news.rawValue, systemImage: TabDestination.news.iconName)
-                }
-                .tag(TabDestination.news)
-            
-            SquadView()
-                .tabItem {
-                    Label(TabDestination.squad.rawValue, systemImage: TabDestination.squad.iconName)
-                }
-                .tag(TabDestination.squad)
-            
-            TacticsView()
-                .tabItem {
-                    Label(TabDestination.tactics.rawValue, systemImage: TabDestination.tactics.iconName)
-                }
-                .tag(TabDestination.tactics)
-            
-            StandingsView()
-                .tabItem {
-                    Label(TabDestination.league.rawValue, systemImage: TabDestination.league.iconName)
-                }
-                .tag(TabDestination.league)
-            
-            TransferHubView()
-                .tabItem {
-                    Label(TabDestination.transfers.rawValue, systemImage: TabDestination.transfers.iconName)
-                }
-                .tag(TabDestination.transfers)
-        }
-        .navigationTitle(navigationTitleForTab(selectedTab))
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    gameState.currentScreen = .mainMenu
-                } label: {
-                    Image(systemName: "house")
-                }
-                .accessibilityLabel("Main Menu")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                if selectedTab == .dashboard {
-                    Menu {
-                        Button {
-                            gameState.currentScreen = .mailbox
-                        } label: {
-                            Label("Inbox", systemImage: "tray.full")
-                        }
-                        Button {
-                            gameState.currentScreen = .matchHistory
-                        } label: {
-                            Label("Match History", systemImage: "sportscourt")
-                        }
-                        Button {
-                            gameState.currentScreen = .europeanCompetitions
-                        } label: {
-                            Label("European Competitions", systemImage: "globe.europe.africa")
-                        }
-                        Button {
-                            gameState.currentScreen = .international
-                        } label: {
-                            Label("International", systemImage: "flag.2.crossed")
-                        }
-                        Button {
-                            gameState.currentScreen = .youthAcademy
-                        } label: {
-                            Label("Youth Academy", systemImage: "figure.and.child.holdinghands")
-                        }
-                        Button {
-                            gameState.currentScreen = .finances
-                        } label: {
-                            Label("Finances", systemImage: "sterlingsign.circle")
-                        }
-                        if gameState.userClub != nil {
-                            Button {
-                                showingKitDesigner = true
-                            } label: {
-                                Label("Kit Designer", systemImage: "tshirt")
-                            }
-                        }
-                        Button {
-                            gameState.currentScreen = .managerProfile
-                        } label: {
-                            Label("My Profile", systemImage: "person.crop.circle")
-                        }
-                        Button {
-                            gameState.currentScreen = .jobOffers
-                        } label: {
-                            Label(
-                                gameState.jobOffers.isEmpty ? "Job Offers" : "Job Offers (\(gameState.jobOffers.count))",
-                                systemImage: "briefcase"
-                            )
-                        }
-                        Divider()
-                        Button {
-                            gameState.currentScreen = .settings
-                        } label: {
-                            Label("Settings", systemImage: "gearshape")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                    .accessibilityLabel("More options")
-                }
-            }
-        }
-        .sheet(isPresented: $showingKitDesigner) { kitSheet }
-    }
-    
-    @ViewBuilder
-    private var kitSheet: some View {
-        if let club = gameState.userClub { KitDesignerView(club: club).environment(gameState) }
-    }
-
-    private func navigationTitleForTab(_ tab: TabDestination) -> String {
-        if let club = gameState.userClub {
-            return "\(club.name) • \(tab.rawValue)"
-        }
-        return tab.rawValue
     }
 }
 
@@ -264,108 +92,150 @@ public struct InGameTabView: View {
 
 public struct MainMenuView: View {
     @Environment(GameState.self) private var gameState
+    @State private var pendingNewCareerMode: GameMode?
+    @State private var showingEditor = false
 
+    /// Whether there is a career in memory worth continuing (or protecting).
+    private var hasCareerToContinue: Bool {
+        guard gameState.hasStartedCareer else { return false }
+        return gameState.userClub != nil || (gameState.gameMode == .manageClub && gameState.isUnemployed)
+    }
+    
     public var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                // Hero
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(Color.highlight)
-                            .frame(width: 28, height: 6)
-                        Text("Gooners LLC presents")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
+            VStack(spacing: 18) {
+                // Logo over the stadium
+                VStack(spacing: 4) {
+                    ZStack {
+                        Image(systemName: "shield.fill")
+                            .font(.system(size: 64))
+                            .foregroundStyle(Color.white.opacity(0.92))
+                        Image(systemName: "soccerball")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundStyle(Color.gfNight)
+                            .offset(y: -6)
                     }
+                    .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
                     Text("TOUCHLINE")
-                        .font(.system(size: 46, weight: .black, design: .default))
-                        .tracking(2)
-                        .foregroundStyle(
-                            LinearGradient(colors: [.white, Color(hex: "9DB4FF")], startPoint: .top, endPoint: .bottom)
-                        )
-                    Text("Run the club. Read the game. Live on the touchline.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.gfDisplay(30))
+                        .foregroundStyle(.white)
+                    Text("FOOTBALL MANAGEMENT")
+                        .font(.gfLabel(14))
+                        .tracking(3)
+                        .foregroundStyle(.white.opacity(0.75))
                 }
-                .padding(.top, 36)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Touchline. Football management.")
+                .padding(.top, 30)
+                .padding(.bottom, 14)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Touchline Football Management")
                 .accessibilityAddTraits(.isHeader)
 
-                if gameState.userClub != nil || (gameState.gameMode == .manageClub && gameState.isUnemployed) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        SectionEyebrow("Your career")
-                        Button(action: {
+                VStack(spacing: 14) {
+                    if hasCareerToContinue {
+                        Button {
                             gameState.currentScreen = gameState.userClub == nil ? .jobOffers : .dashboard
-                        }) {
-                            HStack(spacing: 14) {
-                                if let club = gameState.userClub {
-                                    CrestView(club: club, size: 44)
-                                        .accessibilityHidden(true)
-                                } else {
-                                    Image(systemName: "briefcase.fill").font(.title2)
-                                }
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Continue Career")
-                                        .font(.headline)
-                                    Text(gameState.userClub?.name ?? "Job search")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.white.opacity(0.85))
-                                        .lineLimit(1)
-                                }
-                                Spacer(minLength: 0)
-                                Image(systemName: "arrow.right")
-                                    .font(.headline)
+                        } label: {
+                            VStack(spacing: 2) {
+                                Text("Continue")
+                                Text("\(gameState.userClub?.name ?? "Job search") · \(gameState.season.year)")
+                                    .font(.caption)
+                                    .textCase(nil)
+                                    .opacity(0.85)
                             }
                         }
-                        .buttonStyle(PrimaryActionStyle())
+                        .buttonStyle(.gfPrimary)
                         .accessibilityLabel("Continue career\(gameState.userClub.map { " with \($0.name)" } ?? " in the job market")")
                     }
-                }
-
-                VStack(alignment: .leading, spacing: 12) {
-                    SectionEyebrow("New career")
                     ForEach(GameMode.allCases) { mode in
-                        GameModeCard(mode: mode) {
+                        Button {
                             startMode(mode)
+                        } label: {
+                            VStack(spacing: 2) {
+                                Text(mode == .createClub ? "New Owner Career" : "New Manager Career")
+                                Text(mode == .createClub ? "Run the club as chairman" : "Pick the team, tactics and transfers")
+                                    .font(.caption)
+                                    .textCase(nil)
+                                    .opacity(0.8)
+                            }
+                        }
+                        .buttonStyle(.gfOutline)
+                        .accessibilityLabel("\(mode.displayName). \(mode.modeDescription)")
+                    }
+                    Button {
+                        showingEditor = true
+                    } label: {
+                        VStack(spacing: 2) {
+                            Text("Editor")
+                            Text(DatapackStore.shared.activeName.map { "Datapack in use: \($0)" } ?? "Create and edit datapacks")
+                                .font(.caption)
+                                .textCase(nil)
+                                .opacity(0.8)
                         }
                     }
-                }
-
-                Button(action: {
-                    gameState.currentScreen = .settings
-                }) {
-                    HStack {
-                        Image(systemName: "gearshape.fill")
-                        Text("Settings and Saves")
-                            .fontWeight(.medium)
+                    .buttonStyle(.gfOutline)
+                    .accessibilityLabel("Editor. Create and edit datapacks")
+                    .fullScreenCover(isPresented: $showingEditor, onDismiss: {
+                        // The world on the menu was built before the editor
+                        // opened; rebuild it so a new career uses the chosen pack.
+                        if !gameState.hasStartedCareer {
+                            gameState.resetForNewCareer(mode: gameState.gameMode)
+                        }
+                    }) {
+                        DatapackListView()
                     }
+                    Button("Settings & Saves") { gameState.currentScreen = .settings }
+                        .buttonStyle(.gfOutline)
                 }
-                .buttonStyle(SecondaryActionStyle())
-                .accessibilityLabel("Settings and saves")
+                .padding(.horizontal, 26)
 
                 Text("An offline football management simulation. Player and club names are used for identification only; all badges and faces are procedurally generated.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .center)
                     .multilineTextAlignment(.center)
+                    .padding(.horizontal)
             }
-            .padding(.horizontal, 22)
+            .padding(.horizontal, 18)
             .padding(.bottom, 32)
         }
-        .background(
-            ZStack {
-                Color.ink
-                RadialGradient(colors: [Color.brand.opacity(0.35), .clear], center: .topTrailing, startRadius: 10, endRadius: 420)
+        .stadiumBackground()
+        .confirmationDialog(
+            "Start a New Career?",
+            isPresented: Binding(
+                get: { pendingNewCareerMode != nil },
+                set: { if !$0 { pendingNewCareerMode = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingNewCareerMode
+        ) { mode in
+            Button("Start New Career", role: .destructive) {
+                pendingNewCareerMode = nil
+                beginNewCareer(mode)
             }
-            .ignoresSafeArea()
-        )
+            Button("Cancel", role: .cancel) { pendingNewCareerMode = nil }
+        } message: { _ in
+            Text("A brand-new world will be created. Your current career stays in the autosave until you launch the new one, and manual save slots are never touched.")
+        }
+    }
+    
+    private func startMode(_ mode: GameMode) {
+        if hasCareerToContinue {
+            // Never mutate the live career just because a mode card was tapped:
+            // confirm first, then start from a clean world.
+            pendingNewCareerMode = mode
+        } else {
+            beginNewCareer(mode)
+        }
     }
 
-    private func startMode(_ mode: GameMode) {
-        gameState.gameMode = mode
+    private func beginNewCareer(_ mode: GameMode) {
+        if gameState.hasStartedCareer {
+            // Previously a second career reused the old, mutated world: the old
+            // club kept `isUserClub`, news and offers leaked across careers, and
+            // owner/manager modes could be mixed. Always start from scratch.
+            gameState.resetForNewCareer(mode: mode)
+        } else {
+            gameState.gameMode = mode
+        }
         // Owner careers begin by founding their club; manager careers begin by
         // creating the person who will run training and matches.
         gameState.currentScreen = mode == .createClub ? .clubCreation : .managerCreation
@@ -382,11 +252,14 @@ public struct GameModeCard: View {
         Button(action: action) {
             HStack(spacing: 16) {
                 Image(systemName: iconName)
-                    .font(.title2)
-                    .frame(width: 48, height: 48)
-                    .background(Color.highlight.opacity(0.14))
-                    .foregroundStyle(Color.highlight)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .font(.title)
+                    .frame(width: 58, height: 58)
+                    .background(
+                        LinearGradient(colors: mode == .createClub ? [Color(hex: "8E44AD"), Color(hex: "3498DB")] : [Color.pitchGreen, Color(hex: "1ABC9C")],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing),
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    )
+                    .foregroundStyle(.white)
                 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(mode.displayName)
@@ -400,18 +273,8 @@ public struct GameModeCard: View {
                 }
                 
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(.tertiary)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.hairline, lineWidth: 1)
-            )
+            .gfCard()
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
@@ -859,7 +722,7 @@ public struct JobOffersView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: offer.kind.iconName)
-                    .foregroundStyle(Color.brand)
+                    .foregroundStyle(Color.accentColor)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(offer.teamName)
                         .font(.headline)
@@ -1032,821 +895,76 @@ public enum OwnerTab: String, CaseIterable, Identifiable {
     case board = "Boardroom"
     case people = "People"
     case facilities = "Facilities"
-    case club = "Club"
+    case league = "League"
+    case club = "Business"
     public var id: String { rawValue }
     var icon: String {
         switch self {
         case .board: return "building.columns.fill"
         case .people: return "person.3.fill"
         case .facilities: return "hammer.fill"
-        case .club: return "shield.fill"
+        case .league: return "trophy.fill"
+        case .club: return "briefcase.fill"
         }
     }
 }
 
-public struct OwnerCareerTabView: View {
-    @Environment(GameState.self) private var gameState
-    @State private var tab: OwnerTab = .board
+/// End-of-season summary shared by the manager dashboard and the boardroom.
+struct SeasonReviewCard: View {
+    let review: SeasonReview
 
-    public var body: some View {
-        TabView(selection: $tab) {
-            OwnerBoardroomView().tabItem { Label(OwnerTab.board.rawValue, systemImage: OwnerTab.board.icon) }.tag(OwnerTab.board)
-            OwnerPeopleView().tabItem { Label(OwnerTab.people.rawValue, systemImage: OwnerTab.people.icon) }.tag(OwnerTab.people)
-            OwnerFacilitiesView().tabItem { Label(OwnerTab.facilities.rawValue, systemImage: OwnerTab.facilities.icon) }.tag(OwnerTab.facilities)
-            OwnerClubView().tabItem { Label(OwnerTab.club.rawValue, systemImage: OwnerTab.club.icon) }.tag(OwnerTab.club)
-        }
-        .navigationTitle(gameState.userClub?.name ?? "Owner Career")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { gameState.currentScreen = .mainMenu } label: { Image(systemName: "house") }
-                    .accessibilityLabel("Main Menu")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button { gameState.currentScreen = .mailbox } label: {
-                        Label("Board Inbox", systemImage: "tray.full")
-                    }
-                    Button { gameState.currentScreen = .finances } label: {
-                        Label("Finances", systemImage: "banknote")
-                    }
-                    Button { gameState.currentScreen = .news } label: {
-                        Label("Club News", systemImage: "newspaper")
-                    }
-                    Button { gameState.currentScreen = .settings } label: {
-                        Label("Settings & Saves", systemImage: "gearshape")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .accessibilityLabel("Owner tools")
-                .accessibilityHint("Opens the board inbox, finances, news and settings")
-            }
+    private var ordinal: String {
+        let n = review.position
+        if (11...13).contains(n % 100) { return "\(n)th" }
+        switch n % 10 {
+        case 1: return "\(n)st"
+        case 2: return "\(n)nd"
+        case 3: return "\(n)rd"
+        default: return "\(n)th"
         }
     }
-}
-
-/// A compact, text-first metric tile. The label is deliberately kept visible so
-/// the board interface never relies on colour or an SF Symbol alone.
-private struct OwnerMetricTile: View {
-    let title: String
-    let value: String
-    let icon: String
-    let tint: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Image(systemName: icon)
-                .foregroundStyle(tint)
-                .font(.headline)
-                .accessibilityHidden(true)
-            Text(value)
-                .font(.headline)
-                .fontWeight(.bold)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
-        .padding(12)
-        .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title): \(value)")
-    }
-}
-
-private struct ManagerCandidateCard: View {
-    let candidate: ManagerCandidate
-    let appoint: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(candidate.name).fontWeight(.semibold)
-                Spacer()
-                Label("\(candidate.reputation)", systemImage: "star.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Text(candidate.style)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            HStack {
-                Label("\(Player.formatCurrency(candidate.wage))/week", systemImage: "banknote")
-                    .font(.caption)
-                Spacer()
-                Button("Appoint", action: appoint)
-                    .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding(.vertical, 6)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(candidate.name), reputation \(candidate.reputation). \(candidate.style). Salary \(Player.spokenCurrency(candidate.wage)) per week.")
-        .accessibilityHint("Use Appoint to offer this candidate the manager role")
-    }
-}
-
-public struct OwnerBoardroomView: View {
-    @Environment(GameState.self) private var gameState
-    @State private var decisionMessage: String?
-
-    public var body: some View {
-        ScrollView {
-            if let club = gameState.userClub {
-                VStack(alignment: .leading, spacing: 16) {
-                    ownerHero(club)
-                    ownerStatus(club)
-                    Button {
-                        gameState.advanceOwnerWeek()
-                    } label: {
-                        Label(gameState.isEndOfSeason ? "Plan New Season" : "Advance One Week", systemImage: "calendar.badge.clock")
-                            .fontWeight(.bold).frame(maxWidth: .infinity).padding()
-                    }
-                    .background(Color.brand).foregroundStyle(.white).clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .accessibilityHint("Simulates the next week. Your manager controls matchday.")
-
-                    GroupBox("Owner's Briefing") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            briefing("First-team manager", club.manager, "person.badge.key")
-                            briefing("Club vision", gameState.owner.vision.rawValue, "scope")
-                            briefing("Cash balance", Player.formatCurrency(club.finances.balance), "banknote")
-                            briefing("Supporter confidence", "\(gameState.owner.supporterConfidence)%", "heart.fill")
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    GroupBox("This Week's Board Priorities") {
-                        VStack(alignment: .leading, spacing: 7) {
-                            Text("• Protect the club's financial health while building a competitive squad.")
-                            Text("• Give your manager the support to deliver \(target(for: club)).")
-                            Text("• Review appointments and infrastructure after each run of fixtures.")
-                        }.font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    GroupBox("Capital Decisions") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Spend legacy points on a board-level intervention. Your manager remains responsible for football decisions.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            ForEach(OwnerInvestment.allCases) { investment in
-                                OwnerInvestmentCard(
-                                    investment: investment,
-                                    availablePoints: gameState.owner.legacyPoints,
-                                    action: { approve(investment) }
-                                )
-                            }
-                        }
-                    }
-                }.padding()
-            }
-        }
-        .background(Color.ink)
-        .alert("Board Decision", isPresented: Binding(get: { decisionMessage != nil }, set: { if !$0 { decisionMessage = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(decisionMessage ?? "")
-        }
-    }
-
-    private func briefing(_ label: String, _ value: String, _ icon: String) -> some View {
-        HStack(alignment: .firstTextBaseline) { Label(label, systemImage: icon); Spacer(minLength: 16); Text(value).fontWeight(.semibold).multilineTextAlignment(.trailing) }
-    }
-    private func ownerHero(_ club: Club) -> some View {
-        HStack(spacing: 14) {
-            CrestView(club: club, size: 62)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Welcome, \(gameState.owner.name)").font(.title3).fontWeight(.bold)
-                Text("Owner • Season \(gameState.season.year)").foregroundStyle(.white.opacity(0.9))
-                Text("\(gameState.owner.legacyPoints) legacy points").font(.caption).foregroundStyle(.white.opacity(0.8))
-            }; Spacer()
-        }
-        .padding()
-        .background(Color.pitchDarkGreen.gradient)
-        .foregroundStyle(.white)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Owner headquarters. \(club.name). \(gameState.owner.name), owner. Season \(gameState.season.year). \(gameState.owner.legacyPoints) legacy points.")
-    }
-    private func ownerStatus(_ club: Club) -> some View {
-        HStack(spacing: 10) {
-            OwnerMetricTile(title: "Confidence", value: "\(gameState.owner.supporterConfidence)%", icon: "heart.fill", tint: gameState.owner.supporterConfidence >= 60 ? .winGreen : .goldAccent)
-            OwnerMetricTile(title: "Cash", value: Player.formatCurrency(club.finances.balance), icon: "banknote.fill", tint: .pitchGreen)
-            OwnerMetricTile(title: "Manager", value: club.manager == "Interim Manager" ? "Needed" : "Appointed", icon: "person.badge.key.fill", tint: club.manager == "Interim Manager" ? .lossRed : .defColor)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Club health summary")
-    }
-    private func target(for club: Club) -> String { club.leagueTier.isTopFlight ? "a stable top-half finish" : "a promotion challenge" }
-    private func approve(_ investment: OwnerInvestment) {
-        let approved = gameState.approveOwnerInvestment(investment)
-        decisionMessage = approved ? "\(investment.title) approved. \(investment.detail)" : "You need \(investment.cost) legacy points to approve this decision."
-    }
-}
-
-private struct OwnerInvestmentCard: View {
-    let investment: OwnerInvestment
-    let availablePoints: Int
-    let action: () -> Void
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: investment == .recruitment ? "sterlingsign.circle.fill" : investment == .facilities ? "building.2.fill" : "heart.fill")
-                .foregroundStyle(Color.brand)
-                .font(.title3)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(investment.title).fontWeight(.semibold)
-                Text(investment.detail).font(.caption).foregroundStyle(.secondary)
-                Text("Cost: \(investment.cost) legacy points").font(.caption2).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            Button("Approve", action: action)
-                .buttonStyle(.bordered)
-                .disabled(availablePoints < investment.cost)
-                .accessibilityHint(availablePoints < investment.cost ? "You need \(investment.cost - availablePoints) more legacy points" : investment.detail)
-        }
-        .accessibilityElement(children: .contain)
-    }
-}
-
-public struct OwnerPeopleView: View {
-    @Environment(GameState.self) private var gameState
-    @State private var message: String?
-    @State private var showSackConfirmation = false
-
-    public var body: some View {
-        List {
-            if let club = gameState.userClub {
-                Section("First-Team Manager") {
-                    LabeledContent("Current manager", value: club.manager)
-                    Text("The manager owns match tactics, selection and player development. As owner, your job is to set direction and provide resources.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    if club.manager != "Interim Manager" {
-                        Button("Dismiss Manager", role: .destructive) { showSackConfirmation = true }
-                    }
-                }
-                Section("Manager Shortlist") {
-                    ForEach(ManagerCandidate.shortlist) { candidate in
-                        ManagerCandidateCard(candidate: candidate) { appoint(candidate) }
-                    }
-                }
-                Section("Football Department") {
-                    ForEach(StaffRole.allCases) { role in
-                        let team = club.staff.filter { $0.role == role }
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(role.displayName).fontWeight(.semibold)
-                            Text(team.isEmpty ? "Vacant — \(role.roleDescription)" : team.map { "\($0.name) (\($0.quality)-star)" }.joined(separator: " • "))
-                                .font(.caption).foregroundStyle(.secondary)
-                            Button("Hire 3-star \(role.displayName)") { hire(role) }
-                                .buttonStyle(.bordered)
-                                .accessibilityHint("Makes a three star \(role.displayName) offer")
-                        }.padding(.vertical, 2)
-                    }
-                }
-            }
-        }
-        .alert("Board Decision", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) { Button("OK", role: .cancel) {} } message: { Text(message ?? "") }
-        .confirmationDialog("Dismiss \(gameState.userClub?.manager ?? "manager")?", isPresented: $showSackConfirmation, titleVisibility: .visible) {
-            Button("Dismiss Manager", role: .destructive) { dismiss() }
-        } message: { Text("This will require a compensation payment and leave the club with an interim manager.") }
-    }
-    private func appoint(_ candidate: ManagerCandidate) {
-        let succeeded = gameState.appointManager(candidate)
-        message = succeeded ? "\(candidate.name) has accepted your offer." : "The club cannot afford this appointment."
-        if succeeded { try? SaveManager.shared.autoSave(gameState: gameState) }
-    }
-    private func dismiss() {
-        let succeeded = gameState.dismissManager()
-        message = succeeded ? "The manager has been dismissed. Begin your search immediately." : "The club cannot meet the compensation payment."
-        if succeeded { try? SaveManager.shared.autoSave(gameState: gameState) }
-    }
-    private func hire(_ role: StaffRole) {
-        guard let idx = gameState.clubs.firstIndex(where: { $0.isUserClub }) else { return }
-        if let staffer = gameState.clubs[idx].hireStaff(role: role, quality: 3) {
-            message = "\(staffer.name) joins as \(role.displayName)."
-            try? SaveManager.shared.autoSave(gameState: gameState)
-        } else { message = "The club cannot afford this appointment." }
-    }
-}
-
-public struct OwnerFacilitiesView: View {
-    @Environment(GameState.self) private var gameState
-    @State private var message: String?
-    public var body: some View {
-        List {
-            if let club = gameState.userClub {
-                Section("Capital Projects") {
-                    project("Training Ground", level: club.trainingFacilityLevel, detail: "Raises the quality of daily player development.", cost: club.trainingUpgradeCost) { $0.upgradeTrainingGround() }
-                    project("Youth Academy", level: club.youthAcademyLevel, detail: "Improves the yearly intake and club pipeline.", cost: club.academyUpgradeCost) { $0.upgradeYouthAcademy() }
-                    project("Medical Department", level: club.medicalFacilityLevel, detail: "Supports injury prevention and recovery.", cost: club.medicalUpgradeCost) { $0.upgradeMedicalFacilities() }
-                }
-                Section("Stadium") {
-                    LabeledContent("\(club.stadium)", value: "\(club.stadiumCapacity.formatted()) seats")
-                    Text("Add roughly 15% capacity to grow matchday income and the club's profile.").font(.caption).foregroundStyle(.secondary)
-                    Button("Expand Stadium — \(Player.formatCurrency(club.stadiumExpansionCost))") { expand() }.disabled(club.finances.balance < club.stadiumExpansionCost)
-                }
-                Section("Available Capital") {
-                    LabeledContent("Cash available", value: Player.formatCurrency(club.finances.balance))
-                    LabeledContent("Transfer allocation", value: Player.formatCurrency(club.finances.transferBudget))
-                    Text("Training ground and academy projects use the transfer allocation. Medical and stadium projects use club cash.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .alert("Capital Project", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) { Button("OK", role: .cancel) {} } message: { Text(message ?? "") }
-    }
-    private func project(_ title: String, level: Int, detail: String, cost: Int, action: @escaping (inout Club) -> Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack { Text(title).fontWeight(.semibold); Spacer(); Text("Level \(level)/5").foregroundStyle(.secondary) }
-            Text(detail).font(.caption).foregroundStyle(.secondary)
-            Button(level >= 5 ? "Maximum level" : "Upgrade — \(Player.formatCurrency(cost))") { upgrade(action) }
-                .disabled(level >= 5)
-                .accessibilityHint(level >= 5 ? "This facility has reached its maximum level" : "Costs \(Player.spokenCurrency(cost))")
-        }.padding(.vertical, 3)
-    }
-    private func upgrade(_ action: (inout Club) -> Bool) {
-        guard let idx = gameState.clubs.firstIndex(where: { $0.isUserClub }) else { return }
-        let succeeded = action(&gameState.clubs[idx])
-        message = succeeded ? "Project approved. The club infrastructure has improved." : "The club cannot fund this project right now."
-        if succeeded { try? SaveManager.shared.autoSave(gameState: gameState) }
-    }
-    private func expand() {
-        guard let idx = gameState.clubs.firstIndex(where: { $0.isUserClub }) else { return }
-        let succeeded = gameState.clubs[idx].expandStadium()
-        message = succeeded ? "Expansion approved. Capacity is now \(gameState.clubs[idx].stadiumCapacity.formatted())." : "The club cannot fund this project right now."
-        if succeeded { try? SaveManager.shared.autoSave(gameState: gameState) }
-    }
-}
-
-public struct OwnerClubView: View {
-    @Environment(GameState.self) private var gameState
-    @State private var showingKitDesigner = false
-    public var body: some View {
-        List {
-            if let club = gameState.userClub {
-                Section("Club Kit") {
-                    HStack(spacing: 16) {
-                        KitView(kit: club.effectiveKit, sponsor: gameState.shirtSponsorName, monogram: club.shortName, height: 150)
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(club.kit == nil ? "Traditional home kit" : "Custom home kit")
-                                .font(.headline)
-                            Text(gameState.shirtSponsorName.map { "Shirt sponsor: \($0)" } ?? "No shirt sponsor yet")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Button {
-                                showingKitDesigner = true
-                            } label: {
-                                Label("Design Kit", systemImage: "paintbrush.fill")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.brand)
-                        }
-                    }
-                    .padding(.vertical, 6)
-                }
-                .sheet(isPresented: $showingKitDesigner) {
-                    KitDesignerView(club: club).environment(gameState)
-                }
-                Section("Club Identity") {
-                    LabeledContent("City", value: club.city)
-                    LabeledContent("Division", value: club.leagueTier.displayName)
-                    LabeledContent("Reputation", value: "\(club.reputation)/100")
-                    Picker("Long-term vision", selection: Binding(get: { gameState.owner.vision }, set: { newVision in
-                        gameState.owner.vision = newVision
-                        try? SaveManager.shared.autoSave(gameState: gameState)
-                    })) {
-                        ForEach(ClubVision.allCases) { vision in
-                            Text(vision.rawValue).tag(vision)
-                        }
-                    }
-                    Text(gameState.owner.vision.summary).font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Operating Model") { LabeledContent("Squad", value: "\(club.players.count) senior players"); LabeledContent("Staff", value: "\(club.staff.count) employees"); LabeledContent("Weekly wage bill", value: Player.formatCurrency(club.totalWeeklyWageBill)) }
-                Section("Budget Direction") {
-                    Text("Transfer allocation: \(gameState.owner.budgetAllocation.transferBudgetPercent)%")
-                    Slider(value: Binding(
-                        get: { Double(gameState.owner.budgetAllocation.transferBudgetPercent) },
-                        set: { _ = gameState.setOwnerBudgetAllocation(transferPercent: Int($0.rounded())) }
-                    ), in: 20...80, step: 5)
-                    .accessibilityLabel("Transfer budget allocation")
-                    .accessibilityValue("\(gameState.owner.budgetAllocation.transferBudgetPercent) percent")
-                    .accessibilityHint("Adjusts the board's balance between transfer and wage investment")
-                    LabeledContent("Wage allocation", value: "\(gameState.owner.budgetAllocation.wageBudgetPercent)%")
-                }
-                Section("Legacy Milestones") {
-                    LabeledContent("Legacy points", value: "\(gameState.owner.legacyPoints)")
-                    Text("Unlock milestones by running the club well. Each one awards bonus legacy points for board investments.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    ForEach(gameState.owner.milestones) { milestone in
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: milestone.isUnlocked ? "checkmark.seal.fill" : "lock.fill")
-                                .foregroundStyle(milestone.isUnlocked ? Color.green : Color.secondary)
-                                .accessibilityHidden(true)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(milestone.title).fontWeight(.semibold)
-                                Text(milestone.detail).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 8)
-                            Text("+\(milestone.bonusPoints)")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(milestone.isUnlocked ? Color.green : Color.secondary)
-                        }
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel("\(milestone.title). \(milestone.detail). \(milestone.isUnlocked ? "Unlocked" : "Locked"). \(milestone.bonusPoints) bonus legacy points.")
-                    }
-                }
-                Section("Commercial Partners") {
-                    if gameState.owner.sponsorshipDeals.isEmpty {
-                        Text("No commercial partners signed yet.").foregroundStyle(.secondary)
-                    } else {
-                        ForEach(gameState.owner.sponsorshipDeals) { deal in
-                            LabeledContent(deal.sponsorName, value: "\(Player.formatCurrency(deal.annualValue))/yr")
-                                .accessibilityLabel("\(deal.sponsorName), \(Player.spokenCurrency(deal.annualValue)) per year, \(deal.yearsRemaining) years remaining")
-                        }
-                    }
-                    Menu("Sign Commercial Partner") {
-                        ForEach(SponsorshipTier.allCases, id: \.self) { tier in
-                            Button(tier.rawValue) { _ = gameState.signSponsorshipDeal(tier) }
-                        }
-                    }
-                    .disabled(gameState.owner.sponsorshipDeals.count >= 3)
-                    .accessibilityHint("Signs a sponsorship deal based on club reputation. Maximum three partners.")
-                }
-                Section("Owner Note") { Text("This is an owner-only career. The manager handles the football; you shape the people, money, facilities and long-term identity of \(club.name).") }
-            }
-        }
-    }
-}
-
-public struct DashboardView: View {
-    @Environment(GameState.self) private var gameState
-    public var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                if !gameState.isUnemployed, let club = gameState.userClub {
-                    managerHQ(club)
-                }
-                // Unemployed: surface job offers as the primary action.
-                if gameState.isUnemployed {
-                    Button(action: {
-                        gameState.generateJobOffers(maxCount: 5)
-                        gameState.currentScreen = .jobOffers
-                    }) {
-                        HStack {
-                            Image(systemName: "briefcase.fill")
-                                .font(.title2)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Job Offers")
-                                    .font(.headline)
-                                Text(gameState.jobOffers.isEmpty
-                                     ? "You are unemployed — search for vacancies"
-                                     : "\(gameState.jobOffers.count) club(s) interested in you")
-                                    .font(.caption)
-                                    .foregroundStyle(.white.opacity(0.85))
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.footnote)
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
-                        .padding()
-                        .frame(maxWidth: .infinity)
-                        .background(Color.brand)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    }
-                    .accessibilityLabel("Job offers")
-                } else {
-                // Primary action. Away from match day this always reads
-                // "Continue to Match Day"; it only becomes "Play Match" once
-                // the calendar has actually reached the fixture.
-                Button(action: {
-                    if gameState.isEndOfSeason {
-                        gameState.startNewSeason()
-                    } else if gameState.advanceCalendar() {
-                        gameState.currentScreen = .matchDay
-                    }
-                }) {
-                    HStack(spacing: 14) {
-                        Image(systemName: primaryIcon)
-                            .font(.title2)
-                            .frame(width: 44, height: 44)
-                            .background(Color.white.opacity(0.14))
-                            .clipShape(Circle())
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(primaryTitle)
-                                .font(.headline)
-                            Text(continueSubtitle)
-                                .font(.caption)
-                                .foregroundStyle(.white.opacity(0.85))
-                                .multilineTextAlignment(.leading)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: "arrow.right")
-                            .font(.headline)
-                    }
-                }
-                .buttonStyle(PrimaryActionStyle(tint: isMatchDay ? Color(hex: "C2410C") : .brand))
-                .accessibilityLabel(primaryTitle)
-                .accessibilityValue(continueSubtitle)
-                .accessibilityHint(isMatchDay ? "Opens match day for your fixture" : "Advances the calendar to your next match day")
-                }
-
-                // Next Match Card
-                if let nextFixture = gameState.nextUserFixture,
-                   let userClub = gameState.userClub,
-                   let opponentId = nextFixture.opponentId(for: userClub.id),
-                   let opponent = gameState.club(withId: opponentId) {
-                    let isHome = nextFixture.homeClubId == userClub.id
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack {
-                            SectionEyebrow(isMatchDay ? "Match day" : "Next match")
-                            Text(nextFixture.competition)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        HStack(alignment: .center) {
-                            VStack(spacing: 6) {
-                                CrestView(club: isHome ? userClub : opponent, size: 52)
-                                Text(isHome ? userClub.name : opponent.name)
-                                    .font(.footnote)
-                                    .fontWeight(.semibold)
-                                    .multilineTextAlignment(.center)
-                                    .lineLimit(2)
-                            }
-                            .frame(maxWidth: .infinity)
-                            VStack(spacing: 4) {
-                                Text("v")
-                                    .font(.title2)
-                                    .fontWeight(.black)
-                                    .foregroundStyle(Color.highlight)
-                                Text(nextFixture.date)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            VStack(spacing: 6) {
-                                CrestView(club: isHome ? opponent : userClub, size: 52)
-                                Text(isHome ? opponent.name : userClub.name)
-                                    .font(.footnote)
-                                    .fontWeight(.semibold)
-                                    .multilineTextAlignment(.center)
-                                    .lineLimit(2)
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                    }
-                    .footballCardStyle()
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(isMatchDay ? "Match day" : "Next match"): \(isHome ? userClub.name : opponent.name) versus \(isHome ? opponent.name : userClub.name). \(nextFixture.competition), matchweek \(nextFixture.matchWeek), \(nextFixture.date). You are \(isHome ? "at home" : "away").")
-                }
-
-                if !gameState.isUnemployed, let club = gameState.userClub {
-                    managerReadiness(club)
-                }
-
-                // League Standing Snapshot
-                if let userClub = gameState.userClub,
-                   let currentLeague = gameState.currentLeague {
-                    let standings = gameState.currentLeagueStandings
-                    let rank = (standings.firstIndex(where: { $0.clubId == userClub.id }) ?? 0) + 1
-                    let userStanding = standings.first { $0.clubId == userClub.id }
-                    
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(currentLeague.name)
-                                .font(.headline)
-                            Text("Position: \(rank) of \(standings.count)")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 4) {
-                            Text("\(userStanding?.points ?? 0) pts")
-                                .font(.title3)
-                                .fontWeight(.bold)
-                            Text("\(userStanding?.won ?? 0)W \(userStanding?.drawn ?? 0)D \(userStanding?.lost ?? 0)L")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .accessibilityLabel("\(userStanding?.won ?? 0) won, \(userStanding?.drawn ?? 0) drawn, \(userStanding?.lost ?? 0) lost")
-                        }
-                    }
-                    .padding()
-                    .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                }
-                
-                // Inbox — the manager's personal mail, surfaced on Home.
-                Button {
-                    gameState.currentScreen = .mailbox
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "tray.full.fill")
-                            .font(.title2)
-                            .foregroundStyle(Color.brand)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Inbox")
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-                            Text(gameState.unreadMailCount == 0
-                                 ? "No unread messages"
-                                 : "\(gameState.unreadMailCount) unread message\(gameState.unreadMailCount == 1 ? "" : "s")")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if gameState.unreadMailCount > 0 {
-                            Text("\(gameState.unreadMailCount)")
-                                .font(.caption2)
-                                .fontWeight(.bold)
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Color.red)
-                                .clipShape(Capsule())
-                        }
-                        Image(systemName: "chevron.right")
-                            .font(.footnote)
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding()
-                    .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Inbox, \(gameState.unreadMailCount) unread")
-                .accessibilityHint("Opens your manager inbox")
-                
-                // News Headlines (full feed lives in the News tab)
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Latest News")
-                            .font(.headline)
-                        Spacer()
-                        Button("See All") { gameState.currentScreen = .news }
-                            .font(.caption)
-                            .accessibilityHint("Opens the full news feed")
-                    }
-                    
-                    ForEach(gameState.news.prefix(2)) { item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.headline)
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                            Text(item.body)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 4)
-                        Divider()
-                    }
-                }
-                .padding()
-                .background(Color.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            }
-            .padding()
-        }
-        .background(Color.ink)
-    }
-
-    private var primaryTitle: String {
-        if gameState.isEndOfSeason { return "Start New Season" }
-        if isMatchDay { return "Play Match" }
-        if gameState.nextUserFixture == nil { return "Continue to Season End" }
-        return "Continue to Match Day"
-    }
-
-    private var primaryIcon: String {
-        if gameState.isEndOfSeason { return "arrow.triangle.2.circlepath" }
-        if isMatchDay { return "sportscourt.fill" }
-        return "calendar"
-    }
-
-    private var continueSubtitle: String {
-        if gameState.isEndOfSeason {
-            return "Season \(gameState.season.year) complete. Begin the next campaign."
-        }
-        if let fixture = gameState.nextUserFixture,
-           let club = gameState.userClub,
-           let opponentId = fixture.opponentId(for: club.id),
-           let opponent = gameState.club(withId: opponentId) {
-            if isMatchDay {
-                return "Today against \(opponent.name)"
-            }
-            let days = gameState.daysUntilNextUserFixture ?? 0
-            let when = days == 1 ? "tomorrow" : "in \(days) days"
-            return "Matchweek \(fixture.matchWeek) against \(opponent.name), \(when)"
-        }
-        return "No fixtures remaining. Advance to the end of the season."
-    }
-
-    private var isMatchDay: Bool {
-        guard let fixture = gameState.nextUserFixture else { return false }
-        return fixture.date == gameState.season.currentDate
-    }
-
-    private func managerHQ(_ club: Club) -> some View {
-        HStack(spacing: 14) {
-            CrestView(club: club, size: 52)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Manager HQ")
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .textCase(.uppercase)
-                    .foregroundStyle(.white.opacity(0.8))
-                Text(gameState.manager.fullName)
-                    .font(.title3)
-                    .fontWeight(.bold)
-                Text("\(club.name) · \(club.leagueTier.displayName) · Season \(gameState.season.year)")
-                    .font(.caption)
-                    .lineLimit(2)
-                    .foregroundStyle(.white.opacity(0.9))
-            }
-            Spacer(minLength: 0)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.pitchDarkGreen.gradient)
-        .foregroundStyle(.white)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Manager headquarters. \(gameState.manager.fullName), manager of \(club.name), \(club.leagueTier.displayName), season \(gameState.season.year).")
-    }
-
-    private func managerReadiness(_ club: Club) -> some View {
-        let starters = club.startingXIPlayers
-        let available = starters.filter { $0.injury == nil && $0.suspendedMatches == 0 }
-        let averageFitness = starters.isEmpty ? 0 : Int(starters.map(\.matchFitness).reduce(0, +) / Double(starters.count))
-        let averageSharpness = starters.isEmpty ? 0 : Int(starters.map(\.sharpness).reduce(0, +) / Double(starters.count))
-        return VStack(alignment: .leading, spacing: 10) {
-            Text("Match Readiness").font(.headline)
-            HStack(spacing: 10) {
-                ManagerReadinessMetric(value: "\(available.count)/\(starters.count)", label: "Available", tint: available.count == starters.count ? .winGreen : .goldAccent)
-                ManagerReadinessMetric(value: "\(averageFitness)%", label: "Fitness", tint: .defColor)
-                ManagerReadinessMetric(value: "\(averageSharpness)%", label: "Sharpness", tint: .pitchGreen)
-            }
-            Button {
-                gameState.currentScreen = .training
-            } label: {
-                HStack {
-                    Label("Plan this week's training", systemImage: "figure.run")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.footnote).foregroundStyle(.tertiary)
-                }
-                .padding(12)
-                .background(Color.surfaceRaised)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .accessibilityHint("Opens training")
-            Divider()
-            HStack {
-                Label("Board: \(gameState.jobSecurity.status)", systemImage: "building.columns.fill")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Text("\(gameState.jobSecurity.boardConfidence)%")
-                    .font(.subheadline.monospacedDigit())
-            }
-        }
-        .footballCardStyle()
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Match readiness. \(available.count) of \(starters.count) starters available. Average fitness \(averageFitness) percent. Average sharpness \(averageSharpness) percent. Board confidence \(gameState.jobSecurity.boardConfidence) percent, \(gameState.jobSecurity.status).")
-    }
-
-    private var managerOperations: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Manager Operations").font(.headline)
-            HStack(spacing: 10) {
-                managerAction("Squad", icon: "person.3.fill", destination: .squad)
-                managerAction("Tactics", icon: "list.bullet.clipboard.fill", destination: .tactics)
+            Text("Season \(review.season) Review")
+                .font(.headline)
+            HStack(alignment: .firstTextBaseline) {
+                Text(ordinal)
+                    .font(.system(size: 30, weight: .black, design: .rounded))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("of \(review.leagueSize) in the \(review.leagueName)")
+                        .font(.subheadline)
+                    Text("\(review.points) pts • \(review.won)W \(review.drawn)D \(review.lost)L • \(review.goalsFor)-\(review.goalsAgainst)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
-            HStack(spacing: 10) {
-                managerAction("Training", icon: "figure.run", destination: .training)
-                managerAction("Transfers", icon: "arrow.left.arrow.right", destination: .transferHub)
+            if let goal = review.targetGoal, let met = review.targetMet {
+                Label("Board target: \(goal) — \(met ? "achieved" : "missed")",
+                      systemImage: met ? "checkmark.seal.fill" : "xmark.seal.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(met ? Color.winGreen : Color.lossRed)
+            }
+            if let europe = review.europe {
+                Label("Qualified for the \(europe)", systemImage: "star.circle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.goldAccent)
+            }
+            if let cup = review.cupRun {
+                Label(cup, systemImage: "trophy")
+                    .font(.subheadline)
+            }
+            if let scorer = review.topScorer {
+                Label("Top scorer: \(scorer)", systemImage: "soccerball")
+                    .font(.subheadline)
+            }
+            if let best = review.playerOfSeason {
+                Label("Player of the season: \(best)", systemImage: "star.fill")
+                    .font(.subheadline)
             }
         }
-    }
-
-    private func managerAction(_ title: String, icon: String, destination: AppScreen) -> some View {
-        Button {
-            gameState.currentScreen = destination
-        } label: {
-            Label(title, systemImage: icon)
-                .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: 52)
-                .padding(.horizontal, 8)
-                .background(Color.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityHint("Opens \(title.lowercased()) management")
+        .gfCard()
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -1870,235 +988,272 @@ private struct ManagerReadinessMetric: View {
 
 public struct SquadView: View {
     @Environment(GameState.self) private var gameState
-    @State private var selectedStarterId: UUID?
-    @State private var substitutionBanner: String?
-    @State private var isEditingSquad = false
+    @State private var showFullSquad = true
+    @State private var section: SquadSection = .lineup
+
+    enum SquadSection: String, CaseIterable { case lineup = "Lineup", players = "Players", contracts = "Contracts", loans = "Loans" }
 
     private var expiringContracts: [Player] {
         guard let userClub = gameState.userClub else { return [] }
         return userClub.players
-            .filter { ($0.contract?.yearsRemaining ?? 99) <= 1 }
-            .sorted {
-                let left = $0.contract?.yearsRemaining ?? 0
-                let right = $1.contract?.yearsRemaining ?? 0
-                if left == right { return $0.overall > $1.overall }
-                return left < right
-            }
+            .filter { !$0.isOnLoan && ($0.contract?.yearsRemaining ?? 99) <= 1 }
+            .sorted { $0.overall > $1.overall }
     }
 
     public var body: some View {
         ScrollView {
-            if let userClub = gameState.userClub {
-                VStack(spacing: 16) {
-                    // Edit Squad toggle: off = tap opens player profile; on = tap
-                    // highlights players for substitution.
-                    HStack {
-                        Text(isEditingSquad ? "Tap a starter, then a substitute to swap." : "Tap any player for their profile.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button(isEditingSquad ? "Done" : "Edit Squad") {
-                            isEditingSquad.toggle()
-                            selectedStarterId = nil
-                            substitutionBanner = nil
-                        }
-                        .accessibilityLabel(isEditingSquad ? "Finish editing squad" : "Edit squad")
-                        .accessibilityHint("Toggles the substitution highlighting mode")
-                    }
-                    .padding(.horizontal)
-
-                    if !expiringContracts.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label("Contracts Expiring", systemImage: "doc.text.fill")
-                                .font(.headline)
-
-                            Text("\(expiringContracts.count) \(expiringContracts.count == 1 ? "player is" : "players are") entering the final year of their deal. Open a profile to offer a renewal.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            ForEach(expiringContracts.prefix(4)) { player in
-                                NavigationLink(destination: PlayerDetailView(playerId: player.id)) {
-                                    HStack {
-                                        Text(player.fullName)
-                                            .font(.subheadline)
-                                        Spacer()
-                                        Text("\(player.contract?.yearsRemaining ?? 0) \(player.contract?.yearsRemaining == 1 ? "year" : "years")")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .padding(.vertical, 2)
-                                }
-                                .buttonStyle(.plain)
-                            }
-
-                            if expiringContracts.count > 4 {
-                                Text("and \(expiringContracts.count - 4) more")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding()
-                        .background(Color.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .padding(.horizontal)
-                    }
-
-                    FormationPitchView(
-                        formation: userClub.tactics.formation,
-                        players: userClub.startingXIPlayers,
-                        selectedPlayerId: selectedStarterId,
-                        onSelect: { player in
-                            if !isEditingSquad {
-                                gameState.currentScreen = .playerDetail(player.id)
-                                return
-                            }
-                            if let selected = selectedStarterId, selected != player.id {
-                                selectedStarterId = nil
-                                substitutionBanner = nil
-                            } else {
-                                selectedStarterId = (selectedStarterId == player.id) ? nil : player.id
-                                if let id = selectedStarterId,
-                                   let p = userClub.players.first(where: { $0.id == id }) {
-                                    substitutionBanner = "Selected \(p.displayName) — tap a substitute below to swap."
-                                } else {
-                                    substitutionBanner = nil
-                                }
-                            }
-                        }
-                    )
-                    .padding(.horizontal)
-
-                    if let banner = substitutionBanner {
-                        Text(banner)
-                            .font(.footnote)
+            if let club = gameState.userClub {
+                VStack(spacing: 12) {
+                    GFTabs(selection: $section, compact: true)
+                    switch section {
+                    case .lineup:
+                        Text("XI \(String(format: "%.1f", club.startingXIAverageOverall)) · Squad \(String(format: "%.1f", club.squadAverageOverall)) · Injured \(club.injuredPlayers.count)")
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal)
+                        lineupBar(club)
+                        LineupEditorView(onProfile: { gameState.currentScreen = .playerDetail($0) })
+                    case .players:
+                        fullSquad(club)
+                    case .contracts:
+                        if expiringContracts.isEmpty {
+                            Text("No contracts are running out.")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            contractsCard
+                        }
+                    case .loans:
+                        outOnLoanCard
                     }
-
-                    squadSection(
-                        title: "Substitutes (\(userClub.substitutePlayers.count))",
-                        players: userClub.substitutePlayers,
-                        clubName: userClub.name,
-                        isBench: true
-                    )
-
-                    squadSection(
-                        title: "Reserves (\(userClub.reservePlayers.count))",
-                        players: userClub.reservePlayers,
-                        clubName: userClub.name,
-                        isBench: false
-                    )
                 }
-                .padding(.vertical)
+                .padding(.horizontal, 14)
+                .padding(.top, 6)
             } else {
                 ContentUnavailableView("No Club", systemImage: "person.3", description: Text("Take charge of a club to view your squad."))
             }
         }
-        .background(Color.ink)
+        .stadiumBackground()
     }
 
-    @ViewBuilder
-    private func squadSection(title: String, players: [Player], clubName: String, isBench: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-                .padding(.horizontal)
+    // MARK: Header
 
-            ForEach(players) { player in
-                VStack(spacing: 0) {
-                    if isEditingSquad && isBench && selectedStarterId != nil {
-                        Button {
-                            if let starterId = selectedStarterId {
-                                gameState.swapIntoStartingXI(playerId: player.id, replacing: starterId)
-                                selectedStarterId = nil
-                                substitutionBanner = nil
-                            }
-                        } label: {
-                            HStack {
-                                PlayerRowView(player: player)
-                                Spacer(minLength: 4)
-                                Image(systemName: "arrow.up.arrow.down.circle.fill")
-                                    .foregroundStyle(Color.brand)
-                                    .font(.title3)
-                            }
-                            .padding(.vertical, 6)
-                            .padding(.horizontal)
+    private func header(_ club: Club) -> some View {
+        let text = Color.readable(on: club.primaryColor)
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                CrestView(club: club, size: 48)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(club.name).font(.title3.weight(.heavy))
+                    Text("\(club.players.count) players • \(club.leagueTier.displayName)")
+                        .font(.caption)
+                        .opacity(0.85)
+                }
+                Spacer()
+            }
+            HStack(spacing: 10) {
+                metric("Starting XI", String(format: "%.1f", club.startingXIAverageOverall), text)
+                metric("Squad", String(format: "%.1f", club.squadAverageOverall), text)
+                metric("Injured", "\(club.injuredPlayers.count)", text)
+            }
+        }
+        .foregroundStyle(text)
+        .padding(18)
+        .background(ClubGradient(club: club))
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    /// "TACTICS   AUTO   4-3-3 ▾" above the pitch.
+    private func lineupBar(_ club: Club) -> some View {
+        HStack(spacing: 10) {
+            Button { gameState.currentScreen = .tactics } label: {
+                Text("TACTICS").font(.gfLabel(13))
+                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    .overlay(Capsule().stroke(Color.white, lineWidth: 1.5))
+            }
+            .accessibilityHint("Opens tactics and roles")
+            Spacer()
+            Button { gameState.autoPickUserLineup() } label: {
+                Text("AUTO").font(.gfLabel(13))
+                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    .overlay(Capsule().stroke(Color.white, lineWidth: 1.5))
+            }
+            .accessibilityLabel("Auto pick best eleven")
+            Spacer()
+            Menu {
+                ForEach(FormationPreset.allCases) { formation in
+                    Button(formation.rawValue) {
+                        if let idx = gameState.clubs.firstIndex(where: { $0.isUserClub }) {
+                            gameState.clubs[idx].tactics.formation = formation
+                            gameState.clubs[idx].autoPickStartingXI()
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Bring on \(player.fullName)")
-                        .accessibilityHint("Substitutes this player into the starting eleven")
-                    } else if isEditingSquad && isBench {
-                        // Highlight substitutes for swap while editing.
-                        PlayerRowView(player: player)
-                            .padding(.vertical, 4)
-                            .padding(.horizontal)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.brand.opacity(0.4), lineWidth: 1)
-                                    .padding(.horizontal, 6)
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture { gameState.currentScreen = .playerDetail(player.id) }
-                            .accessiblePlayerCard(player: player, clubName: clubName)
-                    } else {
-                        NavigationLink(destination: PlayerDetailView(playerId: player.id)) {
-                            PlayerRowView(player: player)
-                                .padding(.vertical, 4)
-                                .padding(.horizontal)
-                        }
-                        .buttonStyle(.plain)
-                        .accessiblePlayerCard(player: player, clubName: clubName)
                     }
-                    Divider().padding(.leading)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(club.tactics.formation.rawValue).font(.gfLabel(13))
+                    Image(systemName: "arrowtriangle.down.fill").font(.system(size: 7))
+                }
+                .foregroundStyle(Color.gfNight)
+                .padding(.horizontal, 12).padding(.vertical, 5)
+                .background(Capsule().fill(Color.white))
+            }
+            .accessibilityLabel("Formation \(club.tactics.formation.rawValue). Change formation")
+        }
+        .foregroundStyle(.white)
+        .buttonStyle(.plain)
+    }
+
+    private func metric(_ title: String, _ value: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value).font(.title3.weight(.heavy).monospacedDigit())
+            Text(title).font(.caption2.weight(.semibold)).opacity(0.85)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.black.opacity(0.15), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    // MARK: Full squad
+
+    private func fullSquad(_ club: Club) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.snappy) { showFullSquad.toggle() }
+            } label: {
+                HStack {
+                    GFSectionHeader(title: "Full Squad", icon: "person.3.fill")
+                    Image(systemName: "chevron.down")
+                        .rotationEffect(.degrees(showFullSquad ? 0 : -90))
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if showFullSquad {
+                ForEach(PositionCategory.allCases) { category in
+                    let group = club.players
+                        .filter { $0.primaryPosition.category == category }
+                        .sorted { $0.overall > $1.overall }
+                    if !group.isEmpty {
+                        Text(category.displayName.uppercased() + "S")
+                            .font(.caption2.weight(.heavy))
+                            .tracking(1)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                        ForEach(group) { player in
+                            NavigationLink(destination: PlayerDetailView(playerId: player.id)) {
+                                PlayerRowView(player: player)
+                                    .padding(.vertical, 4)
+                            }
+                            .buttonStyle(.plain)
+                            .accessiblePlayerCard(player: player, clubName: club.name)
+                        }
+                    }
                 }
             }
         }
-        .padding(.vertical, 4)
-        .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .padding(.horizontal)
+        .gfCard()
+    }
+
+    // MARK: Contracts & loans
+
+    private var contractsCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            GFSectionHeader(title: "Contracts Expiring", icon: "doc.text.fill")
+            Text("\(expiringContracts.count) \(expiringContracts.count == 1 ? "player is" : "players are") in the final year. Open a profile to offer a renewal.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(expiringContracts.prefix(6)) { player in
+                NavigationLink(destination: PlayerDetailView(playerId: player.id)) {
+                    HStack {
+                        RatingBadge(rating: player.overall, size: 28)
+                        Text(player.fullName).font(.subheadline)
+                        Spacer()
+                        Text(player.contract?.yearsRemaining == 0 ? "Expiring" : "1 year")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .gfCard()
+    }
+
+    @ViewBuilder
+    private var outOnLoanCard: some View {
+        let outOnLoan = gameState.userPlayersOutOnLoan
+        if !outOnLoan.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                GFSectionHeader(title: "Out on Loan", icon: "arrow.triangle.swap")
+                ForEach(outOnLoan, id: \.player.id) { entry in
+                    NavigationLink(destination: PlayerDetailView(playerId: entry.player.id)) {
+                        HStack {
+                            RatingBadge(rating: entry.player.overall, size: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.player.fullName).font(.subheadline)
+                                Text("\(entry.club.name) • \(entry.player.seasonStats.appearances) apps, \(entry.player.seasonStats.goals) goals")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .gfCard()
+        }
     }
 }
 
+// MARK: - Player Row
+
 public struct PlayerRowView: View {
     public let player: Player
+    @AppStorage("gfShowMatchRating") private var showMatchRating = false
     
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                FaceView(player: player, size: 40)
-                
-                Text(player.primaryPosition.abbreviation)
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .frame(width: 38, height: 26)
-                    .background(player.primaryPosition.category.accentColor.opacity(0.2))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                
-                VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 12) {
+            FaceView(player: player, size: 42)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
                     Text(player.fullName)
-                        .font(.body)
-                        .fontWeight(.medium)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    if player.isOnLoan { GFPill(text: "LOAN", color: .secondary) }
+                    if player.transferStatus == .transferListed { GFPill(text: "LISTED", color: .orange) }
+                }
+                HStack(spacing: 6) {
+                    Text(player.primaryPosition.abbreviation)
+                        .font(.caption2.weight(.heavy))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(player.primaryPosition.category.accentColor.opacity(0.22), in: Capsule())
                     Text("Age \(player.age) • \(player.statusBadgeText)")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(player.statusSeverity == 2 ? Color.lossRed : (player.statusSeverity == 1 ? Color.bronzeAccent : .secondary))
+                        .lineLimit(1)
                 }
-                
-                Spacer()
-                
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("\(player.overall)")
-                        .font(.headline)
-                        .fontWeight(.bold)
-                    Text(player.formattedValue)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                FaceStatStripView(player: player)
             }
-            
-            FaceStatStripView(player: player)
-                .padding(.leading, 52)
+            Spacer(minLength: 4)
+            VStack(alignment: .trailing, spacing: 4) {
+                RatingBadge(rating: player.overall, size: 36)
+                if showMatchRating {
+                    let m = player.matchRating
+                    Text("Match \(m)")
+                        .font(.caption2.weight(.heavy).monospacedDigit())
+                        .foregroundStyle(m > player.overall ? Color.winGreen : m < player.overall ? Color.lossRed : .secondary)
+                        .accessibilityLabel("Match rating \(m)")
+                }
+                Text(player.formattedValue)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }
@@ -2111,140 +1266,194 @@ public struct TacticsView: View {
     /// Applies a mutation to the user's club tactics and writes the club back
     /// into the world state.
     private func updateTactics(_ mutate: (inout Tactics) -> Void) {
-        guard let userClub = gameState.userClub else { return }
-        var updated = userClub
-        mutate(&updated.tactics)
-        gameState.clubs.removeAll { $0.id == updated.id }
-        gameState.clubs.append(updated)
+        // Update in place: removing and re-appending the club reordered the
+        // whole world's club list on every tactical tweak.
+        guard let idx = gameState.clubs.firstIndex(where: { $0.isUserClub }) else { return }
+        var tactics = gameState.clubs[idx].tactics
+        mutate(&tactics)
+        gameState.clubs[idx].tactics = tactics
     }
     
+    @State private var pane: Pane = .tactics
+    enum Pane: String, CaseIterable { case tactics = "Tactics", roles = "Roles" }
+
     public var body: some View {
-        Form {
+        ScrollView {
             if let userClub = gameState.userClub {
-                Section(header: Text("Formation")) {
-                    Picker("Formation Preset", selection: Binding(
-                        get: { userClub.tactics.formation },
-                        set: { newPreset in
-                            var updated = userClub
-                            updated.tactics.formation = newPreset
-                            updated.autoPickStartingXI()
-                            gameState.clubs.removeAll { $0.id == updated.id }
-                            gameState.clubs.append(updated)
-                        }
-                    )) {
-                        ForEach(FormationPreset.allCases) { preset in
-                            Text(preset.displayName).tag(preset)
-                        }
-                    }
-                    .onChange(of: userClub.tactics.formation) { _, _ in Haptics.selection() }
-
-                    Text(userClub.tactics.formation.styleNote)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    let starters = userClub.startingXIPlayers
-                    if starters.count >= 11 {
-                        FormationPitchView(
-                            formation: userClub.tactics.formation,
-                            players: starters,
-                            selectedPlayerId: nil,
-                            tapHint: "Shows where this player lines up",
-                            onSelect: { _ in }
-                        )
-                        .frame(maxWidth: 340)
-                        .frame(maxWidth: .infinity)
-                        .listRowBackground(Color.clear)
+                VStack(spacing: 16) {
+                    GFTabs(selection: $pane)
+                    if pane == .tactics {
+                        tacticsCard(userClub)
+                        Button("Auto-Pick Best XI") { gameState.autoPickUserLineup() }
+                            .buttonStyle(.gfPrimary)
+                            .padding(.horizontal, 40)
+                            .accessibilityHint("Selects the highest rated available players for each position")
+                    } else {
+                        roleCard("Captain", info: "Leads the side. Leadership counts.", keyPath: \.captain, club: userClub) { $0.attributes.leadership }
+                        roleCard("Penalty Taker", info: "Takes every spot kick. Penalties and composure count.", keyPath: \.penaltyTaker, club: userClub) { $0.attributes.penalties }
+                        roleCard("Free Kick Taker", info: "Shoots or crosses from free kicks.", keyPath: \.freeKickTaker, club: userClub) { $0.attributes.freeKicks }
+                        roleCard("Corner Taker", info: "Delivers corners. Crossing counts.", keyPath: \.cornerTaker, club: userClub) { $0.attributes.crossing }
+                        Text("Chosen from the starting XI. If a taker is left out or injured, the best remaining player takes over.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
                 }
+                .padding()
+            }
+        }
+    }
 
-                Section(header: Text("Tactical Instructions")) {
-                    Picker("Mentality", selection: Binding(
-                        get: { userClub.tactics.mentality },
-                        set: { newM in updateTactics { $0.mentality = newM } }
-                    )) {
-                        ForEach(Mentality.allCases) { m in
-                            Text(m.displayName).tag(m)
-                        }
-                    }
-                    
-                    // Pressing intensity as a slider (Low / Medium / High)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Pressing: \(userClub.tactics.pressing.displayName)")
-                            .font(.subheadline)
-                        Slider(value: Binding(
-                            get: { Double(userClub.tactics.pressing.sliderIndex) },
-                            set: { newValue in
-                                guard let p = PressingIntensity.fromSlider(Int(newValue.rounded())) else { return }
-                                updateTactics { $0.pressing = p }
-                            }
-                        ), in: 0...2, step: 1)
-                        .accessibilityLabel("Pressing intensity")
-                        .accessibilityValue(userClub.tactics.pressing.displayName)
-                        .accessibilityHint("Slide to adjust how aggressively your team presses")
-                    }
-                    
-                    // Passing style as a slider (Short / Mixed / Long / Direct)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Passing: \(userClub.tactics.passingStyle.displayName)")
-                            .font(.subheadline)
-                        Slider(value: Binding(
-                            get: { Double(userClub.tactics.passingStyle.sliderIndex) },
-                            set: { newValue in
-                                guard let p = PassingStyle.fromSlider(Int(newValue.rounded())) else { return }
-                                updateTactics { $0.passingStyle = p }
-                            }
-                        ), in: 0...3, step: 1)
-                        .accessibilityLabel("Passing style")
-                        .accessibilityValue(userClub.tactics.passingStyle.displayName)
-                        .accessibilityHint("Slide to adjust your team's passing approach")
-                    }
-                    
-                    // Width as a slider (Narrow / Normal / Wide)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Width: \(userClub.tactics.width.displayName)")
-                            .font(.subheadline)
-                        Slider(value: Binding(
-                            get: { Double(userClub.tactics.width.sliderIndex) },
-                            set: { newValue in
-                                guard let w = Width.fromSlider(Int(newValue.rounded())) else { return }
-                                updateTactics { $0.width = w }
-                            }
-                        ), in: 0...2, step: 1)
-                        .accessibilityLabel("Team width")
-                        .accessibilityValue(userClub.tactics.width.displayName)
-                        .accessibilityHint("Slide to adjust how wide your team plays")
-                    }
-                    
-                    // Tempo as a slider (Slow / Normal / Fast)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Tempo: \(userClub.tactics.tempo.displayName)")
-                            .font(.subheadline)
-                        Slider(value: Binding(
-                            get: { Double(userClub.tactics.tempo.sliderIndex) },
-                            set: { newValue in
-                                guard let t = Tempo.fromSlider(Int(newValue.rounded())) else { return }
-                                updateTactics { $0.tempo = t }
-                            }
-                        ), in: 0...2, step: 1)
-                        .accessibilityLabel("Tempo")
-                        .accessibilityValue(userClub.tactics.tempo.displayName)
-                        .accessibilityHint("Slide to adjust the pace of your play")
-                    }
+    private func tacticsCard(_ club: Club) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            cycler("Formation", value: club.tactics.formation.rawValue, options: FormationPreset.allCases,
+                   current: club.tactics.formation) { preset in
+                guard let idx = gameState.clubs.firstIndex(where: { $0.isUserClub }) else { return }
+                gameState.clubs[idx].tactics.formation = preset
+                gameState.clubs[idx].autoPickStartingXI()
+            }
+            cycler("Mentality", value: club.tactics.mentality.displayName, options: Mentality.allCases,
+                   current: club.tactics.mentality) { m in updateTactics { $0.mentality = m } }
+            chipGrid("Pressing", options: PressingIntensity.allCases, selected: club.tactics.pressing,
+                     name: { $0.displayName }) { p in updateTactics { $0.pressing = p } }
+            chipGrid("Passing", options: PassingStyle.allCases, selected: club.tactics.passingStyle,
+                     name: { $0.displayName }) { p in updateTactics { $0.passingStyle = p } }
+            chipGrid("Width", options: Width.allCases, selected: club.tactics.width,
+                     name: { $0.displayName }) { w in updateTactics { $0.width = w } }
+            chipGrid("Tempo", options: Tempo.allCases, selected: club.tactics.tempo,
+                     name: { $0.displayName }) { t in updateTactics { $0.tempo = t } }
+            chipGrid("Subs Strategy", options: MatchSettings.AutoSubTiming.allCases, selected: gameState.matchSettings.autoSubTiming,
+                     name: { $0 == .off ? "Never" : $0 == .halfTime ? "Half-time" : $0 == .secondHalf ? "Late" : "Early" }) { t in
+                gameState.matchSettings.autoSubTiming = t
+            }
+            chipGrid("Lineup Strategy", options: [true, false], selected: gameState.matchSettings.assistantRotatesTiredPlayers,
+                     name: { $0 ? "Rotate tired" : "Manual" }) { v in
+                gameState.matchSettings.assistantRotatesTiredPlayers = v
+            }
+        }
+        .gfCard(padding: 18)
+    }
+
+    /// "‹ BALANCED ›": arrows step through the options.
+    private func cycler<T: Hashable>(_ title: String, value: String, options: [T], current: T, set: @escaping (T) -> Void) -> some View {
+        let index = options.firstIndex(of: current) ?? 0
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(title.uppercased()).font(.gfLabel(13)).foregroundStyle(.secondary)
+            HStack {
+                Button { set(options[(index - 1 + options.count) % options.count]) } label: {
+                    Image(systemName: "chevron.left").font(.headline.weight(.bold)).frame(width: 36, height: 32)
                 }
-                
-                Section {
-                    Button(action: {
-                        var updated = userClub
-                        updated.autoPickStartingXI()
-                        gameState.clubs.removeAll { $0.id == updated.id }
-                        gameState.clubs.append(updated)
-                    }) {
-                        Text("Auto-Pick Optimal XI")
+                .accessibilityHidden(true)
+                Text(value.uppercased()).font(.gfDisplay(19)).frame(maxWidth: .infinity)
+                Button { set(options[(index + 1) % options.count]) } label: {
+                    Image(systemName: "chevron.right").font(.headline.weight(.bold)).frame(width: 36, height: 32)
+                }
+                .accessibilityHidden(true)
+            }
+            .foregroundStyle(.white)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(title)
+            .accessibilityValue(value)
+            .accessibilityAdjustableAction { dir in
+                set(options[(index + (dir == .increment ? 1 : options.count - 1)) % options.count])
+            }
+        }
+    }
+
+    /// A caption over capsule buttons, the chosen one filled white.
+    private func chipGrid<T: Hashable>(_ title: String, options: [T], selected: T, name: @escaping (T) -> String,
+                                       set: @escaping (T) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased()).font(.gfLabel(13)).foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 8)], spacing: 8) {
+                ForEach(options, id: \.self) { option in
+                    let isOn = option == selected
+                    Button { set(option) } label: {
+                        Text(name(option).uppercased())
+                            .font(.gfLabel(13))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                             .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .foregroundStyle(isOn ? Color.gfNight : .white)
+                            .background(Capsule().fill(isOn ? Color.white : Color.clear))
+                            .overlay(Capsule().stroke(Color.white.opacity(isOn ? 0 : 0.7), lineWidth: 1.5))
                     }
-                    .accessibilityLabel("Auto pick optimal eleven")
-                    .accessibilityHint("Selects the highest rated available players for each position")
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(title): \(name(option))")
+                    .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
                 }
+            }
+        }
+    }
+
+    /// "CAPTAIN ⓘ  [CAM  B. FERNANDES  93]  CHANGE".
+    private func roleCard(_ title: String, info: String, keyPath: WritableKeyPath<Tactics, UUID?>, club: Club,
+                          score: @escaping (Player) -> Int) -> some View {
+        let options = club.startingXIPlayers.sorted { score($0) > score($1) }
+        let chosen = club.tactics[keyPath: keyPath].flatMap { id in club.startingXIPlayers.first { $0.id == id } }
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(title.uppercased()).font(.gfDisplay(19))
+            Text(info).font(.caption).foregroundStyle(.secondary)
+            if let p = chosen {
+                HStack(spacing: 8) {
+                    Text(p.primaryPosition.abbreviation)
+                        .font(.gfLabel(12)).foregroundStyle(.black)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(p.primaryPosition.category.accentColor))
+                    Text(p.displayName.uppercased()).font(.gfLabel(15)).lineLimit(1)
+                    Spacer()
+                    Text("\(score(p))")
+                        .font(.gfLabel(13).monospacedDigit()).foregroundStyle(Color.gfNight)
+                        .padding(.horizontal, 9).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.white))
+                }
+                .padding(10)
+                .background(Capsule().fill(Color.white.opacity(0.08)))
+                .accessibilityElement(children: .combine)
+            } else {
+                Text("Automatic: the best player in the side").font(.subheadline).foregroundStyle(.secondary)
+            }
+            HStack {
+                Spacer()
+                Menu {
+                    Button("Automatic") {
+                        if let idx = gameState.clubs.firstIndex(where: { $0.isUserClub }) { gameState.clubs[idx].tactics[keyPath: keyPath] = nil }
+                    }
+                    ForEach(options) { player in
+                        Button("\(player.displayName) (\(score(player)))") {
+                            if let idx = gameState.clubs.firstIndex(where: { $0.isUserClub }) { gameState.clubs[idx].tactics[keyPath: keyPath] = player.id }
+                        }
+                    }
+                } label: {
+                    Text(chosen == nil ? "ADD" : "CHANGE")
+                        .font(.gfLabel(13))
+                        .padding(.horizontal, 16).padding(.vertical, 6)
+                        .overlay(Capsule().stroke(Color.white, lineWidth: 1.5))
+                }
+                .accessibilityLabel("Choose \(title.lowercased())")
+            }
+        }
+        .gfCard()
+    }
+}
+
+extension TacticsView {
+    /// A picker over the starting XI for a captain or set-piece role, best
+    /// suited first, with the relevant attribute shown.
+    fileprivate func setPiecePicker(_ title: String, keyPath: WritableKeyPath<Tactics, UUID?>, club: Club,
+                                    score: @escaping (Player) -> Int) -> some View {
+        let options = club.startingXIPlayers.sorted { score($0) > score($1) }
+        return Picker(title, selection: Binding<UUID?>(
+            get: { club.tactics[keyPath: keyPath] },
+            set: { newValue in
+                if let idx = gameState.clubs.firstIndex(where: { $0.isUserClub }) {
+                    gameState.clubs[idx].tactics[keyPath: keyPath] = newValue
+                }
+            }
+        )) {
+            ForEach(options) { player in
+                Text("\(player.displayName) (\(score(player)))").tag(UUID?.some(player.id))
             }
         }
     }
@@ -2285,7 +1494,7 @@ public struct TrainingView: View {
                             HStack(spacing: 12) {
                                 Image(systemName: focus.icon)
                                     .frame(width: 28)
-                                    .foregroundStyle(Color.brand)
+                                    .foregroundStyle(Color.accentColor)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(focus.title).fontWeight(.semibold).foregroundStyle(.primary)
                                     Text(focus.detail).font(.caption).foregroundStyle(.secondary)
@@ -2319,7 +1528,7 @@ public struct TrainingView: View {
                                 }
                                 Spacer()
                                 if gameState.teamTalk == style {
-                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.brand)
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor)
                                 }
                             }
                         }
@@ -2368,50 +1577,321 @@ public struct TrainingView: View {
 
 public struct StandingsView: View {
     @Environment(GameState.self) private var gameState
+    /// The league being browsed; nil means "the user's own league".
+    @State private var selectedLeagueId: UUID?
+    /// Table, domestic cup or player leaderboards.
+    @State private var view: LeagueView = .table
+    @State private var leaderboard: Leaderboard = .goals
+
+    enum LeagueView: String, CaseIterable { case table = "Table", cup = "Cup", stats = "Stats" }
+    enum Leaderboard: String, CaseIterable { case goals = "Goals", assists = "Assists", ratings = "Ratings" }
+
+    private var displayedLeague: League? {
+        if let id = selectedLeagueId, let league = gameState.leagues.first(where: { $0.id == id }) {
+            return league
+        }
+        return gameState.currentLeague ?? gameState.leagues.first
+    }
+
+    private struct LeagueGroup: Identifiable {
+        let country: LeagueCountry
+        let leagues: [League]
+        var id: String { country.rawValue }
+    }
+
+    /// Leagues grouped by country, top divisions first, for the picker.
+    private var leagueMenu: [LeagueGroup] {
+        let grouped = Dictionary(grouping: gameState.leagues, by: { $0.tier.country })
+        return grouped
+            .map { LeagueGroup(country: $0.key, leagues: $0.value.sorted { $0.tier.rawValue < $1.tier.rawValue }) }
+            .sorted { lhs, rhs in
+                if lhs.country == .england { return true }
+                if rhs.country == .england { return false }
+                return lhs.country.displayName < rhs.country.displayName
+            }
+    }
     
     public var body: some View {
         List {
-            Section(header: standingsHeader) {
-                ForEach(Array(gameState.currentLeagueStandings.enumerated()), id: \.element.id) { index, standing in
-                    let rank = index + 1
-                    let club = gameState.club(withId: standing.clubId)
-                    HStack {
-                        Text("\(rank)")
-                            .font(.caption)
-                            .frame(width: 24, alignment: .leading)
-                        
-                        Text(club?.name ?? "Club")
-                            .font(.subheadline)
-                            .fontWeight(club?.isUserClub == true ? .bold : .regular)
-                        
-                        Spacer()
-                        
-                        Text("\(standing.played)")
-                            .font(.caption)
-                            .frame(width: 28, alignment: .trailing)
-                        Text("\(standing.goalDifference)")
-                            .font(.caption)
-                            .frame(width: 32, alignment: .trailing)
-                        Text("\(standing.points)")
-                            .font(.subheadline)
-                            .fontWeight(.bold)
-                            .frame(width: 36, alignment: .trailing)
+            if let league = displayedLeague {
+                let standings = gameState.standings(for: league)
+                let existingTiers = Set(gameState.leagues.map { $0.tier })
+                let hasHigher = league.tier.higherTier.map { existingTiers.contains($0) } ?? false
+                let hasLower = league.tier.lowerTier.map { existingTiers.contains($0) } ?? false
+
+                Section {
+                    leaguePicker(current: league)
+                    let hasCup = gameState.domesticCups.contains(where: { $0.country == league.tier.country })
+                    GFTabs(selection: $view, options: LeagueView.allCases.filter { hasCup || $0 != .cup }.map { ($0, $0.rawValue) })
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                }
+
+                if view == .cup, let cup = gameState.domesticCups.first(where: { $0.country == league.tier.country }) {
+                    cupSections(cup)
+                } else if view == .stats {
+                    leaderboardSections(league)
+                } else {
+                Section(header: standingsHeader) {
+                    ForEach(Array(standings.enumerated()), id: \.element.id) { index, standing in
+                        let rank = index + 1
+                        let zone = league.tier.zone(forPosition: rank, clubCount: standings.count, hasHigherTier: hasHigher, hasLowerTier: hasLower)
+                        standingRow(rank: rank, standing: standing, zone: zone)
                     }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel(AccessibilityFormatter.standingRow(rank: rank, clubName: club?.name ?? "Club", standing: standing))
+                }
+
+                Section {
+                    zoneLegend(for: league, clubCount: standings.count, hasHigher: hasHigher, hasLower: hasLower)
+                }
+                }
+            } else {
+                ContentUnavailableView("No League Data", systemImage: "trophy")
+            }
+        }
+    }
+
+    /// The division's top scorers, assisters and best-rated players.
+    @ViewBuilder
+    private func leaderboardSections(_ league: League) -> some View {
+        Section {
+            GFTabs(selection: $leaderboard, compact: true)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+        }
+        let clubs = league.clubIds.compactMap { gameState.club(withId: $0) }
+        let entries: [(player: Player, club: Club, value: Double)] = clubs.flatMap { club in
+            club.players.compactMap { p -> (player: Player, club: Club, value: Double)? in
+                let stats = p.seasonStats
+                switch leaderboard {
+                case .goals: return stats.goals > 0 ? (p, club, Double(stats.goals)) : nil
+                case .assists: return stats.assists > 0 ? (p, club, Double(stats.assists)) : nil
+                case .ratings:
+                    let needed = max(3, gameState.season.currentWeek / 3)
+                    return stats.appearances >= needed && stats.averageRating > 0 ? (p, club, stats.averageRating) : nil
+                }
+            }
+        }
+        .sorted { $0.value > $1.value }
+        Section(header: HStack { Text("Name"); Spacer(); Text(leaderboard.rawValue) }) {
+            if entries.isEmpty {
+                Text("No one yet. The leaderboards fill in as matches are played.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(Array(entries.prefix(25).enumerated()), id: \.element.player.id) { index, entry in
+                Button {
+                    gameState.currentScreen = .playerDetail(entry.player.id)
+                } label: {
+                    HStack(spacing: 10) {
+                        Text("\(index + 1)")
+                            .font(.caption.weight(.bold).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 22)
+                        CrestView(club: entry.club, size: 20)
+                        Text("\(entry.player.displayName.uppercased()) (\(entry.club.shortName))")
+                            .font(.subheadline.weight(entry.club.isUserClub ? .heavy : .regular))
+                            .lineLimit(1)
+                        Spacer()
+                        Text(leaderboard == .ratings ? String(format: "%.2f", entry.value) : "\(Int(entry.value))")
+                            .font(.gfLabel(13).monospacedDigit())
+                            .foregroundStyle(Color.gfNight)
+                            .padding(.horizontal, 9).padding(.vertical, 3)
+                            .background(Capsule().fill(leaderboard == .ratings && entry.value >= 7.5 ? Color.gfMint : Color.white))
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+
+    /// One section per round drawn so far, latest round first.
+    @ViewBuilder
+    private func cupSections(_ cup: DomesticCupState) -> some View {
+        if let championId = cup.championClubId, let champion = gameState.club(withId: championId) {
+            Section {
+                HStack(spacing: 10) {
+                    Image(systemName: "trophy.fill").foregroundStyle(Color.goldAccent)
+                    CrestView(club: champion, size: 26)
+                    Text("\(champion.name) — \(cup.name) winners")
+                        .font(.headline)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        ForEach(Array(Array(cup.rounds.prefix(cup.currentRoundIndex + 1).enumerated()).reversed()), id: \.offset) { _, roundName in
+            let ties = gameState.season.fixtures.filter { $0.competition == cup.name && $0.cupRound == roundName }
+            Section(header: Text("\(cup.name) • \(roundName)")) {
+                ForEach(ties) { tie in
+                    cupTieRow(tie)
                 }
             }
         }
     }
+
+    private func cupTieRow(_ tie: Fixture) -> some View {
+        let home = gameState.club(withId: tie.homeClubId)
+        let away = gameState.club(withId: tie.awayClubId)
+        let involvesUser = gameState.userClubId.map { tie.involves(clubId: $0) } ?? false
+        let winner = tie.winnerClubId
+        let score = tie.result.map { "\($0.homeGoals) - \($0.awayGoals)" } ?? "v"
+        return HStack(spacing: 6) {
+            Text(home?.name ?? "Club")
+                .fontWeight(winner == tie.homeClubId ? .bold : .regular)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            Text(score)
+                .font(.subheadline.monospacedDigit().weight(.semibold))
+                .frame(width: 52)
+            Text(away?.name ?? "Club")
+                .fontWeight(winner == tie.awayClubId ? .bold : .regular)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.subheadline)
+        .listRowBackground(involvesUser ? Color.accentColor.opacity(0.12) : nil)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(tie.isPlayed
+            ? "\(home?.name ?? "Club") \(tie.result?.homeGoals ?? 0), \(away?.name ?? "Club") \(tie.result?.awayGoals ?? 0). \(winner.flatMap { gameState.club(withId: $0)?.name } ?? "") go through."
+            : "\(home?.name ?? "Club") versus \(away?.name ?? "Club"), to be played.")
+    }
+
+    private func leaguePicker(current: League) -> some View {
+        Menu {
+            Button {
+                selectedLeagueId = nil
+            } label: {
+                Label("My League", systemImage: "star.fill")
+            }
+            ForEach(leagueMenu) { group in
+                Section(group.country.displayName) {
+                    ForEach(group.leagues) { league in
+                        Button(league.name) { selectedLeagueId = league.id }
+                    }
+                }
+            }
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(current.name)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text("\(current.tier.country.displayName) • Matchweek \(min(gameState.season.currentWeek, gameState.season.totalMatchWeeks)) • \(gameState.season.year)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityLabel("League: \(current.name). Double tap to choose another league.")
+    }
+
+    private func standingRow(rank: Int, standing: LeagueStanding, zone: TableZone) -> some View {
+        let club = gameState.club(withId: standing.clubId)
+        let isUser = club?.isUserClub == true
+        return HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(zoneColor(zone))
+                .frame(width: 4, height: 30)
+            Text("\(rank)")
+                .font(.caption.monospacedDigit())
+                .frame(width: 22, alignment: .leading)
+            if let club {
+                CrestView(club: club, size: 22)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(club?.name ?? "Club")
+                    .font(.subheadline)
+                    .fontWeight(isUser ? .bold : .regular)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                formGuide(standing.form)
+            }
+            Spacer(minLength: 4)
+            Text("\(standing.played)")
+                .font(.caption.monospacedDigit())
+                .frame(width: 24, alignment: .trailing)
+            Text(standing.goalDifference > 0 ? "+\(standing.goalDifference)" : "\(standing.goalDifference)")
+                .font(.caption.monospacedDigit())
+                .frame(width: 32, alignment: .trailing)
+            Text("\(standing.points)")
+                .font(.subheadline.monospacedDigit())
+                .fontWeight(.bold)
+                .frame(width: 32, alignment: .trailing)
+        }
+        .padding(.vertical, 2)
+        .listRowBackground(isUser ? Color.accentColor.opacity(0.12) : nil)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(AccessibilityFormatter.standingRow(rank: rank, clubName: club?.name ?? "Club", standing: standing)
+            + (zone == .none ? "" : " \(zone.displayName).")
+            + (standing.form.isEmpty ? "" : " Form: \(standing.form.joined(separator: " ")).")
+        )
+    }
+
+    private func formGuide(_ form: [String]) -> some View {
+        HStack(spacing: 3) {
+            ForEach(Array(form.enumerated()), id: \.offset) { _, letter in
+                Text(letter)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 14, height: 14)
+                    .background(formColor(letter))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+        }
+    }
+
+    private func zoneLegend(for league: League, clubCount: Int, hasHigher: Bool, hasLower: Bool) -> some View {
+        let zones = Set((1...max(1, clubCount)).map {
+            league.tier.zone(forPosition: $0, clubCount: clubCount, hasHigherTier: hasHigher, hasLowerTier: hasLower)
+        })
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(TableZone.allCases.filter { $0 != .none && zones.contains($0) }, id: \.self) { zone in
+                HStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(zoneColor(zone))
+                        .frame(width: 12, height: 12)
+                    Text(zone.displayName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func zoneColor(_ zone: TableZone) -> Color {
+        switch zone {
+        case .champions: return .goldAccent
+        case .europe: return .defColor
+        case .promotion: return .winGreen
+        case .playOff: return .bronzeAccent
+        case .relegation: return .lossRed
+        case .none: return .clear
+        }
+    }
+
+    private func formColor(_ letter: String) -> Color {
+        switch letter {
+        case "W": return .winGreen
+        case "D": return .drawGray
+        default: return .lossRed
+        }
+    }
     
     private var standingsHeader: some View {
-        HStack {
-            Text("#").frame(width: 24, alignment: .leading)
+        HStack(spacing: 8) {
+            Color.clear.frame(width: 4, height: 1)
+            Text("#").frame(width: 22, alignment: .leading)
             Text("Club")
             Spacer()
-            Text("P").frame(width: 28, alignment: .trailing)
+            Text("P").frame(width: 24, alignment: .trailing)
             Text("GD").frame(width: 32, alignment: .trailing)
-            Text("Pts").frame(width: 36, alignment: .trailing)
+            Text("Pts").frame(width: 32, alignment: .trailing)
         }
         .font(.caption)
         .fontWeight(.bold)
@@ -2424,29 +1904,37 @@ public struct StandingsView: View {
 public struct TransferHubView: View {
     @Environment(GameState.self) private var gameState
     @State private var showFreeAgents = false
+    @State private var marketFeed = 0
     
     public var body: some View {
         List {
-            Section(header: Text("Transfer Overview")) {
-                if let userClub = gameState.userClub {
-                    HStack {
-                        Text("Available Transfer Budget")
-                        Spacer()
-                        Text(Player.formatCurrency(userClub.finances.transferBudget))
-                            .fontWeight(.bold)
+            Section {
+                VStack(alignment: .center, spacing: 14) {
+                    GFScreenTitle(title: "Transfer Market", subtitle: gameState.transferWindowStatus)
+                    if let userClub = gameState.userClub {
+                        HStack(spacing: 12) {
+                            GFValuePill(title: "Budget", value: Player.formatCurrency(userClub.finances.transferBudget),
+                                        tone: userClub.finances.transferBudget > 0 ? .good : .bad)
+                            GFValuePill(title: "Wage Room", value: "\(Player.formatCurrency(userClub.finances.weeklyWageSurplus))/w",
+                                        tone: userClub.finances.weeklyWageSurplus >= 0 ? .good : .bad)
+                        }
+                        NavigationLink(destination: PlayerSearchView()) {
+                            Label("Search Players", systemImage: "magnifyingglass")
+                                .font(.gfLabel(16))
+                                .textCase(.uppercase)
+                                .frame(maxWidth: .infinity)
+                                .padding(12)
+                                .foregroundStyle(Color.gfNight)
+                                .background(Capsule().fill(Color.white))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Browse the transfer market with filters")
                     }
-                    HStack {
-                        Text("Wage Headroom")
-                        Spacer()
-                        Text("\(Player.formatCurrency(userClub.finances.weeklyWageSurplus))/w")
-                            .fontWeight(.bold)
-                    }
-                    NavigationLink(destination: PlayerSearchView()) {
-                        Label("Search & Sign Players", systemImage: "magnifyingglass")
-                            .fontWeight(.semibold)
-                    }
-                    .accessibilityHint("Browse the transfer market with filters")
                 }
+                .padding(.vertical, 6)
+                .listRowBackground(Color.clear)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Transfer window: \(gameState.transferWindowStatus)")
             }
             
             if !gameState.actionableOffers.isEmpty {
@@ -2456,6 +1944,34 @@ public struct TransferHubView: View {
                     }
                 }
                 .accessibilityHint("Bids and offers awaiting a response")
+            }
+
+            Section(header: Text("Shortlist (\(gameState.shortlist.count))"),
+                    footer: Text(gameState.shortlist.isEmpty ? "Tap the star on a player's profile to track him here." : "")) {
+                ForEach(gameState.shortlistedPlayers, id: \.player.id) { entry in
+                    NavigationLink(destination: PlayerDetailView(playerId: entry.player.id)) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.player.fullName).font(.subheadline.weight(.semibold))
+                                Text("\(entry.player.primaryPosition.abbreviation) • \(entry.player.age) • \(entry.club?.name ?? "Free agent")\(entry.player.isOnLoan ? " (on loan)" : "")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text("\(entry.player.overall)").font(.headline)
+                                Text(entry.player.formattedValue).font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .swipeActions {
+                        Button(role: .destructive) {
+                            gameState.toggleShortlist(entry.player.id)
+                        } label: {
+                            Label("Remove", systemImage: "star.slash")
+                        }
+                    }
+                }
             }
 
             Section(header: Text("Free Agent Market")) {
@@ -2478,24 +1994,57 @@ public struct TransferHubView: View {
                 }
             }
             
-            Section(header: Text("Recent League Transfers")) {
-                if gameState.transferHistory.isEmpty {
-                    Text("No transfers registered this window.")
+            Section(header: Text("Around the World")) {
+                GFTabs(selection: $marketFeed, options: [(0, "Latest"), (1, "Record Fees"), (2, "Loans")], compact: true)
+                let records = feedRecords
+                if records.isEmpty {
+                    Text(marketFeed == 2 ? "No loan moves yet this season." : "No transfers yet this season.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(gameState.transferHistory.prefix(10)) { record in
+                    ForEach(records) { record in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(record.playerName)
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                            Text("\(record.fromClubName) to \(record.toClubName) •\(record.formattedFee)")
+                            HStack {
+                                Text(record.playerName)
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                Text(record.formattedFee)
+                                    .font(.subheadline.monospacedDigit())
+                                    .fontWeight(.semibold)
+                            }
+                            Text("\(record.fromClubName) → \(record.toClubName)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .accessibilityElement(children: .combine)
                     }
                 }
             }
+        }
+    }
+
+    private func budgetTile(_ title: String, _ value: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: icon).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            Text(value).font(.headline.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(UIColor.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// This season's moves for the selected feed.
+    private var feedRecords: [TransferRecord] {
+        let seasonStart = "\(gameState.season.year.prefix(4))-06-01"
+        let thisSeason = gameState.transferHistory.filter { $0.date >= seasonStart }
+        switch marketFeed {
+        case 1:
+            return Array(thisSeason.filter { !$0.isLoan && $0.fee > 0 }.sorted { $0.fee > $1.fee }.prefix(12))
+        case 2:
+            return Array(thisSeason.filter { $0.isLoan }.suffix(12).reversed())
+        default:
+            return Array(thisSeason.filter { !$0.isLoan }.suffix(12).reversed())
         }
     }
 }
@@ -2521,14 +2070,29 @@ private struct ActiveOfferRow: View {
                 .font(.subheadline)
                 .fontWeight(.semibold)
             Text(offer.isIncoming
-                 ? "\(otherClubName) bid \(Player.formatCurrency(offer.fee))"
+                 ? (offer.isLoan ? "\(otherClubName) want him on loan" : "\(otherClubName) bid \(Player.formatCurrency(offer.fee))")
                  : "Your bid to \(otherClubName): \(Player.formatCurrency(offer.fee))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            statusLabel
+            if offer.isIncoming {
+                HStack(spacing: 10) {
+                    Button(offer.isLoan ? "Agree Loan" : "Accept") {
+                        gameState.acceptIncomingOffer(offerId: offer.id)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button("Reject", role: .destructive) {
+                        gameState.rejectIncomingOffer(offerId: offer.id)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .font(.caption)
+                .padding(.top, 2)
+            } else {
+                statusLabel
+            }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(playerName), \(offer.isIncoming ? "incoming offer" : "outgoing bid"), \(statusDescription)")
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(playerName), \(offer.isIncoming ? (offer.isLoan ? "loan request" : "incoming offer") : "outgoing bid"), \(offer.isIncoming ? "awaiting your decision" : statusDescription)")
     }
 
     private var statusDescription: String {
@@ -2563,113 +2127,376 @@ private struct ActiveOfferRow: View {
 
 public struct PlayerSearchView: View {
     @Environment(GameState.self) private var gameState
-    @State private var positionCategory: PositionCategory? = nil
-    @State private var minOverall = 0
-    @State private var maxAge = 99
-    @State private var includeFreeAgents = false
-    @State private var maxFeeFilter: Int? = nil
+    @State private var tab: MarketTab = .players
+    @State private var filters = MarketFilters()
     @State private var sortMode: SortMode = .overall
-    @State private var hasSearched = false
+    @State private var page = 0
+
+    private let pageSize = 25
+
+    enum MarketTab: String, CaseIterable { case players = "Players", filters = "Filters", deals = "Deals" }
 
     enum SortMode: String, CaseIterable, Identifiable {
         case overall = "Rating"
         case value = "Value"
         case age = "Age"
         case name = "Name"
+        case role = "Role"
         var id: String { rawValue }
     }
 
+    /// Everything the Filters tab can narrow down.
+    struct MarketFilters: Equatable {
+        var minRating = 0
+        var maxRating = 100
+        var minAge = 14
+        var maxAge = 45
+        var maxValue: Int? = nil
+        var nationality: String? = nil
+        var role: Position? = nil
+        var category: PositionCategory? = nil
+        var status: StatusFilter = .all
+        var name = ""
+    }
+
+    enum StatusFilter: String, CaseIterable {
+        case all = "All"
+        case listed = "Transfer listed"
+        case loanListed = "Loan listed"
+        case loanable = "Loan candidates"
+        case freeAgent = "Free agents"
+        case affordable = "Within budget"
+    }
+
+    private var budget: Int { gameState.userClub?.finances.transferBudget ?? 0 }
+
     private var results: [(player: Player, club: Club?)] {
-        guard hasSearched else { return [] }
+        let f = filters
+        let query = f.name.trimmingCharacters(in: .whitespaces).lowercased()
         let base = gameState.searchPlayers(
-            positionCategory: positionCategory,
-            minOverall: minOverall,
-            maxAge: maxAge,
-            maxFee: maxFeeFilter,
-            includeFreeAgents: includeFreeAgents
+            positionCategory: f.category,
+            specificPosition: f.role,
+            minOverall: f.minRating,
+            maxAge: f.maxAge,
+            maxFee: f.maxValue,
+            includeFreeAgents: true
         )
+        .filter { entry in
+            let p = entry.player
+            if p.overall > f.maxRating || p.age < f.minAge { return false }
+            if let nat = f.nationality, p.nationality != nat { return false }
+            if !query.isEmpty && !p.fullName.lowercased().contains(query) { return false }
+            switch f.status {
+            case .all: return true
+            case .listed: return p.transferStatus == .transferListed
+            case .loanListed: return p.transferStatus == .loanListed
+            case .loanable:
+                guard let club = entry.club else { return false }
+                return gameState.isLoanable(p, at: club)
+            case .freeAgent: return entry.club == nil
+            case .affordable: return entry.club == nil || p.value <= budget
+            }
+        }
         switch sortMode {
-        case .overall: return base.sorted { $0.player.overall > $1.player.overall }
+        case .overall: return base.sorted { ($0.player.overall, $0.player.value) > ($1.player.overall, $1.player.value) }
         case .value: return base.sorted { $0.player.value > $1.player.value }
         case .age: return base.sorted { $0.player.age < $1.player.age }
         case .name: return base.sorted { $0.player.lastName < $1.player.lastName }
+        case .role: return base.sorted { ($0.player.primaryPosition.sortIndex, -$0.player.overall) < ($1.player.primaryPosition.sortIndex, -$1.player.overall) }
         }
     }
 
     public var body: some View {
-        List {
-            Section(header: Text("Filters")) {
-                Picker("Position", selection: $positionCategory) {
-                    Text("Any").tag(PositionCategory?.none)
-                    ForEach(PositionCategory.allCases) { category in
-                        Text(category.displayName).tag(PositionCategory?.some(category))
-                    }
-                }
-
-                Picker("Sort By", selection: $sortMode) {
-                    ForEach(SortMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-
-                HStack {
-                    Text("Min Rating: \(minOverall)")
-                    Slider(value: Binding(
-                        get: { Double(minOverall) },
-                        set: { minOverall = Int($0) }
-                    ), in: 0...99, step: 1)
-                }
-
-                HStack {
-                    Text("Max Age: \(maxAge == 99 ? "Any" : "\(maxAge)")")
-                    Slider(value: Binding(
-                        get: { Double(maxAge) },
-                        set: { maxAge = Int($0) }
-                    ), in: 16...40, step: 1)
-                }
-
-                Toggle("Include Free Agents", isOn: $includeFreeAgents)
-                    .accessibilityHint("Free agents are hidden unless this is switched on")
-
-                Button {
-                    hasSearched = true
-                } label: {
-                    Label("Search Market", systemImage: "magnifyingglass")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .accessibilityHint("Runs the search using the filters above")
+        VStack(spacing: 12) {
+            GFScreenTitle(title: "Transfer Market", subtitle: gameState.transferWindowStatus)
+            GFTabs(selection: $tab)
+                .padding(.horizontal)
+            switch tab {
+            case .players: playersTab
+            case .filters: filtersTab
+            case .deals: dealsTab
             }
+        }
+        .padding(.top, 8)
+        .stadiumBackground()
+        .navigationTitle("Transfer Market")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: filters) { _, _ in page = 0 }
+        .onChange(of: sortMode) { _, _ in page = 0 }
+    }
 
-            if hasSearched {
-                Section(header: Text("\(results.count) Players Found")) {
-                    if results.isEmpty {
+    // MARK: Players
+
+    private var playersTab: some View {
+        let all = results
+        let pages = max(1, (all.count + pageSize - 1) / pageSize)
+        let current = min(page, pages - 1)
+        let slice = Array(all.dropFirst(current * pageSize).prefix(pageSize))
+        return VStack(spacing: 10) {
+            HStack {
+                Button { page = max(0, current - 1) } label: { Image(systemName: "chevron.left") }
+                    .disabled(current == 0)
+                    .accessibilityLabel("Previous page")
+                Spacer()
+                Text("PAGE \(current + 1) OF \(pages) · \(all.count) PLAYERS")
+                    .font(.gfLabel(14))
+                Spacer()
+                Button { page = min(pages - 1, current + 1) } label: { Image(systemName: "chevron.right") }
+                    .disabled(current >= pages - 1)
+                    .accessibilityLabel("Next page")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(Color.gfNavy.opacity(0.9)))
+            .padding(.horizontal)
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        sortHeader("Role", .role).frame(width: 44, alignment: .leading)
+                        sortHeader("Name", .name)
+                        Spacer()
+                        sortHeader("Age", .age).frame(width: 36)
+                        sortHeader("Val", .overall).frame(width: 44)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    if slice.isEmpty {
                         Text("No players match your filters.")
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(results.prefix(80), id: \.player.id) { entry in
-                            NavigationLink(destination: PlayerDetailView(playerId: entry.player.id)) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    PlayerRowView(player: entry.player)
-                                    Text(entry.club?.name ?? "Free Agent")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
+                            .padding(30)
+                    }
+                    ForEach(slice, id: \.player.id) { entry in
+                        NavigationLink(destination: PlayerDetailView(playerId: entry.player.id)) {
+                            marketRow(entry.player, club: entry.club)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .gfCard(padding: 0)
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    private func sortHeader(_ title: String, _ mode: SortMode) -> some View {
+        Button {
+            sortMode = mode
+        } label: {
+            HStack(spacing: 2) {
+                Text(title.uppercased()).font(.gfLabel(13))
+                if sortMode == mode { Image(systemName: "chevron.down").font(.caption2.weight(.bold)) }
+            }
+            .foregroundStyle(sortMode == mode ? Color.white : Color.white.opacity(0.6))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Sort by \(mode.rawValue)")
+        .accessibilityAddTraits(sortMode == mode ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private func marketRow(_ player: Player, club: Club?) -> some View {
+        HStack(spacing: 8) {
+            Text(player.primaryPosition.abbreviation)
+                .font(.gfLabel(12))
+                .foregroundStyle(.black)
+                .frame(width: 40)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(player.primaryPosition.category.accentColor))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(player.displayName.uppercased())
+                    .font(.gfLabel(14))
+                    .lineLimit(1)
+                Text(club?.name ?? "Free agent")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if player.transferStatus == .transferListed {
+                Image(systemName: "tag.fill").font(.caption2).foregroundStyle(Color.gfBanner)
+            }
+            Text("\(player.age)")
+                .font(.gfLabel(14).monospacedDigit())
+                .frame(width: 36)
+            Text("\(player.overall)")
+                .font(.gfLabel(13).monospacedDigit())
+                .foregroundStyle(Color.gfNight)
+                .frame(width: 40)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.white))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(player.primaryPosition.displayName), \(player.fullName), \(club?.name ?? "free agent"), age \(player.age), rated \(player.overall), value \(Player.spokenCurrency(player.value))\(player.transferStatus == .transferListed ? ", transfer listed" : "")")
+    }
+
+    // MARK: Filters
+
+    private var nationalities: [String] {
+        let all = gameState.clubs.flatMap { $0.players.map(\.nationality) } + gameState.freeAgents.map(\.nationality)
+        let counts = Dictionary(all.map { ($0, 1) }, uniquingKeysWith: +)
+        return counts.keys.sorted()
+    }
+
+    private var filtersTab: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                Text("FILTERS").font(.gfDisplay(22))
+                Grid(horizontalSpacing: 16, verticalSpacing: 18) {
+                    GridRow {
+                        filterCell("Rating range", "\(filters.minRating) - \(filters.maxRating)") {
+                            Menu("Minimum") { ForEach([0, 50, 55, 60, 65, 70, 75, 80, 85], id: \.self) { v in Button("\(v)") { filters.minRating = v; filters.maxRating = max(filters.maxRating, v) } } }
+                            Menu("Maximum") { ForEach([100, 90, 85, 80, 75, 70, 65, 60], id: \.self) { v in Button("\(v)") { filters.maxRating = v; filters.minRating = min(filters.minRating, v) } } }
+                        }
+                        filterCell("Market value", filters.maxValue.map { "Up to \(Player.formatCurrency($0))" } ?? "All") {
+                            Button("All") { filters.maxValue = nil }
+                            Button("Within my budget (\(Player.formatCurrency(budget)))") { filters.maxValue = max(0, budget) }
+                            ForEach([500_000, 2_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000], id: \.self) { v in
+                                Button("Up to \(Player.formatCurrency(v))") { filters.maxValue = v }
                             }
                         }
                     }
+                    GridRow {
+                        filterCell("Age range", "\(filters.minAge) - \(filters.maxAge)") {
+                            Menu("Youngest") { ForEach([14, 17, 19, 21, 23, 25, 28, 30], id: \.self) { v in Button("\(v)") { filters.minAge = v; filters.maxAge = max(filters.maxAge, v) } } }
+                            Menu("Oldest") { ForEach([45, 33, 30, 28, 25, 23, 21, 19], id: \.self) { v in Button("\(v)") { filters.maxAge = v; filters.minAge = min(filters.minAge, v) } } }
+                        }
+                        filterCell("Nationality", filters.nationality ?? "All") {
+                            Button("All") { filters.nationality = nil }
+                            ForEach(nationalities, id: \.self) { n in Button(n) { filters.nationality = n } }
+                        }
+                    }
+                    GridRow {
+                        filterCell("Role", filters.role?.abbreviation ?? filters.category?.displayName ?? "All") {
+                            Button("All") { filters.role = nil; filters.category = nil }
+                            ForEach(PositionCategory.allCases) { c in
+                                Button("Any \(c.displayName)") { filters.category = c; filters.role = nil }
+                            }
+                            Divider()
+                            ForEach(Position.allCases, id: \.self) { pos in
+                                Button("\(pos.abbreviation) · \(pos.displayName)") { filters.role = pos; filters.category = nil }
+                            }
+                        }
+                        filterCell("Status", filters.status.rawValue) {
+                            ForEach(StatusFilter.allCases, id: \.self) { st in Button(st.rawValue) { filters.status = st } }
+                        }
+                    }
                 }
-            } else {
-                Section {
-                    Text("Set your filters and tap Search Market to find players.")
-                        .font(.caption)
+                VStack(spacing: 6) {
+                    Text("PLAYER NAME").font(.gfLabel(13)).foregroundStyle(.secondary)
+                    TextField("Player", text: $filters.name)
+                        .multilineTextAlignment(.center)
+                        .font(.gfLabel(16))
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled()
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Color.white.opacity(0.08)))
+                        .accessibilityLabel("Player name")
+                }
+                Button("Reset Filters") { filters = MarketFilters() }
+                    .buttonStyle(.gfOutline)
+                    .padding(.horizontal, 50)
+                Button("Show \(results.count) Players") { tab = .players }
+                    .buttonStyle(.gfSolid)
+                    .padding(.horizontal, 30)
+            }
+            .gfCard(padding: 20)
+            .padding(.horizontal)
+        }
+    }
+
+    private func filterCell<Content: View>(_ title: String, _ value: String, @ViewBuilder menu: () -> Content) -> some View {
+        Menu {
+            menu()
+        } label: {
+            VStack(spacing: 4) {
+                Text(title.uppercased()).font(.gfLabel(13)).foregroundStyle(.secondary)
+                Text(value.uppercased()).font(.gfLabel(16)).foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(0.6)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .accessibilityLabel("\(title): \(value)")
+        .accessibilityHint("Double tap to change")
+    }
+
+    // MARK: Deals
+
+    private struct DealCard: Identifiable {
+        let id: UUID
+        let player: String
+        let from: String
+        let to: String
+        let fee: String
+        let date: String
+        let badge: String
+        let badgeColor: Color
+    }
+
+    private var deals: [DealCard] {
+        guard let userId = gameState.userClubId else { return [] }
+        func name(_ id: UUID) -> String { gameState.club(withId: id)?.name ?? "Free agent" }
+        var cards: [DealCard] = gameState.pendingTransferOffers
+            .filter { ($0.toClubId == userId || $0.fromClubId == userId) && $0.isLive }
+            .map { offer in
+                let player = gameState.player(withId: offer.playerId)?.player.fullName ?? "Player"
+                return DealCard(id: offer.id, player: player, from: name(offer.fromClubId), to: name(offer.toClubId),
+                                fee: offer.isLoan ? "LOAN" : Player.formatCurrency(offer.counterFee ?? offer.fee),
+                                date: offer.createdDate, badge: offer.status.displayName.uppercased(), badgeColor: .gfBanner)
+            }
+        cards += gameState.transferHistory
+            .filter { $0.toClubId == userId || $0.fromClubId == userId }
+            .suffix(40).reversed()
+            .map { r in
+                let incoming = r.toClubId == userId
+                let badge = r.isLoan ? (incoming ? "LOAN IN" : "LOAN OUT") : (r.fee == 0 && !incoming ? "RELEASE" : (incoming ? "SIGNED" : "SOLD"))
+                return DealCard(id: r.id, player: r.playerName, from: r.fromClubName, to: r.toClubName,
+                                fee: r.isLoan ? "LOAN" : (r.fee == 0 ? "FREE" : Player.formatCurrency(r.fee)),
+                                date: r.date, badge: badge,
+                                badgeColor: incoming ? Color.gfMint : Color.gfCoral)
+            }
+        return cards
+    }
+
+    private var dealsTab: some View {
+        ScrollView {
+            LazyVStack(spacing: 10) {
+                let list = deals
+                if list.isEmpty {
+                    Text("No deals yet. Bids, sales and signings appear here.")
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .padding(30)
+                }
+                ForEach(list) { deal in
+                    VStack(spacing: 6) {
+                        Text(deal.player.uppercased()).font(.gfLabel(16))
+                        HStack {
+                            Text(deal.from.uppercased()).font(.gfLabel(13)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                            Image(systemName: "chevron.right").font(.caption.weight(.bold))
+                            Text(deal.to.uppercased()).font(.gfLabel(13)).lineLimit(1).frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                        Text(deal.fee).font(.gfDisplay(20))
+                        HStack {
+                            Text(DashboardView.shortDate(deal.date)).font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Text(deal.badge)
+                                .font(.gfLabel(11))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                .background(Capsule().fill(deal.badgeColor.opacity(0.85)))
+                        }
+                    }
+                    .gfCard(padding: 14)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(deal.player), from \(deal.from) to \(deal.to), \(deal.fee), \(deal.badge.lowercased())")
                 }
             }
+            .padding(.horizontal)
         }
-        .navigationTitle("Transfer Market")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -2677,113 +2504,383 @@ public struct PlayerSearchView: View {
 
 public struct MatchDayView: View {
     @Environment(GameState.self) private var gameState
+    @State private var editingLineup = false
+    @State private var zone: Zone = .info
+
+    enum Zone: String, CaseIterable { case info = "Info", team = "Team", opponent = "Opponent" }
 
     public var body: some View {
         ScrollView {
-            VStack(spacing: 22) {
-                if let fixture = gameState.activeMatchFixture,
-                   let home = gameState.club(withId: fixture.homeClubId),
-                   let away = gameState.club(withId: fixture.awayClubId) {
-
-                    VStack(spacing: 18) {
-                        SectionEyebrow(fixture.competition)
-                        HStack(alignment: .top) {
-                            teamColumn(home, label: "Home")
-                            Text("v")
-                                .font(.system(size: 34, weight: .black))
-                                .foregroundStyle(Color.highlight)
-                                .padding(.top, 22)
-                                .accessibilityHidden(true)
-                            teamColumn(away, label: "Away")
-                        }
-                        Label(home.stadium, systemImage: "building.columns")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+            if let fixture = gameState.activeMatchFixture,
+               let home = gameState.club(withId: fixture.homeClubId),
+               let away = gameState.club(withId: fixture.awayClubId) {
+                VStack(spacing: 16) {
+                    GFScreenTitle(title: "Pre-Match Zone",
+                                  subtitle: fixture.cupRound.map { "\(fixture.competition) · \($0)" } ?? "\(fixture.competition) · Matchweek \(fixture.matchWeek)")
+                    GFTabs(selection: $zone)
+                    switch zone {
+                    case .info:
+                        hero(fixture: fixture, home: home, away: away)
+                        oddsRow(fixture: fixture)
+                        MatchPreviewCard(fixture: fixture, home: home, away: away)
+                    case .team:
+                        lineupCard
+                    case .opponent:
+                        let opponent = home.isUserClub ? away : home
+                        teamSheet(opponent)
                     }
-                    .padding(20)
-                    .background(
-                        ZStack {
-                            Color.surface
-                            LinearGradient(colors: [Color(hex: home.primaryColor).opacity(0.35), .clear, Color(hex: away.primaryColor).opacity(0.35)],
-                                           startPoint: .leading, endPoint: .trailing)
+                }
+                .padding()
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let fixture = gameState.activeMatchFixture {
+                actions(fixture: fixture)
+                    .padding(.horizontal, 40)
+                    .padding(.vertical, 8)
+            }
+        }
+        .hubScreen("Match Day")
+        .onAppear {
+            // Always the fixture being played today, never a finished one.
+            if gameState.activeMatchFixture?.isPlayed ?? true {
+                if !gameState.selectTodaysUserFixture() { gameState.currentScreen = .dashboard }
+            }
+        }
+        .sheet(isPresented: $editingLineup) {
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label("Changes here are for this match only. Your usual lineup returns after the final whistle.",
+                              systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        LineupEditorView()
+                    }
+                    .padding()
+                }
+                .stadiumBackground()
+                .navigationTitle("Lineup for This Match")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Reset") {
+                            gameState.restoreUsualLineup()
+                            editingLineup = false
                         }
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(Color.hairline, lineWidth: 1))
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(fixture.competition). \(home.name) at home against \(away.name). Venue \(home.stadium).")
-
-                    VStack(spacing: 12) {
-                        Button(action: {
-                            gameState.currentScreen = .liveMatch
-                        }) {
-                            Label("Play Live Match", systemImage: "play.fill")
-                                .font(.headline)
-                        }
-                        .buttonStyle(PrimaryActionStyle())
-                        .accessibilityLabel("Play live match with commentary")
-
-                        Button(action: {
-                            // Quick instant simulation. The team talk must be applied
-                            // before kick-off, exactly as it is in the live match.
-                            gameState.applyTeamTalkIfNeeded()
-                            if let idx = gameState.season.fixtures.firstIndex(where: { $0.id == fixture.id }) {
-                                gameState.simulateMatch(fixture: &gameState.season.fixtures[idx])
-                                gameState.finishMatchweekAfterUserMatch()
-                                gameState.currentScreen = .postMatch
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            // Nothing changed: no one-off lineup to restore later.
+                            if gameState.matchOnlyLineupBackup == gameState.userClub?.tactics {
+                                gameState.keepMatchLineup()
                             }
-                        }) {
-                            Label("Instant Result", systemImage: "forward.end.fill")
-                                .fontWeight(.semibold)
+                            editingLineup = false
                         }
-                        .buttonStyle(SecondaryActionStyle())
-                        .accessibilityLabel("Simulate instant match result")
-
-                        Button("Back to Home") { gameState.currentScreen = .dashboard }
-                            .font(.subheadline)
-                            .padding(.top, 4)
-                            .accessibilityHint("Returns home. Your match will still be waiting.")
+                    }
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("Keep as my usual lineup") {
+                            gameState.keepMatchLineup()
+                            editingLineup = false
+                        }
                     }
                 }
             }
-            .padding(20)
+            .onAppear { gameState.beginMatchOnlyLineup() }
         }
-        .background(Color.ink.ignoresSafeArea())
-        .navigationTitle("Match Day")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
-    private func teamColumn(_ club: Club, label: String) -> some View {
-        VStack(spacing: 8) {
-            ZStack(alignment: .bottomTrailing) {
-                KitView(kit: club.effectiveKit, sponsor: club.isUserClub ? gameState.shirtSponsorName : nil, monogram: club.shortName, height: 110)
-                CrestView(club: club, size: 34)
-                    .offset(x: 10, y: 4)
+    private func hero(fixture: Fixture, home: Club, away: Club) -> some View {
+        VStack(spacing: 12) {
+            Text(fixture.cupRound.map { "\(fixture.competition) • \($0)" } ?? "\(fixture.competition) • Matchweek \(fixture.matchWeek)")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white.opacity(0.85))
+            HStack {
+                VStack(spacing: 6) {
+                    CrestView(club: home, size: 40)
+                    Text(home.name).font(.caption.weight(.bold)).multilineTextAlignment(.center).lineLimit(2)
+                }
+                .frame(maxWidth: .infinity)
+                VStack(spacing: 4) {
+                    Text("VS").font(.system(size: 28, weight: .black, design: .rounded))
+                    Text(fixture.date).font(.caption2.monospacedDigit()).opacity(0.8)
+                }
+                VStack(spacing: 6) {
+                    CrestView(club: away, size: 40)
+                    Text(away.name).font(.caption.weight(.bold)).multilineTextAlignment(.center).lineLimit(2)
+                }
+                .frame(maxWidth: .infinity)
             }
-            Text(club.name)
-                .font(.headline)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-            Text(label)
+            .foregroundStyle(.white)
+            Text("\(home.stadium) (\(home.stadiumCapacity.formatted()) seats)")
                 .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
+                .foregroundStyle(.white.opacity(0.85))
+            HStack {
+                Text(String(format: "%.0f", home.startingXIAverageOverall)).font(.gfDisplay(22))
+                Spacer()
+                Text("STRENGTH").font(.gfLabel(14)).opacity(0.8)
+                Spacer()
+                Text(String(format: "%.0f", away.startingXIAverageOverall)).font(.gfDisplay(22))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 22)
+            if let derby = gameState.rivalry(between: fixture.homeClubId, and: fixture.awayClubId) {
+                VStack(spacing: 4) {
+                    GFPill(text: derby.name, color: .white, icon: "flame.fill")
+                    Text(derby.intensity >= 3 ? "The biggest game of the season. Form counts for little today." : "A local rivalry. Expect a fierce contest.")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .multilineTextAlignment(.center)
+                }
+            }
         }
+        .padding(.vertical, 22)
+        .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)
+        .background(
+            ZStack {
+                LinearGradient(colors: [Color(hex: home.primaryColor), Color(hex: away.primaryColor)],
+                               startPoint: .leading, endPoint: .trailing)
+                Color.black.opacity(0.3)
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Home win, draw and away win prices: "1 / X / 2".
+    @ViewBuilder
+    private func oddsRow(fixture: Fixture) -> some View {
+        if let odds = gameState.matchOdds(for: fixture) {
+            HStack(spacing: 12) {
+                ForEach([("1", odds.home), ("X", odds.draw), ("2", odds.away)], id: \.0) { label, p in
+                    GFValuePill(title: label, value: String(format: "%.2f", MatchOdds.decimal(p)))
+                }
+            }
+            .gfCard(padding: 14)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(String(format: "Odds: home win %.2f, draw %.2f, away win %.2f",
+                                       MatchOdds.decimal(odds.home), MatchOdds.decimal(odds.draw), MatchOdds.decimal(odds.away)))
+        }
+    }
+
+    /// "LEEDS UNITED (4-3-3)" over the side drawn on a pitch.
+    private func teamSheet(_ club: Club) -> some View {
+        VStack(spacing: 12) {
+            Text("\(club.name.uppercased()) (\(club.tactics.formation.rawValue))")
+                .font(.gfLabel(17))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(Capsule().fill(Color.gfNavy.opacity(0.9)))
+            FormationPitchView(formation: club.tactics.formation, players: club.startingXIPlayers,
+                               selectedPlayerId: nil, onSelect: { _ in })
+            let bench = club.substitutePlayers
+            if !bench.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(bench) { player in
+                            SquadPlayerCard(player: player)
+                        }
+                    }
+                }
+                .gfCard(padding: 10)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var lineupCard: some View {
+        if let club = gameState.userClub {
+            VStack(spacing: 12) {
+                if gameState.hasMatchOnlyLineup {
+                    GFPill(text: "One-off lineup for this match", color: .orange, icon: "clock.arrow.circlepath")
+                }
+                teamSheet(club)
+                Button {
+                    editingLineup = true
+                } label: {
+                    Label("Manage Lineup", systemImage: "arrow.left.arrow.right")
+                }
+                .buttonStyle(.gfOutline)
+                .padding(.horizontal, 30)
+                .accessibilityHint("Change the side for this match only")
+            }
+        }
+    }
+
+    private func actions(fixture: Fixture) -> some View {
+        VStack(spacing: 12) {
+            Button {
+                gameState.currentScreen = .liveMatch
+            } label: {
+                Text("Play Match")
+            }
+            .buttonStyle(.gfPrimary)
+            .accessibilityLabel("Play the match with live commentary")
+            Button {
+                // The team talk must be applied before kick-off, exactly as in
+                // live commentary.
+                gameState.applyTeamTalkIfNeeded()
+                if gameState.simulateFixture(id: fixture.id) {
+                    gameState.finishMatchweekAfterUserMatch()
+                    gameState.currentScreen = .postMatch
+                }
+            } label: {
+                Text("Simulate Match")
+            }
+            .buttonStyle(.gfOutline)
+            .accessibilityLabel("Simulate an instant match result")
+        }
     }
 }
 
-// Post Match flow lives in Views/PostMatch/PostMatchFlow.swift
+// MARK: - Post Match Screen
+
+/// Pre-match scouting: team strength, table position, form and danger man.
+struct MatchPreviewCard: View {
+    @Environment(GameState.self) private var gameState
+    let fixture: Fixture
+    let home: Club
+    let away: Club
+
+    private func form(_ club: Club) -> [String] {
+        gameState.season.completedFixtures(forClub: club.id).suffix(5).compactMap { $0.result?.outcomeLetter(for: club.id) }
+    }
+
+    private func position(_ club: Club) -> String {
+        let table = gameState.currentLeagueStandings
+        guard let index = table.firstIndex(where: { $0.clubId == club.id }) else { return club.leagueTier.shortLabel }
+        return "\(index + 1) of \(table.count)"
+    }
+
+    private var verdict: String {
+        let gap = (home.startingXIAverageOverall + 2) - away.startingXIAverageOverall
+        let userIsHome = home.isUserClub
+        let userEdge = userIsHome ? gap : -gap
+        switch userEdge {
+        case 6...: return "Bookmakers make us clear favourites"
+        case 2..<6: return "We go in as slight favourites"
+        case -2..<2: return "Bookmakers can't separate the sides"
+        case -6 ..< -2: return "We are slight underdogs"
+        default: return "Bookmakers expect us to lose"
+        }
+    }
+
+    var body: some View {
+        let opponent = home.isUserClub ? away : home
+        let dangerMan = opponent.startingXIPlayers.max { $0.overall < $1.overall }
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Scouting Report").font(.headline)
+            previewRow("Starting XI", String(format: "%.0f", home.startingXIAverageOverall), String(format: "%.0f", away.startingXIAverageOverall))
+            if !fixture.isCupTie || home.leagueTier == away.leagueTier {
+                previewRow("League position", position(home), position(away))
+            } else {
+                previewRow("Division", home.leagueTier.displayName, away.leagueTier.displayName)
+            }
+            previewRow("Form", form(home).joined(separator: " "), form(away).joined(separator: " "))
+            if let dangerMan {
+                Label("Danger man: \(dangerMan.fullName) (\(dangerMan.primaryPosition.abbreviation), \(dangerMan.overall))", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+            }
+            if let odds = gameState.matchOdds(for: fixture) {
+                oddsBar(odds)
+            }
+            Label(verdict, systemImage: "chart.bar.xaxis")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .gfCard()
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Pre-match odds: a split bar with each outcome's chance and price.
+    private func oddsBar(_ odds: MatchOdds) -> some View {
+        let parts: [(label: String, p: Double, color: Color)] = [
+            (home.shortName, odds.home, Color.winGreen),
+            ("Draw", odds.draw, Color.secondary),
+            (away.shortName, odds.away, Color.lossRed)
+        ]
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Pre-Match Odds").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            GeometryReader { geo in
+                HStack(spacing: 2) {
+                    ForEach(parts, id: \.label) { part in
+                        Rectangle()
+                            .fill(part.color.opacity(0.8))
+                            .frame(width: max(4, geo.size.width * part.p - 2))
+                    }
+                }
+            }
+            .frame(height: 8)
+            .clipShape(Capsule())
+            HStack {
+                ForEach(parts, id: \.label) { part in
+                    VStack(spacing: 1) {
+                        Text("\(part.label) \(Int((part.p * 100).rounded()))%")
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                        Text(String(format: "%.2f", MatchOdds.decimal(part.p)))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Odds: \(home.name) win \(Int(odds.home * 100)) percent, draw \(Int(odds.draw * 100)) percent, \(away.name) win \(Int(odds.away * 100)) percent")
+    }
+
+    private func previewRow(_ title: String, _ homeValue: String, _ awayValue: String) -> some View {
+        HStack {
+            Text(homeValue.isEmpty ? "–" : homeValue)
+                .font(.subheadline.monospacedDigit().weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(awayValue.isEmpty ? "–" : awayValue)
+                .font(.subheadline.monospacedDigit().weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title): \(home.name) \(homeValue.isEmpty ? "none" : homeValue), \(away.name) \(awayValue.isEmpty ? "none" : awayValue)")
+    }
+}
+
+public struct StatComparisonRow: View {
+    public let title: String
+    public let home: String
+    public let away: String
+    
+    public var body: some View {
+        HStack {
+            Text(home).frame(width: 60, alignment: .leading).fontWeight(.semibold)
+            Spacer()
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Text(away).frame(width: 60, alignment: .trailing).fontWeight(.semibold)
+        }
+        .font(.subheadline)
+    }
+}
 
 // MARK: - Player Detail Screen
 
 public struct PlayerDetailView: View {
     @Environment(GameState.self) private var gameState
     public let playerId: UUID
-    /// When shown in a sheet (for example from Player of the Match), closes it.
-    public var onDone: (() -> Void)? = nil
     @State private var showingRenewal = false
+    @State private var confirmingRelease = false
+    @State private var releaseMessage: String?
+    @State private var showingNegotiation = false
+    @State private var profileTab: ProfileTab = .general
+    @State private var detailTab: DetailTab = .stats
+    @Environment(\.dismiss) private var dismiss
+
+    enum ProfileTab: String, CaseIterable { case general = "General", attributes = "Attributes", contract = "Contract", details = "Details" }
+    enum DetailTab: String, CaseIterable { case stats = "Stats", awards = "Awards", transfers = "Transfers" }
     
     public var body: some View {
         ScrollView {
@@ -2791,184 +2888,738 @@ public struct PlayerDetailView: View {
                 let player = lookup.player
                 let club = lookup.club
                 
-                VStack(spacing: 20) {
-                    // Header Card
-                    VStack(spacing: 12) {
-                        HStack(spacing: 16) {
-                            FaceView(player: player, size: 72, style: .full)
-                                .frame(width: 72, height: 88)
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(player.fullName)
-                                    .font(.title3)
-                                    .fontWeight(.bold)
-                                if let club = club {
-                                    HStack(spacing: 6) {
-                                        CrestView(club: club, size: 20)
-                                        Text(club.name)
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                } else {
-                                    Text("Free Agent")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Text("\(player.primaryPosition.displayName) • Age \(player.age) • \(player.nationality)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        
-                        HStack(spacing: 24) {
-                            VStack {
-                                Text("Overall")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                Text("\(player.overall)")
-                                    .font(.title3)
-                                    .fontWeight(.bold)
-                            }
-                            VStack {
-                                Text("Value")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                Text(player.formattedValue)
-                                    .font(.title3)
-                                    .fontWeight(.bold)
-                            }
-                            VStack {
-                                Text("Wage")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                Text(player.formattedWage)
-                                    .font(.title3)
-                                    .fontWeight(.bold)
-                            }
-                        }
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    
-                    // Headline face stats (FIFA-style)
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(player.primaryPosition == .GK ? "Goalkeeping" : "Face Stats")
-                            .font(.headline)
-                        FaceStatGridView(player: player)
-                    }
-                    .padding()
-                    .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    
-                    // Technical Attributes
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Technical Attributes").font(.headline)
-                        AttributeBarView(name: "Passing", value: player.attributes.passing)
-                        AttributeBarView(name: "Shooting", value: player.attributes.shooting)
-                        AttributeBarView(name: "Dribbling", value: player.attributes.dribbling)
-                        AttributeBarView(name: "First Touch", value: player.attributes.firstTouch)
-                        AttributeBarView(name: "Crossing", value: player.attributes.crossing)
-                        AttributeBarView(name: "Tackling", value: player.attributes.tackling)
-                        AttributeBarView(name: "Heading", value: player.attributes.heading)
-                    }
-                    .padding()
-                    .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    
-                    // Physical Attributes
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Physical Attributes").font(.headline)
-                        AttributeBarView(name: "Pace", value: player.attributes.pace)
-                        AttributeBarView(name: "Stamina", value: player.attributes.stamina)
-                        AttributeBarView(name: "Strength", value: player.attributes.strength)
-                        AttributeBarView(name: "Agility", value: player.attributes.agility)
-                    }
-                    .padding()
-                    .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-
-                    // Contract status and renewal for players at the user's club.
-                    if let contract = player.contract, let userClub = gameState.userClub, club?.id == userClub.id {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Contract").font(.headline)
-
-                            HStack {
-                                Text("Weekly Wage").foregroundStyle(.secondary)
-                                Spacer()
-                                Text(Player.formatCurrency(contract.wage)).fontWeight(.semibold)
-                            }
-                            HStack {
-                                Text("Years Remaining").foregroundStyle(.secondary)
-                                Spacer()
-                                Text("\(contract.yearsRemaining)").fontWeight(.semibold)
-                            }
-                            if let releaseClause = contract.releaseClause {
-                                HStack {
-                                    Text("Release Clause").foregroundStyle(.secondary)
-                                    Spacer()
-                                    Text(Player.formatCurrency(releaseClause)).fontWeight(.semibold)
-                                }
-                            }
-
-                            if contract.yearsRemaining <= 2 {
-                                Text("This contract is nearing expiry. Offer a new deal to keep \(player.firstName) at the club.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-
-                                Button {
-                                    showingRenewal = true
-                                } label: {
-                                    Label("Offer New Contract", systemImage: "square.and.pencil")
-                                        .fontWeight(.semibold)
-                                        .frame(maxWidth: .infinity)
-                                        .padding()
-                                        .background(Color.brand)
-                                        .foregroundStyle(.white)
-                                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                                }
-                                .accessibilityLabel("Offer \(player.fullName) a new contract")
-                            }
-                        }
-                        .padding()
-                        .background(Color.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    }
-                    
-                    // Transfer action: only for players not already at the user's club.
-                    if let userClub = gameState.userClub, club?.id != userClub.id {
-                        Button {
-                            gameState.negotiationTargetPlayerId = player.id
-                            gameState.currentScreen = .negotiation
-                        } label: {
-                            Label("Make Transfer Bid", systemImage: "arrow.left.arrow.right")
-                                .fontWeight(.semibold)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.brand)
-                                .foregroundStyle(.white)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        .accessibilityLabel("Make a transfer bid for \(player.fullName)")
+                VStack(spacing: 14) {
+                    GFTabs(selection: $profileTab, compact: true)
+                    switch profileTab {
+                    case .general: generalTab(player, club)
+                    case .attributes: attributesTab(player)
+                    case .contract: contractTab(player, club)
+                    case .details: detailsTab(player, club)
                     }
                 }
                 .padding()
+                .navigationTitle(player.fullName)
             }
         }
-        .background(Color.ink)
-        .navigationTitle("Player Profile")
+        .safeAreaInset(edge: .bottom) {
+            if let lookup = gameState.player(withId: playerId) {
+                actionsButton(lookup.player, lookup.club)
+            }
+        }
+        .stadiumBackground()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if gameState.userClub?.player(withId: playerId) == nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        gameState.toggleShortlist(playerId)
+                    } label: {
+                        Image(systemName: gameState.isShortlisted(playerId) ? "star.fill" : "star")
+                    }
+                    .accessibilityLabel(gameState.isShortlisted(playerId) ? "Remove from shortlist" : "Add to shortlist")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") { if let onDone { onDone() } else { gameState.currentScreen = .squad } }
+                Button("Done") {
+                    if case .playerDetail = gameState.currentScreen {
+                        gameState.currentScreen = .squad
+                    } else {
+                        dismiss()
+                    }
+                }
                     .accessibilityLabel("Close player profile")
             }
         }
         .sheet(isPresented: $showingRenewal) {
             ContractRenewalView(playerId: playerId)
         }
+        .sheet(isPresented: $showingNegotiation) {
+            NavigationStack {
+                NegotiationView(onClose: { showingNegotiation = false })
+            }
+        }
+        .confirmationDialog("Release this player?", isPresented: $confirmingRelease, titleVisibility: .visible) {
+            Button("Terminate Contract", role: .destructive) {
+                let message = gameState.releasePlayer(playerId: playerId)
+                if gameState.userClub?.player(withId: playerId) == nil {
+                    try? SaveManager.shared.autoSave(gameState: gameState)
+                    dismiss()
+                } else {
+                    releaseMessage = message
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("He leaves as a free agent and is paid half of the wages left on his contract.")
+        }
+    }
+}
+
+extension PlayerDetailView {
+    fileprivate func playerHeader(player: Player, club: Club?) -> some View {
+        let potential = gameState.potentialEstimate(for: player)
+        let tint = club.map { Color(hex: $0.primaryColor) } ?? Color.gray
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 14) {
+                FaceView(player: player, size: 80, style: .full)
+                    .frame(width: 80, height: 96)
+                    .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(player.fullName)
+                        .font(.title2.weight(.heavy))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                    HStack(spacing: 6) {
+                        if let club {
+                            CrestView(club: club, size: 18)
+                            Text(club.name).font(.subheadline.weight(.semibold))
+                        } else {
+                            Text("Free Agent").font(.subheadline.weight(.semibold))
+                        }
+                    }
+                    Text("\(player.primaryPosition.displayName) • Age \(player.age) • \(player.nationality)")
+                        .font(.caption)
+                        .opacity(0.85)
+                    if player.positions.count > 1 {
+                        Text("Also: " + player.positions.dropFirst().map { $0.abbreviation }.joined(separator: ", "))
+                            .font(.caption2)
+                            .opacity(0.8)
+                    }
+                }
+                Spacer(minLength: 0)
+                RatingBadge(rating: player.overall, size: 54)
+            }
+            HStack(spacing: 8) {
+                headerTile("Potential", potential.lowerBound == potential.upperBound ? "\(potential.lowerBound)" : "\(potential.lowerBound)–\(potential.upperBound)")
+                headerTile("Value", player.formattedValue)
+                headerTile("Wage", player.formattedWage)
+                headerTile("Contract", player.contract.map { "\($0.yearsRemaining) yr" } ?? "—")
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(16)
+        .background(
+            ZStack {
+                LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                Color.black.opacity(0.28)
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    fileprivate func headerTile(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value).font(.subheadline.weight(.heavy).monospacedDigit()).lineLimit(1).minimumScaleFactor(0.7)
+            Text(title).font(.caption2.weight(.semibold)).opacity(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    fileprivate func seasonTile(_ title: String, _ value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.title3.weight(.heavy).monospacedDigit())
+            Text(title).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(Color(UIColor.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+// MARK: - Profile tabs
+
+extension PlayerDetailView {
+
+    private func isMine(_ club: Club?) -> Bool {
+        guard let club, let user = gameState.userClub else { return false }
+        return club.id == user.id
+    }
+
+    /// "FORM ......... → NEUTRAL": a caption on the left, a value on the right.
+    private func statusRow(_ title: String, _ value: String, icon: String? = nil, tint: Color = .white) -> some View {
+        HStack {
+            Text(title.uppercased()).font(.gfLabel(14)).foregroundStyle(.secondary)
+            Spacer()
+            if let icon { Image(systemName: icon).font(.caption.weight(.bold)).foregroundStyle(tint) }
+            Text(value.uppercased()).font(.gfLabel(15)).foregroundStyle(tint == .white ? Color.white : tint)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title): \(value)")
+    }
+
+    private func bigStat(_ value: String, _ title: String, tint: Color = .white) -> some View {
+        VStack(spacing: 3) {
+            Text(value).font(.gfDisplay(20).monospacedDigit()).foregroundStyle(tint)
+            Text(title.uppercased()).font(.gfLabel(11)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title): \(value)")
+    }
+
+    // MARK: General
+
+    @ViewBuilder
+    fileprivate func generalTab(_ player: Player, _ club: Club?) -> some View {
+        let stats = player.seasonStats
+        // Identity card
+        HStack(alignment: .top, spacing: 16) {
+            FaceView(player: player, size: 72, style: .full)
+                .frame(width: 104, height: 120)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(alignment: .bottomLeading) {
+                    Text("\(player.overall)")
+                        .font(.gfLabel(14)).foregroundStyle(Color.gfNight)
+                        .padding(.horizontal, 12).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.white))
+                        .offset(x: 8, y: 8)
+                }
+            VStack(spacing: 8) {
+                Text(player.positions.map(\.abbreviation).joined(separator: " · "))
+                    .font(.gfLabel(14)).foregroundStyle(Color.gfNight)
+                    .padding(.horizontal, 12).padding(.vertical, 3)
+                    .background(Capsule().fill(player.primaryPosition.category.accentColor))
+                Text(player.nationality.uppercased()).font(.gfLabel(16))
+                HStack(spacing: 6) {
+                    if let club { CrestView(club: club, size: 18) }
+                    Text((club?.name ?? "Free agent").uppercased()).font(.gfLabel(16)).lineLimit(1).minimumScaleFactor(0.6)
+                }
+                HStack {
+                    bigStat("\(player.age)", "Age")
+                    bigStat("\(player.height) cm", "Height")
+                    bigStat(player.preferredFoot.rawValue, "Foot")
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .gfCard()
+        .accessibilityElement(children: .combine)
+
+        // Season stats
+        VStack(spacing: 12) {
+            HStack {
+                Text("SEASON STATS").font(.gfDisplay(18))
+                Spacer()
+                Button { profileTab = .details } label: { Text("DETAILS ›").font(.gfLabel(13)).foregroundStyle(.secondary) }
+            }
+            HStack {
+                bigStat("\(stats.appearances)", "Matches")
+                if player.primaryPosition == .GK {
+                    bigStat("\(stats.cleanSheets)", "Clean sheets")
+                } else {
+                    bigStat("\(stats.goals)", "Goals")
+                }
+                bigStat(player.primaryPosition == .GK ? "\(stats.manOfTheMatch)" : "\(stats.assists)",
+                        player.primaryPosition == .GK ? "MVP awards" : "Assists")
+            }
+            HStack {
+                bigStat(stats.appearances > 0 ? String(format: "%.2f", stats.averageRating) : "–", "Avg rating",
+                        tint: stats.averageRating >= 7 ? Color.gfMint : .white)
+                bigStat("\(stats.yellowCards)", "Yellows", tint: Color(hex: "F2D15C"))
+                bigStat("\(stats.redCards)", "Reds", tint: Color.gfCoral)
+            }
+        }
+        .gfCard()
+
+        // Status
+        let recent = player.form.suffix(3)
+        let formAvg = recent.isEmpty ? 6.5 : recent.reduce(0, +) / Double(recent.count)
+        let delta = player.matchRating - player.overall
+        VStack(spacing: 11) {
+            Text("PLAYER STATUS").font(.gfDisplay(18)).frame(maxWidth: .infinity, alignment: .leading)
+            statusRow("Form", formAvg >= 7.2 ? "Excellent" : formAvg >= 6.7 ? "Good" : formAvg >= 6.2 ? "Neutral" : "Poor",
+                      icon: formAvg >= 6.7 ? "arrow.up.right" : formAvg >= 6.2 ? "arrow.right" : "arrow.down.right",
+                      tint: formAvg >= 6.7 ? Color.gfMint : formAvg >= 6.2 ? Color.gfBanner : Color.gfCoral)
+            statusRow("Morale", player.morale.displayName, icon: "face.smiling")
+            statusRow("Condition", "\(Int(player.matchFitness))%", icon: "circle.dotted",
+                      tint: player.matchFitness >= 85 ? Color.gfMint : player.matchFitness >= 70 ? Color.gfBanner : Color.gfCoral)
+            statusRow("Availability", player.isInjured ? "Injured" : player.isSuspended ? "Suspended" : "Available",
+                      icon: player.isInjured || player.isSuspended ? "xmark" : "checkmark",
+                      tint: player.isInjured || player.isSuspended ? Color.gfCoral : Color.gfMint)
+            statusRow("In match", delta == 0 ? "\(player.matchRating)" : "\(player.matchRating) (\(delta > 0 ? "+" : "")\(delta))",
+                      tint: delta > 0 ? Color.gfMint : delta < 0 ? Color.gfCoral : .white)
+            Divider()
+            statusRow("Market value", player.formattedValue)
+            statusRow("Salary", "\(Player.formatCurrency(player.wage * 52)) /y")
+            statusRow("Contract", player.contract.map { "\($0.yearsRemaining) year\($0.yearsRemaining == 1 ? "" : "s")" } ?? "None")
+            if let club {
+                statusRow("Squad role", gameState.squadRole(of: player, at: club).displayName)
+            }
+            let potential = gameState.potentialEstimate(for: player)
+            statusRow("Potential", potential.lowerBound == potential.upperBound ? "\(potential.lowerBound)" : "\(potential.lowerBound)–\(potential.upperBound)")
+        }
+        .gfCard()
+    }
+
+    // MARK: Attributes
+
+    private func skillBar(_ name: String, _ value: Int) -> some View {
+        let color: Color = value >= 70 ? Color.gfMint : value >= 50 ? Color(hex: "B8DC7A") : value >= 30 ? Color(hex: "F2D15C") : Color.gfCoral
+        return HStack(spacing: 10) {
+            Text(name.uppercased()).font(.gfLabel(14)).foregroundStyle(.secondary).frame(width: 108, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.12))
+                    Capsule().fill(color).frame(width: geo.size.width * CGFloat(max(2, min(99, value))) / 99)
+                }
+            }
+            .frame(height: 8)
+            Text("\(value)").font(.gfLabel(15).monospacedDigit()).frame(width: 28, alignment: .trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(name): \(value)")
+    }
+
+    @ViewBuilder
+    fileprivate func attributesTab(_ player: Player) -> some View {
+        let a = player.attributes
+        VStack(alignment: .leading, spacing: 12) {
+            Text("PLAYER SKILLS").font(.gfDisplay(18))
+            skillBar("Defense", (a.tackling + a.marking + a.positioning) / 3)
+            skillBar("Passing", (a.passing + a.vision + a.crossing) / 3)
+            skillBar("Shooting", (a.shooting + a.longShots + a.penalties) / 3)
+            skillBar("Dribbling", (a.dribbling + a.firstTouch + a.agility) / 3)
+            skillBar("Pace", a.pace)
+            skillBar("Physical", (a.strength + a.stamina + a.jumping) / 3)
+            skillBar("Mental", (a.composure + a.decisions + a.workRate + a.teamwork) / 4)
+            skillBar("Consistency", (a.concentration + a.decisions) / 2)
+            if player.primaryPosition == .GK {
+                skillBar("Goalkeeping", (a.reflexes + a.handling + a.gkPositioning + a.oneOnOnes) / 4)
+            }
+        }
+        .gfCard()
+
+        VStack(alignment: .leading, spacing: 12) {
+            Text("ROLES LEVEL").font(.gfDisplay(18))
+            Text("How well he would play in each position.").font(.caption).foregroundStyle(.secondary)
+            let rows: [[Position]] = [[.LW, .ST, .RW], [.CAM], [.LM, .CM, .RM], [.CDM], [.LB, .CB, .RB], [.GK]]
+            VStack(spacing: 8) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: 8) {
+                        ForEach(row, id: \.self) { pos in
+                            let rating = player.roleRating(at: pos)
+                            let natural = player.positions.contains(pos)
+                            Text("\(pos.abbreviation) \(rating)")
+                                .font(.gfLabel(13).monospacedDigit())
+                                .foregroundStyle(natural ? Color.gfNight : Color.white.opacity(rating >= player.overall - 6 ? 0.95 : 0.55))
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(Capsule().fill(natural ? Color.gfMint : Color.clear))
+                                .overlay(Capsule().stroke(natural ? Color.clear : pos.category.accentColor.opacity(0.7), lineWidth: 1.5))
+                                .frame(maxWidth: .infinity)
+                                .accessibilityLabel("\(pos.displayName): \(rating)\(natural ? ", natural position" : "")")
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.pitchGreen.opacity(0.18)))
+        }
+        .gfCard()
+
+        VStack(alignment: .leading, spacing: 10) {
+            Text("ALL ATTRIBUTES").font(.gfDisplay(18))
+            Group {
+                skillBar("Passing", a.passing); skillBar("Shooting", a.shooting); skillBar("Dribbling", a.dribbling)
+                skillBar("First touch", a.firstTouch); skillBar("Crossing", a.crossing); skillBar("Heading", a.heading)
+                skillBar("Tackling", a.tackling); skillBar("Marking", a.marking)
+            }
+            Group {
+                skillBar("Stamina", a.stamina); skillBar("Strength", a.strength); skillBar("Agility", a.agility)
+                skillBar("Vision", a.vision); skillBar("Composure", a.composure); skillBar("Leadership", a.leadership)
+                skillBar("Free kicks", a.freeKicks); skillBar("Penalties", a.penalties)
+            }
+        }
+        .gfCard()
+
+        if let log = player.careerLog, !log.isEmpty {
+            CareerHistoryCard(log: log)
+        }
+    }
+
+    // MARK: Contract
+
+    @ViewBuilder
+    fileprivate func contractTab(_ player: Player, _ club: Club?) -> some View {
+        let mine = isMine(club)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("CONTRACT").font(.gfDisplay(18))
+                Spacer()
+                if let c = player.contract {
+                    Text("\(c.yearsRemaining)Y").font(.gfLabel(13))
+                        .padding(.horizontal, 10).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.white.opacity(0.18)))
+                }
+            }
+            if let c = player.contract {
+                Text("EXPIRES").font(.gfLabel(12)).foregroundStyle(.secondary)
+                let endYear = (Int(gameState.season.year.prefix(4)) ?? 2026) + max(1, c.yearsRemaining)
+                Text("30TH JUNE \(String(endYear))").font(.gfDisplay(22))
+                HStack(spacing: 12) {
+                    GFValuePill(title: "Salary", value: "\(Player.formatCurrency(c.wage))/w")
+                    GFValuePill(title: "Market value", value: player.formattedValue, tone: .good)
+                }
+                if let clause = c.releaseClause {
+                    statusRow("Release clause", Player.formatCurrency(clause))
+                }
+            } else {
+                Text("No contract: he is a free agent.").font(.subheadline).foregroundStyle(.secondary)
+            }
+            if mine && !player.isOnLoan {
+                Button("Renew") { showingRenewal = true }
+                    .buttonStyle(.gfSolid)
+                    .accessibilityLabel("Offer \(player.fullName) a new contract")
+            }
+        }
+        .gfCard()
+
+        if let club {
+            let share = gameState.minutesShare(of: player, at: club)
+            let expected = gameState.expectedMinutesShare(of: player, at: club)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("SQUAD ROLE").font(.gfDisplay(18))
+                Text(gameState.squadRole(of: player, at: club).displayName.uppercased()).font(.gfDisplay(22))
+                HStack {
+                    Text("MINUTES PLAYED").font(.gfLabel(13)).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(Int(share * 100))%").font(.gfLabel(15))
+                }
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.14))
+                        Capsule().fill(share >= expected - 0.15 ? Color.gfMint : Color.gfCoral)
+                            .frame(width: max(4, geo.size.width * share))
+                        Rectangle().fill(Color.white).frame(width: 2, height: 16)
+                            .offset(x: geo.size.width * expected)
+                    }
+                }
+                .frame(height: 10)
+                Text("EXPECTED \(Int(expected * 100))%").font(.gfLabel(12)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .gfCard()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Squad role: \(gameState.squadRole(of: player, at: club).displayName). Played \(Int(share * 100)) percent of minutes, expects \(Int(expected * 100)) percent.")
+
+            if mine && !player.isOnLoan && gameState.gameMode == .manageClub {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("MARKET").font(.gfDisplay(18))
+                    marketToggle("Transfer list", .transferListed, player)
+                    marketToggle("Loan list", .loanListed, player)
+                    marketToggle("Block offers", .notForSale, player)
+                    Text("Listed players attract offers; blocked players are left alone.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .gfCard()
+            }
+
+            let thoughts = gameState.thoughts(of: player, at: club)
+            if !thoughts.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("WHAT HE THINKS").font(.gfDisplay(18))
+                    ForEach(thoughts, id: \.self) { thought in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Circle()
+                                .fill(thought.tone == .good ? Color.gfMint : thought.tone == .bad ? Color.gfCoral : Color.gfBanner)
+                                .frame(width: 7, height: 7)
+                            Text(thought.text).font(.subheadline)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+                .gfCard()
+            }
+
+            if gameState.gameMode == .manageClub || player.isOnLoan {
+                LoanActionsCard(player: player, club: club)
+            }
+        }
+        if let releaseMessage {
+            Text(releaseMessage).font(.caption.weight(.semibold))
+        }
+    }
+
+    private func marketToggle(_ title: String, _ status: TransferStatus, _ player: Player) -> some View {
+        let isOn = player.transferStatus == status
+        return Button {
+            gameState.setTransferStatus(playerId: player.id, to: isOn ? .available : status)
+        } label: {
+            HStack {
+                Text(title.uppercased()).font(.gfLabel(15))
+                Spacer()
+                Image(systemName: isOn ? "checkmark.square.fill" : "square")
+                    .font(.title3)
+                    .foregroundStyle(isOn ? Color.gfMint : .white)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn ? "On" : "Off")
+        .accessibilityAddTraits(.isToggle)
+    }
+
+    // MARK: Details
+
+    @ViewBuilder
+    fileprivate func detailsTab(_ player: Player, _ club: Club?) -> some View {
+        GFTabs(selection: $detailTab, compact: true)
+        switch detailTab {
+        case .stats:
+            let isKeeper = player.primaryPosition == .GK
+            let log = player.careerLog ?? []
+            let now = player.seasonStats
+            VStack(spacing: 8) {
+                HStack {
+                    Text("YEAR").frame(width: 62, alignment: .leading)
+                    Text("TEAM").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("P").frame(width: 30)
+                    Image(systemName: isKeeper ? "hand.raised.fill" : "soccerball").frame(width: 30)
+                    Image(systemName: isKeeper ? "star.fill" : "shoe.fill").frame(width: 30)
+                    Image(systemName: "star.circle.fill").frame(width: 42)
+                }
+                .font(.gfLabel(13))
+                .accessibilityHidden(true)
+                Divider()
+                ForEach(log) { line in
+                    statLine(year: line.season, team: line.club, p: line.appearances, a: line.goals, b: line.assists, rating: line.averageRating, bold: false)
+                }
+                statLine(year: gameState.season.year, team: club?.shortName ?? "–", p: now.appearances,
+                         a: isKeeper ? now.cleanSheets : now.goals, b: isKeeper ? now.manOfTheMatch : now.assists,
+                         rating: now.averageRating, bold: false)
+                Divider()
+                let totalP = log.reduce(0) { $0 + $1.appearances } + now.appearances
+                statLine(year: "", team: "TOTAL", p: totalP,
+                         a: log.reduce(0) { $0 + $1.goals } + (isKeeper ? now.cleanSheets : now.goals),
+                         b: log.reduce(0) { $0 + $1.assists } + (isKeeper ? now.manOfTheMatch : now.assists),
+                         rating: 0, bold: true)
+            }
+            .gfCard()
+        case .awards:
+            let awards = gameState.history.awards.filter { $0.playerId == player.id }
+            if awards.isEmpty {
+                Label("NO AWARDS YET", systemImage: "xmark.circle.fill").font(.gfLabel(16)).padding(.top, 60)
+            }
+            ForEach(awards) { award in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(award.award.uppercased()).font(.gfLabel(16)).foregroundStyle(Color.goldAccent)
+                    Text("\(award.season) · \(award.clubName)").font(.subheadline.weight(.semibold))
+                    Text(award.detail).font(.caption).foregroundStyle(.secondary)
+                }
+                .gfCard()
+                .accessibilityElement(children: .combine)
+            }
+        case .transfers:
+            let moves = gameState.transferHistory.filter { $0.playerId == player.id }.reversed()
+            if moves.isEmpty {
+                Label("NO TRANSFERS YET", systemImage: "xmark.circle.fill").font(.gfLabel(16)).padding(.top, 60)
+            }
+            ForEach(Array(moves)) { move in
+                VStack(spacing: 6) {
+                    HStack {
+                        Text(move.fromClubName.uppercased()).font(.gfLabel(14)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                        Image(systemName: "chevron.right").font(.caption.weight(.bold))
+                        Text(move.toClubName.uppercased()).font(.gfLabel(14)).lineLimit(1).frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    Text(move.isLoan ? "LOAN" : move.fee == 0 ? "FREE" : Player.formatCurrency(move.fee)).font(.gfDisplay(20))
+                    Text(DashboardView.longDate(move.date)).font(.caption).foregroundStyle(.secondary)
+                }
+                .gfCard()
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(move.fromClubName) to \(move.toClubName), \(move.isLoan ? "loan" : move.fee == 0 ? "free" : Player.spokenCurrency(move.fee)), \(DashboardView.longDate(move.date))")
+            }
+        }
+    }
+
+    private func statLine(year: String, team: String, p: Int, a: Int, b: Int, rating: Double, bold: Bool) -> some View {
+        HStack {
+            Text(year).frame(width: 62, alignment: .leading)
+            Text(team).frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+            Text("\(p)").frame(width: 30)
+            Text("\(a)").frame(width: 30)
+            Text("\(b)").frame(width: 30)
+            Text(rating > 0 ? String(format: "%.2f", rating) : "–").frame(width: 42)
+                .foregroundStyle(rating >= 7 ? Color.gfMint : .white)
+        }
+        .font(bold ? .gfLabel(15).monospacedDigit() : .subheadline.monospacedDigit())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(year) \(team): \(p) played, \(a) and \(b), rating \(rating > 0 ? String(format: "%.2f", rating) : "none")")
+    }
+
+    // MARK: Actions
+
+    @ViewBuilder
+    fileprivate func actionsButton(_ player: Player, _ club: Club?) -> some View {
+        let mine = isMine(club)
+        Menu {
+            if !mine && !player.isOnLoan, gameState.userClub != nil {
+                Button {
+                    gameState.negotiationTargetPlayerId = player.id
+                    showingNegotiation = true
+                } label: { Label(club == nil ? "Offer contract" : "Make transfer bid", systemImage: "arrow.left.arrow.right") }
+                Button { gameState.toggleShortlist(player.id) } label: {
+                    Label(gameState.isShortlisted(player.id) ? "Remove from shortlist" : "Add to shortlist", systemImage: "star")
+                }
+            }
+            if mine && !player.isOnLoan {
+                Button { showingRenewal = true } label: { Label("Renew contract", systemImage: "square.and.pencil") }
+                if gameState.gameMode == .manageClub {
+                    Button { gameState.setTransferStatus(playerId: player.id, to: player.transferStatus == .transferListed ? .available : .transferListed) } label: {
+                        Label(player.transferStatus == .transferListed ? "Remove from transfer list" : "Transfer list", systemImage: "tag")
+                    }
+                    Button(role: .destructive) { confirmingRelease = true } label: {
+                        Label("Release (\(Player.formatCurrency(gameState.releaseCost(for: player))) settlement)", systemImage: "person.badge.minus")
+                    }
+                }
+            }
+            Button { profileTab = .contract } label: { Label("Contract and loans", systemImage: "doc.text") }
+        } label: {
+            Text("ACTIONS")
+                .font(.gfLabel(17))
+                .padding(.horizontal, 44).padding(.vertical, 13)
+                .foregroundStyle(.white)
+                .background(Capsule().fill(Color(hex: "3D7A5C")))
+                .overlay(Capsule().stroke(Color.white.opacity(0.85), lineWidth: 2))
+        }
+        .padding(.vertical, 8)
+        .accessibilityLabel("Actions for \(player.fullName)")
+    }
+}
+
+// MARK: - Loans
+
+/// Loan status and actions for a player: loan out, recall, borrow or send back.
+private struct LoanActionsCard: View {
+    @Environment(GameState.self) private var gameState
+    let player: Player
+    let club: Club
+    @State private var showingDestinations = false
+    @State private var wageShare = 100
+    @State private var terms: LoanTerms = .plain
+    @State private var outcome: String?
+
+    private var isUsersClub: Bool { club.isUserClub }
+    private var managing: Bool { gameState.gameMode == .manageClub }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Loans", systemImage: "arrow.triangle.swap").font(.headline)
+            if let loan = player.loan {
+                Text(isUsersClub
+                     ? "On loan from \(loan.parentClubName). You cover \(loan.wageSharePercent)% of his wages."
+                     : "On loan at \(club.name) from \(loan.parentClubName) until the end of the season.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("\(player.seasonStats.appearances) apps • \(player.seasonStats.goals) goals • \(player.seasonStats.assists) assists this season")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let option = loan.buyOptionFee {
+                    Label("Option to buy: \(Player.formatCurrency(option))", systemImage: "signature")
+                        .font(.caption.weight(.semibold))
+                }
+                if let obligation = loan.obligationFee {
+                    Label("Obligation to buy: \(Player.formatCurrency(obligation)) when the loan ends", systemImage: "signature")
+                        .font(.caption.weight(.semibold))
+                }
+                if managing && isUsersClub, let fee = loan.buyOptionFee ?? loan.obligationFee {
+                    actionButton("Sign Permanently for \(Player.formatCurrency(fee))", icon: "checkmark.seal") {
+                        outcome = gameState.exerciseLoanOption(playerId: player.id)
+                    }
+                }
+                if managing && isUsersClub {
+                    actionButton("Send Back to \(loan.parentClubName)", icon: "arrow.uturn.backward") {
+                        outcome = gameState.endLoanEarly(playerId: player.id)
+                            ? "\(player.fullName) has returned to \(loan.parentClubName)."
+                            : "Loans can only be ended while a transfer window is open, and you need at least 17 players."
+                    }
+                } else if managing && loan.parentClubId == gameState.userClubId {
+                    actionButton("Recall \(player.lastName)", icon: "arrow.uturn.backward") {
+                        outcome = gameState.recallLoanedPlayer(playerId: player.id)
+                            ? "\(player.fullName) is back in your squad."
+                            : "Players can only be recalled while a transfer window is open."
+                    }
+                }
+            } else if isUsersClub {
+                Text(gameState.isTransferWindowOpen
+                     ? "Send him somewhere he will play every week. Young players who play regularly develop faster."
+                     : "Loans can be arranged when the transfer window opens.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if gameState.isTransferWindowOpen {
+                    actionButton("Find a Loan Club", icon: "magnifyingglass") { showingDestinations = true }
+                }
+            } else if gameState.isLoanable(player, at: club) {
+                Text("\(club.name) would consider lending him out. Fee: \(gameState.loanFee(for: player) == 0 ? "none" : Player.formatCurrency(gameState.loanFee(for: player))).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("Wage share", selection: $wageShare) {
+                    Text("50%").tag(50)
+                    Text("75%").tag(75)
+                    Text("100%").tag(100)
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel("Share of his wages you will pay")
+                Picker("Purchase clause", selection: $terms) {
+                    ForEach(LoanTerms.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if let fee = gameState.loanPurchaseFee(for: player, terms: terms) {
+                    Text(terms == .option ? "You may sign him for \(Player.formatCurrency(fee)) during the loan." : "You must sign him for \(Player.formatCurrency(fee)) when the loan ends.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                actionButton("Request Season Loan", icon: "hand.raised") {
+                    switch gameState.requestLoan(playerId: player.id, wageShare: wageShare, terms: terms) {
+                    case .agreed(let share, let fee):
+                        outcome = "Deal done: \(player.fullName) joins on loan (\(share)% wages\(fee > 0 ? ", \(Player.formatCurrency(fee)) fee" : "")."
+                    case .refused(let reason):
+                        outcome = reason
+                    }
+                }
+            } else {
+                Text("\(club.name) consider him a first-team player and will not lend him out.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let outcome {
+                Text(outcome)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+            }
+        }
+        .gfCard()
+        .confirmationDialog("Loan \(player.fullName) to…", isPresented: $showingDestinations, titleVisibility: .visible) {
+            let destinations = gameState.loanDestinations(forPlayerId: player.id)
+            ForEach(destinations) { destination in
+                Button("\(destination.name) (\(destination.leagueTier.displayName))") {
+                    outcome = gameState.loanOutPlayer(playerId: player.id, to: destination.id)
+                        ? "\(player.fullName) has joined \(destination.name) on loan."
+                        : "The loan could not be completed."
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if gameState.loanDestinations(forPlayerId: player.id).isEmpty {
+                Text("No club can currently offer him regular football and afford his wages.")
+            } else {
+                Text("Clubs where he would start and who can cover at least part of his wages.")
+            }
+        }
+    }
+
+    private func actionButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .fontWeight(.semibold)
+                .frame(maxWidth: .infinity)
+                .padding(12)
+                .background(Color.accentColor.opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -3127,6 +3778,44 @@ public struct SettingsView: View {
     @Environment(GameState.self) private var gameState
     @State private var alertMessage: String?
     @State private var showAlert = false
+    /// Slot headers are read once on appear and after each save/delete. Reading
+    /// them inside `body` re-parsed every multi-megabyte save on every redraw.
+    @State private var slotMetadata: [SaveSlot: SaveSlotMetadata] = [:]
+    @State private var slotPendingLoad: SaveSlot?
+    @State private var slotPendingDelete: SaveSlot?
+    @State private var storageUsed = 0
+    @State private var backupSize = 0
+    @AppStorage("gfStadiumTheme") private var stadiumTheme = true
+    @AppStorage("gfShowMatchRating") private var showMatchRating = false
+
+    private func refreshStorage() {
+        storageUsed = SaveManager.shared.storageUsed()
+        backupSize = SaveManager.shared.quarantinedBackupSize()
+    }
+
+    private func refreshSlotMetadata() {
+        var result: [SaveSlot: SaveSlotMetadata] = [:]
+        for slot in SaveSlot.allCases {
+            if let meta = SaveManager.shared.getMetadata(for: slot) {
+                result[slot] = meta
+            }
+        }
+        slotMetadata = result
+    }
+
+    private func load(_ slot: SaveSlot) {
+        do {
+            let loaded = try SaveManager.shared.load(from: slot)
+            gameState.loadCareer(from: loaded)
+            // Make the loaded career the one that "Continue" resumes next launch.
+            if gameState.hasStartedCareer {
+                try? SaveManager.shared.autoSave(gameState: gameState)
+            }
+        } catch {
+            alertMessage = "Could not load \(slot.displayName): \(error.localizedDescription)"
+            showAlert = true
+        }
+    }
     
     public var body: some View {
         List {
@@ -3137,10 +3826,20 @@ public struct SettingsView: View {
                 )) {
                     Label("Sound Effects", systemImage: "speaker.wave.2.fill")
                 }
-                .accessibilityHint("Plays sounds for goals, wins and losses")
+                .accessibilityHint("Plays sound and haptic feedback for goals, wins and losses")
+                Toggle(isOn: $stadiumTheme) {
+                    Label("Stadium Theme", systemImage: "sparkles.tv")
+                }
+                .accessibilityHint("A dark floodlit-stadium look. Turn off to follow the system appearance")
             }
 
-            FeedbackSettingsSection()
+            Section(header: Text("Lineups"),
+                    footer: Text("The match rating is the base rating adjusted for match fitness, sharpness, recent form and morale: how well the player is likely to play next. Green means above his base rating, red below.")) {
+                Toggle(isOn: $showMatchRating) {
+                    Label("Show Match Rating", systemImage: "gauge.with.dots.needle.67percent")
+                }
+                .accessibilityHint("Lineup cards show the match rating instead of the base rating")
+            }
             
             Section(header: Text("Match Playback")) {
                 Picker("Replay Speed", selection: Binding(
@@ -3182,11 +3881,33 @@ public struct SettingsView: View {
                     }
                 }
                 .accessibilityHint("How readily tired players are rotated off")
+
+                Toggle("Assistant rests tired starters", isOn: Binding(
+                    get: { gameState.matchSettings.assistantRotatesTiredPlayers },
+                    set: { gameState.matchSettings.assistantRotatesTiredPlayers = $0 }
+                ))
+                .accessibilityHint("Before each match, starters short of fitness are replaced by fresh squad players of similar quality")
+
+                Toggle("Animated calendar", isOn: Binding(
+                    get: { gameState.matchSettings.animateCalendar },
+                    set: { gameState.matchSettings.animateCalendar = $0 }
+                ))
+                .accessibilityHint("Continue shows the days passing with results and news, instead of jumping straight to match day")
+
+                Toggle("Pause calendar for new mail", isOn: Binding(
+                    get: { gameState.matchSettings.pauseCalendarForMail },
+                    set: { gameState.matchSettings.pauseCalendarForMail = $0 }
+                ))
+                .disabled(!gameState.matchSettings.animateCalendar)
+                .accessibilityHint("The calendar stops to show bids, board messages, contracts and injuries as they arrive")
             }
             
-            Section(header: Text("Manual Save Slots")) {
-                ForEach([SaveSlot.slot1, SaveSlot.slot2, SaveSlot.slot3], id: \.self) { slot in
-                    let metadata = SaveManager.shared.getMetadata(for: slot)
+            Section(
+                header: Text("Save Slots"),
+                footer: Text("Loading replaces the career in progress. Save it to a slot first if you want to keep it.")
+            ) {
+                ForEach(SaveSlot.allCases) { slot in
+                    let metadata = slotMetadata[slot]
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(slot.displayName)
@@ -3206,23 +3927,54 @@ public struct SettingsView: View {
                         }
                         
                         Spacer()
-                        
-                        Button("Save") {
-                            do {
-                                try SaveManager.shared.save(gameState: gameState, to: slot)
-                                alertMessage = "Career saved to \(slot.displayName)."
-                                showAlert = true
-                            } catch {
-                                alertMessage = "Save failed: \(error.localizedDescription)"
-                                showAlert = true
-                            }
+
+                        if metadata != nil {
+                            Button("Load") { slotPendingLoad = slot }
+                                .buttonStyle(.bordered)
+                                .accessibilityLabel("Load \(slot.displayName)")
                         }
-                        .buttonStyle(.bordered)
-                        .accessibilityLabel("Save to \(slot.displayName)")
+                        
+                        if slot != .autoSave {
+                            Button("Save") {
+                                guard gameState.hasStartedCareer else {
+                                    alertMessage = "Start or continue a career before saving."
+                                    showAlert = true
+                                    return
+                                }
+                                do {
+                                    try SaveManager.shared.save(gameState: gameState, to: slot)
+                                    refreshSlotMetadata(); refreshStorage()
+                                    alertMessage = "Career saved to \(slot.displayName)."
+                                    showAlert = true
+                                } catch {
+                                    alertMessage = "Save failed: \(error.localizedDescription)"
+                                    showAlert = true
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityLabel("Save to \(slot.displayName)")
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        if metadata != nil && slot != .autoSave {
+                            Button("Delete", role: .destructive) { slotPendingDelete = slot }
+                        }
                     }
                 }
             }
             
+            Section(header: Text("Storage"), footer: Text("Saves are compressed. Older saves shrink the next time they are saved.")) {
+                LabeledContent("Saves on this device", value: ByteCountFormatter.string(fromByteCount: Int64(storageUsed), countStyle: .file))
+                if backupSize > 0 {
+                    Button(role: .destructive) {
+                        SaveManager.shared.deleteQuarantinedBackups()
+                        refreshStorage()
+                    } label: {
+                        Text("Delete unreadable save backups (\(ByteCountFormatter.string(fromByteCount: Int64(backupSize), countStyle: .file)))")
+                    }
+                }
+            }
+
             Section {
                 Button(role: .destructive, action: {
                     gameState.currentScreen = .mainMenu
@@ -3233,6 +3985,45 @@ public struct SettingsView: View {
         }
         .navigationTitle("Settings & Saves")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            refreshSlotMetadata()
+            refreshStorage()
+        }
+        .confirmationDialog(
+            "Load This Save?",
+            isPresented: Binding(
+                get: { slotPendingLoad != nil },
+                set: { if !$0 { slotPendingLoad = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: slotPendingLoad
+        ) { slot in
+            Button("Load \(slot.displayName)", role: .destructive) {
+                slotPendingLoad = nil
+                load(slot)
+            }
+            Button("Cancel", role: .cancel) { slotPendingLoad = nil }
+        } message: { _ in
+            Text("Any unsaved progress in the current career will be lost.")
+        }
+        .confirmationDialog(
+            "Delete This Save?",
+            isPresented: Binding(
+                get: { slotPendingDelete != nil },
+                set: { if !$0 { slotPendingDelete = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: slotPendingDelete
+        ) { slot in
+            Button("Delete \(slot.displayName)", role: .destructive) {
+                slotPendingDelete = nil
+                try? SaveManager.shared.deleteSave(for: slot)
+                refreshSlotMetadata(); refreshStorage()
+            }
+            Button("Cancel", role: .cancel) { slotPendingDelete = nil }
+        } message: { _ in
+            Text("This cannot be undone.")
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Done") {
@@ -3260,6 +4051,16 @@ public struct FinancesView: View {
         List {
             if let club = gameState.userClub {
                 let f = club.finances
+
+                if let flow = gameState.weeklyCashFlow {
+                    Section(header: Text("This Week's Money"), footer: Text(flow.advice)) {
+                        row("Income", Player.formatCurrency(flow.income) + "/w", spoken: Player.spokenCurrency(flow.income) + " per week")
+                        row("Costs", Player.formatCurrency(flow.costs) + "/w", spoken: Player.spokenCurrency(flow.costs) + " per week")
+                        row("Net", (flow.net >= 0 ? "+" : "−") + Player.formatCurrency(abs(flow.net)) + "/w",
+                            spoken: (flow.net >= 0 ? "profit of " : "loss of ") + Player.spokenCurrency(abs(flow.net)) + " per week")
+                        row("Forecast season-end balance", Player.formatCurrency(flow.projectedBalance), spoken: Player.spokenCurrency(flow.projectedBalance))
+                    }
+                }
 
                 Section(header: Text("Bank")) {
                     row("Balance", Player.formatCurrency(f.balance), spoken: Player.spokenCurrency(f.balance))
@@ -3321,6 +4122,14 @@ public struct FinancesView: View {
 
 public struct NegotiationView: View {
     @Environment(GameState.self) private var gameState
+    /// Set when shown as a sheet over a player's profile; otherwise the
+    /// negotiation is a full screen and closing returns to the dashboard.
+    var onClose: (() -> Void)? = nil
+
+    private func close() {
+        gameState.negotiationTargetPlayerId = nil
+        if let onClose { onClose() } else { gameState.currentScreen = .dashboard }
+    }
 
     @State private var bidFee: Double = 0
     @State private var wage: Double = 1_000
@@ -3361,134 +4170,259 @@ public struct NegotiationView: View {
         .navigationTitle("Negotiate")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Transfer Update", isPresented: $showOutcome) {
-            Button("OK") {
-                gameState.negotiationTargetPlayerId = nil
-                gameState.currentScreen = .dashboard
-            }
+            Button("OK") { close() }
         } message: {
             Text(outcomeMessage ?? "")
         }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
-                    gameState.negotiationTargetPlayerId = nil
-                    gameState.currentScreen = .dashboard
-                }
+                Button("Cancel") { close() }
                 .accessibilityLabel("Cancel negotiation")
             }
         }
         .onAppear(perform: primeFields)
     }
     
+    @State private var negotiationPage = 0
+
     private func form(for player: Player, club: Club?) -> some View {
-        Form {
-            Section(header: Text("Target")) {
+        TabView(selection: $negotiationPage) {
+            introPage(player: player, club: club).tag(0)
+            offerPage(player: player, club: club).tag(1)
+        }
+        .tabViewStyle(.page(indexDisplayMode: .always))
+        .indexViewStyle(.page(backgroundDisplayMode: .interactive))
+        .stadiumBackground()
+    }
+
+    /// Page one: who you're dealing with.
+    private func introPage(player: Player, club: Club?) -> some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                Text(player.fullName.uppercased()).font(.gfDisplay(20)).multilineTextAlignment(.center)
+                HStack(spacing: 6) {
+                    if let club { CrestView(club: club, size: 18) }
+                    Text(club?.name ?? "Free agent").font(.headline)
+                }
+                FaceView(player: player, size: 110, style: .full)
+                    .frame(width: 170, height: 190)
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                Text(liveOffer == nil ? "TRANSFER OFFER" : "NEGOTIATION IN PROGRESS").font(.gfDisplay(20))
+                negotiationChips(player)
                 HStack(spacing: 14) {
-                    FaceView(player: player, size: 52, style: .full)
-                        .frame(width: 52, height: 60)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(player.fullName).font(.headline)
-                        Text("\(player.primaryPosition.displayName) • Age \(player.age)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text("\(club?.name ?? "Free Agent") • Value \(player.formattedValue)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    GFValuePill(title: "Market value", value: Player.formatCurrency(player.value))
+                    GFValuePill(title: "Salary", value: "\(Player.formatCurrency(player.wage))/w")
                 }
+                .gfCard(padding: 14)
+                Button("Start") { withAnimation { negotiationPage = 1 } }
+                    .buttonStyle(.gfOutline)
+                    .padding(.horizontal, 70)
+                    .padding(.top, 6)
             }
-            
-            if let offer = liveOffer, offer.status == .counterOffer, let counter = offer.counterFee {
-                Section(header: Text("Selling Club's Counter")) {
-                    HStack {
-                        Text("They want")
-                        Spacer()
-                        Text(Player.formatCurrency(counter)).fontWeight(.bold)
-                    }
-                    Text("Your last bid was \(Player.formatCurrency(offer.fee)). Accept it below or raise your offer.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button {
-                        gameState.acceptCounter(offerId: offer.id)
-                        gameState.negotiationTargetPlayerId = nil
-                        gameState.currentScreen = .dashboard
-                    } label: {
-                        Label("Accept \(Player.formatCurrency(counter))", systemImage: "checkmark.circle")
-                    }
-                    Button(role: .destructive) {
-                        gameState.withdrawOffer(offerId: offer.id)
-                        gameState.negotiationTargetPlayerId = nil
-                        gameState.currentScreen = .dashboard
-                    } label: {
-                        Label("Withdraw", systemImage: "xmark.circle")
-                    }
-                }
+            .padding()
+            .padding(.bottom, 30)
+        }
+    }
+
+    private func negotiationChips(_ player: Player) -> some View {
+        HStack(spacing: 18) {
+            Text("\(player.overall)")
+                .font(.gfLabel(14))
+                .foregroundStyle(Color.gfNight)
+                .padding(.horizontal, 12).padding(.vertical, 3)
+                .background(Capsule().fill(Color.white))
+            Text("\(player.age) YEARS").font(.gfLabel(17))
+            Text(player.primaryPosition.abbreviation)
+                .font(.gfLabel(14))
+                .foregroundStyle(Color.gfNight)
+                .padding(.horizontal, 12).padding(.vertical, 3)
+                .background(Capsule().fill(player.primaryPosition.category.accentColor))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Rated \(player.overall), \(player.age) years old, \(player.primaryPosition.displayName)")
+    }
+
+    /// What the other side is saying right now.
+    private func theirMessage(player: Player, club: Club?) -> String {
+        if let offer = liveOffer {
+            switch offer.status {
+            case .counterOffer:
+                return "We value \(player.lastName) at \(Player.formatCurrency(offer.counterFee ?? offer.askingPrice)). Your offer of \(Player.formatCurrency(offer.fee)) is not enough."
+            case .personalTerms:
+                return "The clubs have agreed a fee. \(player.lastName) wants \(Player.formatCurrency(offer.demandedWage ?? player.wage)) a week to sign."
+            case .pending, .accepted:
+                return "We're considering your offer of \(Player.formatCurrency(offer.fee)) and will reply shortly."
+            default:
+                break
             }
-            
-            if let offer = liveOffer, offer.status == .personalTerms, let demand = offer.demandedWage {
-                Section(header: Text("Player's Wage Demands")) {
-                    HStack {
-                        Text("He wants")
-                        Spacer()
-                        Text("\(Player.formatCurrency(demand))/w").fontWeight(.bold)
+        }
+        if club == nil {
+            return "My client is a free agent. Make him a fair offer and he will listen."
+        }
+        if let club, let user = gameState.userClub, gameState.rivalry(between: club.id, and: user.id) != nil {
+            return "We will never sell to you. Not at any price."
+        }
+        return "\(player.lastName) is valued at \(Player.formatCurrency(player.value)). What are you offering?"
+    }
+
+    /// Page two: the haggling.
+    private func offerPage(player: Player, club: Club?) -> some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                Text(player.fullName.uppercased())
+                    .font(.gfDisplay(18))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.gfNavy))
+                    .overlay(Capsule().stroke(Color.white, lineWidth: 2))
+                Text(club?.name ?? "Free agent").font(.subheadline)
+                negotiationChips(player)
+
+                Text("TRANSFER OFFER").font(.gfLabel(15))
+                Text(theirMessage(player: player, club: club))
+                    .font(.body)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(14)
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.gfSurface))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.gfStroke))
+
+                if club != nil {
+                    VStack(spacing: 10) {
+                        Text("TRANSFER FEE").font(.gfDisplay(18))
+                        HStack(spacing: 14) {
+                            GFValuePill(title: "Market value", value: Player.formatCurrency(player.value))
+                            if let offer = liveOffer, let counter = offer.counterFee {
+                                GFValuePill(title: "Their price", value: Player.formatCurrency(counter), tone: .bad)
+                            } else {
+                                GFValuePill(title: "Budget", value: Player.formatCurrency(gameState.userClub?.finances.transferBudget ?? 0), tone: .good)
+                            }
+                        }
+                        Text("YOUR OFFER").font(.gfLabel(14))
+                        valueStepper(value: $bidFee, step: feeStep(player), range: 0...feeUpperBound(for: player), label: "Transfer fee") {
+                            Player.formatCurrency(Int($0))
+                        }
                     }
-                    Text("Your last offer was \(Player.formatCurrency(offer.offeredWage ?? 0))/w. Meet the demand by resubmitting a bid below.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    .gfCard(padding: 14)
                 }
-            }
-            
-            Section(header: Text("Your Offer")) {
-                VStack(alignment: .leading) {
-                    Text(club == nil ? "Free Agent: No Transfer Fee" : "Transfer Fee: \(Player.formatCurrency(Int(bidFee)))")
-                    Slider(value: $bidFee, in: 0...max(Double(player.value) * 2.0, 100_000), step: 50_000)
-                        .disabled(club == nil)
-                }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Transfer fee")
-                .accessibilityValue(club == nil ? "No fee" : Player.formatCurrency(Int(bidFee)))
-                
-                VStack(alignment: .leading) {
-                    Text("Weekly Wage: \(Player.formatCurrency(Int(wage)))/w")
-                    Slider(value: $wage, in: 500...max(Double(player.wage) * 4, 80_000), step: 500)
-                }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Weekly wage offer")
-                .accessibilityValue("\(Player.formatCurrency(Int(wage))) per week")
-                
-                Stepper("Contract: \(contractYears) years", value: $contractYears, in: 1...5)
-            }
-            
-            if let userClub = gameState.userClub {
-                Section(header: Text("Budget Check")) {
-                    HStack {
-                        Text("Transfer Budget")
-                        Spacer()
-                        Text(Player.formatCurrency(userClub.finances.transferBudget))
-                            .fontWeight(.semibold)
+
+                VStack(spacing: 10) {
+                    Text("PERSONAL TERMS").font(.gfDisplay(18))
+                    Text("WEEKLY WAGE").font(.gfLabel(14))
+                    valueStepper(value: $wage, step: max(500, (wage / 20 / 500).rounded() * 500), range: 500...bidWageUpperBound(for: player), label: "Weekly wage") {
+                        "\(Player.formatCurrency(Int($0)))/w"
                     }
-                    HStack {
-                        Text("Wage Headroom")
-                        Spacer()
-                        Text("\(Player.formatCurrency(userClub.finances.weeklyWageSurplus))/w")
-                            .fontWeight(.semibold)
+                    Text("CONTRACT").font(.gfLabel(14))
+                    valueStepper(value: Binding(get: { Double(contractYears) }, set: { contractYears = Int($0) }),
+                                 step: 1, range: 1...5, label: "Contract length") {
+                        "\(Int($0)) YEAR\(Int($0) == 1 ? "" : "S")"
+                    }
+                    if let user = gameState.userClub {
+                        Text("Wage room \(Player.formatCurrency(user.finances.weeklyWageSurplus))/w")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-            }
-            
-            Section {
-                Button(action: submit) {
-                    Text(submitButtonLabel)
-                        .fontWeight(.bold)
-                        .frame(maxWidth: .infinity)
+                .gfCard(padding: 14)
+
+                if club != nil && liveOffer == nil && !gameState.isTransferWindowOpen {
+                    Text("\(gameState.transferWindowStatus). Players under contract can only be signed in a window; free agents any time.")
+                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
-                .disabled(isAwaitingResponse)
-                .accessibilityLabel("Submit transfer bid")
-                .accessibilityHint(isAwaitingResponse ? "The selling club has not responded yet" : "")
+
+                if let offer = liveOffer, offer.status == .counterOffer, let counter = offer.counterFee {
+                    HStack(spacing: 12) {
+                        Button("Accept \(Player.formatCurrency(counter))") {
+                            let name = player.fullName
+                            outcomeMessage = gameState.acceptCounter(offerId: offer.id)
+                                ? "Deal done! \(name) has joined for \(Player.formatCurrency(counter))."
+                                : "The deal fell through: the fee or wage no longer fits your budgets."
+                            showOutcome = true
+                        }
+                        .buttonStyle(.gfSolid)
+                        Button("Withdraw") {
+                            gameState.withdrawOffer(offerId: offer.id)
+                            close()
+                        }
+                        .buttonStyle(.gfDanger)
+                    }
+                }
+
+                Button(submitButtonLabel, action: submit)
+                    .buttonStyle(.gfPrimary)
+                    .padding(.horizontal, 40)
+                    .disabled(isAwaitingResponse
+                              || (club != nil && liveOffer == nil && !gameState.isTransferWindowOpen)
+                              || isRivalSeller(club))
+                    .accessibilityHint(isAwaitingResponse ? "The selling club has not responded yet" : "")
+            }
+            .padding()
+            .padding(.bottom, 30)
+        }
+    }
+
+    private func feeStep(_ player: Player) -> Double {
+        let raw = Double(max(player.value, 100_000)) / 20
+        let magnitude = pow(10, floor(log10(raw)))
+        return max(10_000, (raw / magnitude).rounded() * magnitude)
+    }
+
+    /// "‹  £50.4K  ›": arrows nudge the value; VoiceOver can swipe it.
+    private func valueStepper(value: Binding<Double>, step: Double, range: ClosedRange<Double>, label: String,
+                              format: @escaping (Double) -> String) -> some View {
+        HStack {
+            Button { value.wrappedValue = max(range.lowerBound, value.wrappedValue - step) } label: {
+                Image(systemName: "chevron.left").font(.headline.weight(.bold)).frame(width: 40, height: 36)
+            }
+            .accessibilityHidden(true)
+            Text(format(value.wrappedValue))
+                .font(.gfDisplay(20).monospacedDigit())
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(Color.gfNavy))
+                .overlay(Capsule().stroke(Color.white.opacity(0.3)))
+            Button { value.wrappedValue = min(range.upperBound, value.wrappedValue + step) } label: {
+                Image(systemName: "chevron.right").font(.headline.weight(.bold)).frame(width: 40, height: 36)
+            }
+            .accessibilityHidden(true)
+        }
+        .foregroundStyle(.white)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(format(value.wrappedValue))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: value.wrappedValue = min(range.upperBound, value.wrappedValue + step)
+            case .decrement: value.wrappedValue = max(range.lowerBound, value.wrappedValue - step)
+            @unknown default: break
             }
         }
     }
-    
+
+    private func isRivalSeller(_ club: Club?) -> Bool {
+        guard let club, let userClub = gameState.userClub else { return false }
+        return gameState.rivalry(between: club.id, and: userClub.id) != nil
+    }
+
+    /// Slider ceiling for the fee. It must always reach the seller's counter or
+    /// asking price, which can exceed twice the market value for young players
+    /// on long contracts; otherwise the user could never meet the demand.
+    private func feeUpperBound(for player: Player) -> Double {
+        var ceiling = max(Double(player.value) * 2.5, 100_000)
+        if let offer = liveOffer {
+            ceiling = max(ceiling, Double(offer.counterFee ?? 0) * 1.25)
+        }
+        return ceiling.rounded(.up)
+    }
+
+    /// Slider ceiling for the weekly wage, always above any stated demand.
+    private func bidWageUpperBound(for player: Player) -> Double {
+        var ceiling = max(Double(player.wage) * 4, 80_000)
+        if let demand = liveOffer?.demandedWage {
+            ceiling = max(ceiling, Double(demand) * 1.5)
+        }
+        return ceiling
+    }
+
     private func primeFields() {
         guard let lookup = target else { return }
         let isFreeAgent = lookup.club == nil
@@ -3509,12 +4443,27 @@ public struct NegotiationView: View {
     
     private func submit() {
         guard let id = gameState.negotiationTargetPlayerId else { return }
-        if let offer = liveOffer, offer.status == .counterOffer {
+        if let offer = liveOffer, offer.status == .counterOffer,
+           let counter = offer.counterFee, Int(bidFee) >= counter {
+            // Meeting the club's own counter closes the deal.
+            let name = gameState.player(withId: id)?.player.fullName ?? "The player"
+            outcomeMessage = gameState.acceptCounter(offerId: offer.id)
+                ? "Deal done! \(name) has joined for \(Player.formatCurrency(counter))."
+                : "The deal fell through: the fee or wage no longer fits your budgets."
+        } else if let offer = liveOffer, offer.status == .counterOffer {
             gameState.bumpOffer(offerId: offer.id, newFee: Int(bidFee), newWage: Int(wage))
-            outcomeMessage = "Your revised offer of \(Player.formatCurrency(Int(bidFee))) has been submitted. Await their response."
+            outcomeMessage = "Your revised offer of \(Player.formatCurrency(Int(bidFee))) has been submitted. Expect a reply next week."
         } else if let offer = liveOffer, offer.status == .personalTerms {
             gameState.bumpOffer(offerId: offer.id, newFee: offer.fee, newWage: Int(wage))
-            outcomeMessage = "You have offered \(Player.formatCurrency(Int(wage)))/w. The player and his agent will respond shortly."
+            let status = gameState.pendingTransferOffers.first { $0.id == offer.id }?.status
+            let name = gameState.player(withId: id)?.player.fullName ?? "The player"
+            if status == .completed {
+                outcomeMessage = "Deal done! \(name) has signed on \(Player.formatCurrency(Int(wage)))/w."
+            } else if status == .rejected {
+                outcomeMessage = "The deal fell through: his wage does not fit your wage budget."
+            } else {
+                outcomeMessage = "You have offered \(Player.formatCurrency(Int(wage)))/w. His agent will reply next week."
+            }
         } else if let offer = gameState.submitTransferBid(
             playerId: id,
             fee: Int(bidFee),
@@ -3522,14 +4471,22 @@ public struct NegotiationView: View {
             contractYears: contractYears
         ) {
             if offer.status == .rejected {
-                outcomeMessage = "The bid could not be submitted. Check the club's transfer budget and weekly wage headroom, then try again."
+                outcomeMessage = gameState.news.first?.body
+                    ?? "The bid could not be submitted. Check the club's transfer budget and weekly wage headroom, then try again."
             } else if gameState.player(withId: id)?.club == nil {
                 outcomeMessage = "Your offer has been submitted. The player and his agent will respond shortly — watch your inbox."
             } else {
                 outcomeMessage = "Your bid has been submitted. The selling club will respond in the coming days — watch your inbox."
             }
         } else {
-            outcomeMessage = "Unable to submit a bid for this player right now."
+            let p = gameState.player(withId: id)?.player
+            if p?.isOnLoan == true {
+                outcomeMessage = "He is on loan and cannot be signed until his loan ends."
+            } else if gameState.player(withId: id)?.club != nil && !gameState.isTransferWindowOpen {
+                outcomeMessage = "The transfer window is closed. Clubs can only sell players in the summer and January windows."
+            } else {
+                outcomeMessage = "Unable to submit a bid for this player right now."
+            }
         }
         showOutcome = true
         try? SaveManager.shared.autoSave(gameState: gameState)
@@ -3551,7 +4508,7 @@ public struct EuropeanCompetitionsView: View {
             Section {
                 Picker("Competition", selection: $selectedCompetition) {
                     ForEach(EuropeanCompetition.allCases) { comp in
-                        Text(comp.displayName).tag(comp)
+                        Text(comp.shortName).tag(comp)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -3601,7 +4558,7 @@ public struct EuropeanCompetitionsView: View {
                         .filter { $0.homeClubId == userClubId || $0.awayClubId == userClubId }
                         .sorted { $0.matchweek < $1.matchweek }
                     if !userFixtures.isEmpty {
-                        Section(header: Text("Your \(state.competition.displayName) Fixtures")) {
+                        Section(header: Text("Your \(state.competition.shortName) Fixtures")) {
                             ForEach(userFixtures) { fx in
                                 EuropeanFixtureRow(fixture: fx, competitionState: state)
                             }
@@ -3668,6 +4625,10 @@ private struct EuropeanFixtureRow: View {
 public struct NewsFeedView: View {
     @Environment(GameState.self) private var gameState
     @State private var categoryFilter: NewsCategory?
+    @State private var mode: Mode = .news
+    @State private var socialKind: SocialPost.Kind = .general
+
+    enum Mode: String, CaseIterable { case news = "News", terrace = "The Terrace" }
 
     private var items: [NewsItem] {
         if let categoryFilter {
@@ -3678,6 +4639,14 @@ public struct NewsFeedView: View {
 
     public var body: some View {
         List {
+            Section {
+                GFTabs(selection: $mode)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+            }
+            if mode == .terrace {
+                terraceSections
+            } else {
             Section {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -3701,7 +4670,7 @@ public struct NewsFeedView: View {
                             Text(item.category.displayName.uppercased())
                                 .font(.caption2)
                                 .fontWeight(.bold)
-                                .foregroundStyle(Color.brand)
+                                .foregroundStyle(Color.accentColor)
                             Spacer()
                             Text(item.date)
                                 .font(.caption2)
@@ -3720,8 +4689,10 @@ public struct NewsFeedView: View {
                     .accessibilityElement(children: .combine)
                 }
             }
+            }
         }
-        .navigationTitle("News")
+        .stadiumBackground()
+        .navigationTitle(mode == .terrace ? "The Terrace" : "News")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if gameState.currentScreen == .news {
@@ -3733,6 +4704,71 @@ public struct NewsFeedView: View {
         }
     }
 
+    /// Posts from players and clubs about the season's results and deals.
+    @ViewBuilder
+    private var terraceSections: some View {
+        let feed = gameState.socialFeed()
+        let shown = feed.filter { socialKind == .myTeam ? $0.involvesUser : $0.kind == socialKind || (socialKind == .general && $0.kind == .myTeam) }
+        Section {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(SocialPost.Kind.allCases) { kind in
+                        newsChip(kind.rawValue, active: socialKind == kind) { socialKind = kind }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
+        }
+        if shown.isEmpty {
+            ContentUnavailableView("All Quiet", systemImage: "bubble.left.and.bubble.right",
+                                   description: Text("Posts appear as matches are played and deals are done."))
+        }
+        ForEach(shown) { post in
+            HStack(alignment: .top, spacing: 12) {
+                Group {
+                    if let seed = post.faceSeed {
+                        FaceView(seed: seed, size: 52)
+                    } else if let id = post.clubId, let club = gameState.club(withId: id) {
+                        CrestView(club: club, size: 46)
+                    } else {
+                        Image(systemName: "person.crop.circle.fill").font(.largeTitle)
+                    }
+                }
+                .frame(width: 54)
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Text(post.handle).font(.gfLabel(15)).lineLimit(1)
+                        Spacer()
+                        Text(DashboardView.shortDate(post.date)).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text(post.text).font(.subheadline)
+                    if let tag = post.hashtag {
+                        Text(tag).font(.gfLabel(13)).foregroundStyle(Color.gfMint).lineLimit(2)
+                    }
+                    HStack(spacing: 18) {
+                        Label(Self.compact(post.likes), systemImage: "heart.fill")
+                        Label(Self.compact(post.reposts), systemImage: "arrow.2.squarepath")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 6)
+            .listRowBackground(Color.gfSurface)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    /// 1234567 → "1.23M".
+    static func compact(_ n: Int) -> String {
+        switch n {
+        case 1_000_000...: return String(format: "%.2fM", Double(n) / 1_000_000)
+        case 1_000...: return String(format: "%.0fK", Double(n) / 1_000)
+        default: return "\(n)"
+        }
+    }
+
     @ViewBuilder
     private func newsChip(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -3741,9 +4777,10 @@ public struct NewsFeedView: View {
                 .fontWeight(active ? .bold : .regular)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(active ? Color.brand : Color.surface)
-                .foregroundStyle(active ? .white : .primary)
+                .background(active ? Color.white : Color.gfNavy.opacity(0.85))
+                .foregroundStyle(active ? Color.gfNight : Color.white)
                 .clipShape(Capsule())
+                .overlay(Capsule().stroke(Color.white.opacity(active ? 0 : 0.5), lineWidth: 1))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
@@ -3811,7 +4848,7 @@ public struct InternationalHubView: View {
             Section {
                 Picker("Tournament", selection: $selectedTournament) {
                     ForEach(InternationalTournament.Kind.allCases) { kind in
-                        Text(kind.displayName).tag(kind)
+                        Text(kind.shortName).tag(kind)
                     }
                 }
                 .pickerStyle(.menu)
@@ -3934,7 +4971,7 @@ public struct YouthAcademyView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(scout.name)
                                     .font(.body)
-                                Text("Lead Scout • \(scout.quality)-star")
+                                Text("Lead Scout • \(String(repeating: "★", count: scout.quality))")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }

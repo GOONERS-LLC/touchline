@@ -86,7 +86,7 @@ public struct FaceStatGridView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
-                .background(Color.surface)
+                .background(Color(UIColor.secondarySystemGroupedBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(stat.label) \(stat.value) out of 99")

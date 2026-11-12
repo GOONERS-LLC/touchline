@@ -66,13 +66,13 @@ public struct Season: Codable, Hashable {
     public func upcomingFixtures(forClub clubId: UUID) -> [Fixture] {
         return fixtures
             .filter { $0.involves(clubId: clubId) && !$0.isPlayed }
-            .sorted { $0.matchWeek < $1.matchWeek }
+            .sorted { ($0.matchWeek, $0.date) < ($1.matchWeek, $1.date) }
     }
     
     public func completedFixtures(forClub clubId: UUID) -> [Fixture] {
         return fixtures
             .filter { $0.involves(clubId: clubId) && $0.isPlayed }
-            .sorted { $0.matchWeek < $1.matchWeek }
+            .sorted { ($0.matchWeek, $0.date) < ($1.matchWeek, $1.date) }
     }
     
     public func nextFixture(forClub clubId: UUID) -> Fixture? {
@@ -99,6 +99,12 @@ public struct Fixture: Codable, Identifiable, Hashable {
     public var competition: String
     public var isPlayed: Bool
     public var result: MatchResult?
+    /// Set for domestic-cup ties (e.g. "Quarter-Final"); nil for league games.
+    /// Cup ties are knockouts decided by extra time and penalties if needed.
+    public var cupRound: String?
+    /// For the user's European ties, which are played as normal match days:
+    /// the id of the matching fixture in the European competition.
+    public var europeanFixtureId: UUID?
     
     public init(
         id: UUID = UUID(),
@@ -108,7 +114,9 @@ public struct Fixture: Codable, Identifiable, Hashable {
         date: String,
         competition: String,
         isPlayed: Bool = false,
-        result: MatchResult? = nil
+        result: MatchResult? = nil,
+        cupRound: String? = nil,
+        europeanFixtureId: UUID? = nil
     ) {
         self.id = id
         self.homeClubId = homeClubId
@@ -118,6 +126,19 @@ public struct Fixture: Codable, Identifiable, Hashable {
         self.competition = competition
         self.isPlayed = isPlayed
         self.result = result
+        self.cupRound = cupRound
+        self.europeanFixtureId = europeanFixtureId
+    }
+
+    public var isCupTie: Bool { cupRound != nil }
+    public var isEuropean: Bool { europeanFixtureId != nil }
+
+    /// The club that went through, for a played cup tie. Shootout winners are
+    /// credited with an extra goal by the match engine, so goals decide it.
+    public var winnerClubId: UUID? {
+        guard isPlayed, let result else { return nil }
+        if result.homeGoals == result.awayGoals { return nil }
+        return result.homeGoals > result.awayGoals ? homeClubId : awayClubId
     }
     
     public func involves(clubId: UUID) -> Bool {
@@ -219,21 +240,30 @@ public struct FixtureGenerator {
     
     /// Generates a complete double round-robin schedule for a given set of club IDs.
     /// Every club plays every other club exactly once at home and once away.
+    ///
+    /// Leagues with an odd number of clubs are supported by adding a "bye" slot:
+    /// each round one club rests, and every club still meets every other club
+    /// twice. (Previously an odd league silently produced no fixtures at all, so
+    /// a 23-club division never played a match.)
     public static func generateDoubleRoundRobin(
         clubIds: [UUID],
         competitionName: String,
-        startDateString: String = "2024-08-10"
+        startDateString: String = "2024-08-10",
+        skippingWeeks: Set<Int> = [],
+        singleRoundRobin: Bool = false
     ) -> [Fixture] {
-        let clubs = clubIds
-        // The rotation algorithm below indexes both the fixed club and a
-        // rotating opponent.  Empty and one-club leagues are invalid inputs,
-        // but returning no fixtures keeps a malformed import from crashing the
-        // app during bootstrap.
-        guard clubs.count >= 2, clubs.count.isMultiple(of: 2) else {
-            return []
+        // Ignore accidental duplicates so a club can never be drawn against itself.
+        var seen = Set<UUID>()
+        let uniqueClubs = clubIds.filter { seen.insert($0).inserted }
+        guard uniqueClubs.count >= 2 else { return [] }
+
+        // `nil` is the bye slot for odd-sized leagues.
+        var slots: [UUID?] = uniqueClubs.map { Optional($0) }
+        if !slots.count.isMultiple(of: 2) {
+            slots.append(nil)
         }
         
-        let n = clubs.count
+        let n = slots.count
         let singleRounds = n - 1
         let matchesPerRound = n / 2
         
@@ -243,69 +273,83 @@ public struct FixtureGenerator {
         let baseDate = dateFormatter.date(from: startDateString) ?? Date()
         let calendar = Calendar.current
         
+        // League round -> calendar week, leaving reserved (cup) weeks free.
+        var calendarWeeks: [Int] = []
+        var candidateWeek = 1
+        while calendarWeeks.count < singleRounds * (singleRoundRobin ? 1 : 2) {
+            if !skippingWeeks.contains(candidateWeek) { calendarWeeks.append(candidateWeek) }
+            candidateWeek += 1
+        }
+        func week(forRound round: Int) -> Int { calendarWeeks[round - 1] }
+        
         var generatedFixtures: [Fixture] = []
         
-        // Use polygon rotation method
-        // Keep clubs[0] stationary, rotate clubs[1..<n]
-        var rotatingClubs = Array(clubs[1...])
+        // Polygon (circle) method: keep slots[0] stationary, rotate slots[1..<n].
+        let stationary = slots[0]
+        var rotating = Array(slots[1...])
         
-        // 1. Generate First Half of the Season (Rounds 1 to n-1)
+        // 1. First half of the season (rounds 1 to n-1).
         for round in 1...singleRounds {
-            let roundDate = calendar.date(byAdding: .day, value: (round - 1) * 7, to: baseDate) ?? baseDate
+            let roundDate = calendar.date(byAdding: .day, value: (week(forRound: round) - 1) * 7, to: baseDate) ?? baseDate
             let dateStr = dateFormatter.string(from: roundDate)
             
             for match in 0..<matchesPerRound {
-                let home: UUID
-                let away: UUID
+                let first: UUID?
+                let second: UUID?
                 
                 if match == 0 {
-                    // Match against the stationary club
-                    let opponent = rotatingClubs[0]
+                    // Match against the stationary slot, alternating venue.
                     if round % 2 == 1 {
-                        home = clubs[0]
-                        away = opponent
+                        first = stationary
+                        second = rotating[0]
                     } else {
-                        home = opponent
-                        away = clubs[0]
+                        first = rotating[0]
+                        second = stationary
                     }
                 } else {
-                    let teamA = rotatingClubs[match]
-                    let teamB = rotatingClubs[rotatingClubs.count - match]
+                    let teamA = rotating[match]
+                    let teamB = rotating[rotating.count - match]
                     if match % 2 == 1 {
-                        home = teamA
-                        away = teamB
+                        first = teamA
+                        second = teamB
                     } else {
-                        home = teamB
-                        away = teamA
+                        first = teamB
+                        second = teamA
                     }
                 }
                 
+                // A pairing with the bye slot means that club rests this round.
+                guard let home = first, let away = second else { continue }
                 generatedFixtures.append(
                     Fixture(
                         homeClubId: home,
                         awayClubId: away,
-                        matchWeek: round,
+                        matchWeek: week(forRound: round),
                         date: dateStr,
                         competition: competitionName
                     )
                 )
             }
             
-            // Rotate circular array (last element moves to index 0)
-            if let last = rotatingClubs.popLast() {
-                rotatingClubs.insert(last, at: 0)
+            // Rotate circular array (last element moves to index 0).
+            if let last = rotating.popLast() {
+                rotating.insert(last, at: 0)
             }
         }
         
-        // 2. Generate Second Half of the Season (Rounds n to 2*(n-1))
-        // Mirrors first half with inverted venues
+        // Very large leagues (30 clubs) play each opponent once, as real
+        // leagues of that size do, so their season fits the calendar.
+        if singleRoundRobin { return generatedFixtures }
+
+        // 2. Second half of the season (rounds n to 2*(n-1)) mirrors the first
+        // half with the venues inverted.
+        let firstHalf = generatedFixtures
         for round in 1...singleRounds {
-            let secondHalfWeek = round + singleRounds
+            let secondHalfWeek = week(forRound: round + singleRounds)
             let roundDate = calendar.date(byAdding: .day, value: (secondHalfWeek - 1) * 7, to: baseDate) ?? baseDate
             let dateStr = dateFormatter.string(from: roundDate)
             
-            let firstHalfMatches = generatedFixtures.filter { $0.matchWeek == round }
-            for match in firstHalfMatches {
+            for match in firstHalf where match.matchWeek == week(forRound: round) {
                 generatedFixtures.append(
                     Fixture(
                         homeClubId: match.awayClubId, // Inverted
@@ -319,5 +363,49 @@ public struct FixtureGenerator {
         }
         
         return generatedFixtures
+    }
+}
+
+// MARK: - Table Zones
+
+/// What a finishing position means for a club, used to colour league tables.
+public enum TableZone: String, CaseIterable, Hashable {
+    case champions
+    case europe
+    case promotion
+    case playOff
+    case relegation
+    case none
+
+    public var displayName: String {
+        switch self {
+        case .champions: return "Champions"
+        case .europe: return "European places"
+        case .promotion: return "Automatic promotion"
+        case .playOff: return "Play-offs"
+        case .relegation: return "Relegation"
+        case .none: return ""
+        }
+    }
+}
+
+extension LeagueTier {
+    /// The zone for a 1-based `position` in a table of `clubCount` clubs.
+    /// `hasHigherTier` / `hasLowerTier` say whether promotion and relegation
+    /// actually exist this season (single-division countries have neither).
+    public func zone(forPosition position: Int, clubCount: Int, hasHigherTier: Bool, hasLowerTier: Bool) -> TableZone {
+        guard position >= 1, position <= clubCount else { return .none }
+        if hasLowerTier, position > clubCount - min(relegationCount, clubCount) {
+            return .relegation
+        }
+        if isTopFlight {
+            if position == 1 { return .champions }
+            if position <= europeanSlots { return .europe }
+            return .none
+        }
+        guard hasHigherTier else { return position == 1 ? .champions : .none }
+        if position <= autoPromotionCount { return .promotion }
+        if playoffPromotionCount > 0, position <= autoPromotionCount + 4 { return .playOff }
+        return .none
     }
 }

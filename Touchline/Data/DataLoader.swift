@@ -13,41 +13,41 @@ import Foundation
 // MARK: - Raw JSON Transfer DTOs
 
 public struct RawLeagueData: Codable {
-    public let name: String
-    public let tier: Int
-    public let clubs: [RawClubData]
+    public var name: String
+    public var tier: Int
+    public var clubs: [RawClubData]
 }
 
 public struct RawClubData: Codable {
-    public let name: String
-    public let shortName: String
-    public let stadium: String
-    public let stadiumCapacity: Int
-    public let primaryColor: String
-    public let secondaryColor: String
-    public let city: String
-    public let manager: String
-    public let reputation: Int
-    public let budget: Int?
-    public let wageBudget: Int?
-    public let players: [RawPlayerData]
+    public var name: String
+    public var shortName: String
+    public var stadium: String
+    public var stadiumCapacity: Int
+    public var primaryColor: String
+    public var secondaryColor: String
+    public var city: String
+    public var manager: String
+    public var reputation: Int
+    public var budget: Int?
+    public var wageBudget: Int?
+    public var players: [RawPlayerData]
 }
 
 public struct RawPlayerData: Codable {
-    public let firstName: String
-    public let lastName: String
-    public let nationality: String
-    public let age: Int
-    public let positions: [String]
-    public let overall: Int
-    public let potential: Int
-    public let preferredFoot: String?
-    public let height: Int?
-    public let weight: Int?
-    public let value: Int?
-    public let wage: Int?
-    public let contractYears: Int?
-    public let specialties: [String: Int]?
+    public var firstName: String
+    public var lastName: String
+    public var nationality: String
+    public var age: Int
+    public var positions: [String]
+    public var overall: Int
+    public var potential: Int
+    public var preferredFoot: String?
+    public var height: Int?
+    public var weight: Int?
+    public var value: Int?
+    public var wage: Int?
+    public var contractYears: Int?
+    public var specialties: [String: Int]?
 }
 
 // MARK: - DataLoader
@@ -191,6 +191,15 @@ public final class DataLoader {
     }
 
     private static func loadRawLeague(for tier: LeagueTier) -> RawLeagueData? {
+        // An active datapack replaces the bundled data for a new world.
+        if let pack = DatapackStore.shared.activePack {
+            return pack.leagues.first { $0.tier == tier.rawValue }
+        }
+        return bundledLeague(for: tier)
+    }
+
+    /// The league as shipped with the app.
+    public static func bundledLeague(for tier: LeagueTier) -> RawLeagueData? {
         for res in resourceNames(for: tier) {
             if let bundleUrl = Bundle.main.url(forResource: res, withExtension: "json"),
                let data = try? Data(contentsOf: bundleUrl),
@@ -210,9 +219,18 @@ public final class DataLoader {
             clubPlayers.append(player)
         }
         
-        // If club has fewer than 18 players, supplement with procedurally generated squad members
+        // If club has fewer than 18 players, supplement with procedurally
+        // generated squad members pitched at the club's level: slightly below
+        // its real players, or derived from its reputation when it has none.
         if clubPlayers.count < 18 {
-            let filler = generateProceduralSquad(targetCount: 22 - clubPlayers.count, tier: tier)
+            let quality: Int
+            if clubPlayers.isEmpty {
+                quality = max(45, min(85, Int((0.55 * Double(raw.reputation) + 36).rounded())))
+            } else {
+                let average = Double(clubPlayers.reduce(0) { $0 + $1.overall }) / Double(clubPlayers.count)
+                quality = max(45, min(85, Int(average.rounded()) - 3))
+            }
+            let filler = generateProceduralSquad(targetCount: 22 - clubPlayers.count, tier: tier, quality: quality)
             clubPlayers.append(contentsOf: filler)
         }
         
@@ -235,7 +253,15 @@ public final class DataLoader {
             stadiumCapacity: raw.stadiumCapacity
         )
         
-        return Club(
+        // Some source squads list no goalkeeper at all.
+        let keepers = clubPlayers.filter { $0.primaryPosition == .GK }.count
+        if keepers < 2 {
+            let ratings = clubPlayers.map(\.overall).sorted(by: >).prefix(18)
+            let level = ratings.isEmpty ? 55 : ratings.reduce(0, +) / ratings.count
+            clubPlayers += generateProceduralSquad(targetCount: 2 - keepers, tier: tier, quality: max(40, level - 4))
+        }
+
+        var club = Club(
             name: raw.name,
             shortName: raw.shortName,
             stadium: raw.stadium,
@@ -249,6 +275,8 @@ public final class DataLoader {
             manager: raw.manager,
             finances: finances
         )
+        club.ensureWageHeadroom()
+        return club
     }
     
     // MARK: - Raw Player Conversion
@@ -540,10 +568,9 @@ public final class DataLoader {
     
     // MARK: - Procedural Squad Generator (e.g. for Created Club or Fillers)
     
-    public static func generateProceduralSquad(targetCount: Int = 22, tier: LeagueTier) -> [Player] {
-        let firstNames = ["James", "Jack", "Harry", "Oliver", "George", "Noah", "Charlie", "Jacob", "Alfie", "Freddie", "Oscar", "Leo", "Logan", "Archie", "Theo", "Thomas", "Arthur", "Mason", "Henry", "Lucas", "Liam", "Ethan"]
-        let lastNames = ["Smith", "Jones", "Taylor", "Brown", "Williams", "Wilson", "Johnson", "Davies", "Robinson", "Wright", "Thompson", "Evans", "Walker", "White", "Roberts", "Green", "Hall", "Wood", "Jackson", "Clarke"]
-        
+    /// Generates squad players for a club. `quality` is the target average
+    /// overall; when omitted, a typical level for the division is used.
+    public static func generateProceduralSquad(targetCount: Int = 22, tier: LeagueTier, quality: Int? = nil) -> [Player] {
         let targetPositions: [Position] = [
             .GK, .GK,
             .CB, .CB, .CB, .CB,
@@ -557,31 +584,34 @@ public final class DataLoader {
         ]
         
         let baseRating: Int
-        switch tier.level {
-        case 1: baseRating = tier.country == .england ? 78 : 76
-        case 2: baseRating = 67
-        case 3: baseRating = 59
-        default: baseRating = 51
+        if let quality {
+            baseRating = quality
+        } else {
+            switch tier.level {
+            case 1: baseRating = tier.country == .england ? 78 : 76
+            case 2: baseRating = 67
+            case 3: baseRating = 59
+            default: baseRating = 51
+            }
         }
         
         var squad: [Player] = []
         for i in 0..<min(targetCount, targetPositions.count) {
             let pos = targetPositions[i]
-            let fn = firstNames.randomElement() ?? "Alex"
-            let ln = lastNames.randomElement() ?? "Hunter"
+            let identity = NamePools.randomIdentity(for: tier.country)
             let age = Int.random(in: 18...33)
             let variance = Int.random(in: -5...6)
             let overall = max(40, min(92, baseRating + variance))
             let potential = age < 24 ? overall + Int.random(in: 4...12) : overall
             
             let attrs = generateAttributes(overall: overall, position: pos)
-            let weeklyWage = max(400, overall * 35)
+            let weeklyWage = Player.calculateWage(overall: overall, age: age, tier: tier)
             let contract = Contract(wage: weeklyWage, yearsRemaining: Int.random(in: 1...4))
             
             let player = Player(
-                firstName: fn,
-                lastName: ln,
-                nationality: "England",
+                firstName: identity.first,
+                lastName: identity.last,
+                nationality: identity.nationality,
                 age: age,
                 height: pos == .GK ? Int.random(in: 187...196) : Int.random(in: 172...188),
                 weight: pos == .GK ? Int.random(in: 80...92) : Int.random(in: 66...82),
@@ -603,10 +633,6 @@ public final class DataLoader {
     /// Generates a batch of youth academy prospects (aged 15-18) whose quality
     /// scales with the club's academy level, reputation and tier.
     public static func generateAcademyProspects(count: Int, club: Club) -> [Player] {
-        let firstNames = ["James", "Jack", "Harry", "Oliver", "George", "Noah", "Charlie", "Jacob", "Alfie", "Freddie", "Oscar", "Leo", "Logan", "Archie", "Theo", "Thomas", "Arthur", "Mason", "Henry", "Lucas", "Liam", "Ethan", "Kai", "Reece", "Finley", "Blake"]
-        let lastNames = ["Smith", "Jones", "Taylor", "Brown", "Williams", "Wilson", "Johnson", "Davies", "Robinson", "Wright", "Thompson", "Evans", "Walker", "White", "Roberts", "Green", "Hall", "Wood", "Jackson", "Clarke", "Patel", "Murphy", "Hughes", "Okafor", "Mensah", "Doyle"]
-        let nationalities = ["England", "Spain", "France", "Portugal", "Brazil", "Netherlands", "Germany", "Italy", "Argentina", "Belgium"]
-
         let developmentPositions: [Position] = [.GK, .CB, .LB, .RB, .CDM, .CM, .CAM, .LM, .RM, .LW, .RW, .ST, .CB, .CM, .ST]
 
         // Academy level (1-5), reputation and scouting drive the ceiling.
@@ -635,10 +661,12 @@ public final class DataLoader {
             let potential = max(overall + 5, min(88, overall + potBonus))
 
             let attrs = generateAttributes(overall: overall, position: pos)
+            // Academies are mostly local, with some overseas recruits.
+            let identity = NamePools.randomIdentity(for: club.leagueTier.country)
             let player = Player(
-                firstName: firstNames.randomElement() ?? "Alex",
-                lastName: lastNames.randomElement() ?? "Hunter",
-                nationality: nationalities.randomElement() ?? "England",
+                firstName: identity.first,
+                lastName: identity.last,
+                nationality: identity.nationality,
                 age: age,
                 height: pos == .GK ? Int.random(in: 180...194) : Int.random(in: 165...188),
                 weight: pos == .GK ? Int.random(in: 72...88) : Int.random(in: 58...78),

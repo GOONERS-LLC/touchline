@@ -19,25 +19,36 @@ public struct MatchEngine {
         public var competition: String
         public var date: String
         public var isKnockout: Bool
+        /// 0 for an ordinary match; 1-3 for a derby of rising ferocity.
+        public var derbyIntensity: Int
+        /// Coaching influence on each side (1.0 = neutral; a few percent either way).
+        public var homeCoachingMultiplier: Double
+        public var awayCoachingMultiplier: Double
         
         public init(
             neutralVenue: Bool = false,
             matchWeek: Int = 1,
             competition: String = "League Match",
             date: String = "2024-09-01",
-            isKnockout: Bool = false
+            isKnockout: Bool = false,
+            derbyIntensity: Int = 0,
+            homeCoachingMultiplier: Double = 1.0,
+            awayCoachingMultiplier: Double = 1.0
         ) {
             self.neutralVenue = neutralVenue
             self.matchWeek = matchWeek
             self.competition = competition
             self.date = date
             self.isKnockout = isKnockout
+            self.derbyIntensity = max(0, min(3, derbyIntensity))
+            self.homeCoachingMultiplier = max(0.9, min(1.1, homeCoachingMultiplier))
+            self.awayCoachingMultiplier = max(0.9, min(1.1, awayCoachingMultiplier))
         }
     }
     
     // MARK: - In-Match Active Player State
     
-    private struct ActiveMatchPlayer {
+    struct ActiveMatchPlayer {
         var player: Player
         var currentFatigue: Double = 0.0 // 0 to 100% fatigue during the game
         var currentRating: Double = 6.0
@@ -105,6 +116,101 @@ public struct MatchEngine {
     ) -> MatchResult {
         return simulate(homeClub: &home, awayClub: &away, config: config)
     }
+
+    /// A match stopped at half-time: everything the engine needs to play
+    /// the second half, plus the story so far.
+    public struct PausedMatch {
+        var homeActive: [ActiveMatchPlayer]
+        var awayActive: [ActiveMatchPlayer]
+        var homeDeparted: [ActiveMatchPlayer]
+        var awayDeparted: [ActiveMatchPlayer]
+        var homeBench: [Player]
+        var awayBench: [Player]
+        var homeSubsUsed: Int
+        var awaySubsUsed: Int
+        var homeGoals: Int
+        var awayGoals: Int
+        var events: [MatchEvent]
+        var counters: [Double]
+        var secondHalfStoppage: Int
+        var maxMinute: Int
+        var minute: Int
+        /// The first half as a result: score, events and stats so far.
+        public var snapshot: MatchResult
+
+        public var homeOnPitch: [UUID] { homeActive.map { $0.player.id } }
+        public var awayOnPitch: [UUID] { awayActive.map { $0.player.id } }
+        public var homeBenchIds: [UUID] { homeBench.map { $0.id } }
+        public var awayBenchIds: [UUID] { awayBench.map { $0.id } }
+        public var homeSubsRemaining: Int { max(0, 5 - homeSubsUsed) }
+        public var awaySubsRemaining: Int { max(0, 5 - awaySubsUsed) }
+        /// Players who have already gone off (or been sent off) and cannot return.
+        public var unavailableIds: Set<UUID> {
+            Set((homeDeparted + awayDeparted).map { $0.player.id })
+                .union((homeActive + awayActive).filter { $0.isSentOff }.map { $0.player.id })
+        }
+        public var sentOffIds: Set<UUID> {
+            Set((homeActive + awayActive).filter { $0.isSentOff }.map { $0.player.id })
+        }
+    }
+
+    /// Plays the first half only. Nothing is written back to the clubs yet.
+    public static func playFirstHalf(home: inout Club, away: inout Club, config: SimulationConfig) -> PausedMatch? {
+        simulateCore(homeClub: &home, awayClub: &away, config: config, resume: nil, pauseAfter: 45).1
+    }
+
+    /// Plays the rest of a paused match. The clubs' current tactics and
+    /// starting elevens are used, so half-time changes take effect.
+    public static func resume(_ paused: PausedMatch, home: inout Club, away: inout Club, config: SimulationConfig) -> MatchResult {
+        simulateCore(homeClub: &home, awayClub: &away, config: config, resume: paused, pauseAfter: nil).0
+    }
+
+    /// Brings the players on the pitch into line with the club's chosen
+    /// eleven: new names come on for those left out (while substitutions
+    /// remain), and the order follows the lineup so players take their
+    /// new positions.
+    private static func applyLineupChanges(
+        club: Club,
+        active: inout [ActiveMatchPlayer],
+        bench: inout [Player],
+        departed: inout [ActiveMatchPlayer],
+        subsUsed: inout Int,
+        isHome: Bool,
+        minute: Int,
+        events: inout [MatchEvent]
+    ) {
+        let wanted = club.tactics.startingXI
+        let onPitch = Set(active.map { $0.player.id })
+        let gone = Set(departed.map { $0.player.id })
+        var incoming = wanted.filter { !onPitch.contains($0) && !gone.contains($0) }
+            .compactMap { id in club.players.first { $0.id == id } }
+            .filter { $0.injury == nil && $0.suspendedMatches == 0 }
+        let outgoingIdx = active.indices.filter { !wanted.contains(active[$0].player.id) && !active[$0].isSentOff }
+        for idx in outgoingIdx {
+            guard subsUsed < 5, !incoming.isEmpty else { break }
+            let playerIn = incoming.removeFirst()
+            let out = active[idx]
+            var marked = out
+            marked.isSubstitutedOut = true
+            departed.append(marked)
+            active[idx] = ActiveMatchPlayer(player: playerIn, currentFatigue: 0.0, currentRating: 6.0)
+            bench.removeAll { $0.id == playerIn.id }
+            subsUsed += 1
+            let commentary = Commentary.substitution(playerIn: playerIn, playerOut: out.player, club: club, minute: minute)
+            events.append(MatchEvent(minute: minute, type: .substitution, clubId: club.id, playerId: playerIn.id,
+                                     shortText: commentary.short, detailText: commentary.detail, isHomeTeam: isHome))
+        }
+        // Positions follow the order of the chosen eleven.
+        let order = Dictionary(uniqueKeysWithValues: wanted.enumerated().map { ($1, $0) })
+        active = active.enumerated().sorted { a, b in
+            (order[a.element.player.id] ?? 100 + a.offset) < (order[b.element.player.id] ?? 100 + b.offset)
+        }.map { $0.element }
+        // The bench is whoever is still available and not on the pitch.
+        let nowOn = Set(active.map { $0.player.id })
+        let nowGone = Set(departed.map { $0.player.id })
+        bench = club.substitutePlayers.filter { !nowOn.contains($0.id) && !nowGone.contains($0.id) }
+            + bench.filter { b in !nowOn.contains(b.id) && !nowGone.contains(b.id) && !club.substitutePlayers.contains { $0.id == b.id } }
+    }
     
     // MARK: - Core Simulation Loop
     
@@ -113,6 +219,16 @@ public struct MatchEngine {
         awayClub: inout Club,
         config: SimulationConfig
     ) -> MatchResult {
+        simulateCore(homeClub: &homeClub, awayClub: &awayClub, config: config, resume: nil, pauseAfter: nil).0
+    }
+
+    private static func simulateCore(
+        homeClub: inout Club,
+        awayClub: inout Club,
+        config: SimulationConfig,
+        resume: PausedMatch?,
+        pauseAfter: Int?
+    ) -> (MatchResult, PausedMatch?) {
         homeClub.ensureTacticalIntegrity()
         awayClub.ensureTacticalIntegrity()
         
@@ -148,25 +264,55 @@ public struct MatchEngine {
         var awayPossessionSeconds = 0.0
         
         // Kickoff event
-        events.append(
+        if resume == nil { events.append(
             MatchEvent(
                 minute: 1,
                 type: .kickOff,
-                shortText: "Kick-off! \(homeClub.name) vs \(awayClub.name) is underway.",
-                detailText: "The referee blows the whistle and the match begins at \(homeClub.stadium).",
+                shortText: config.derbyIntensity > 0
+                    ? "Derby day! \(homeClub.name) vs \(awayClub.name) is underway."
+                    : "Kick-off! \(homeClub.name) vs \(awayClub.name) is underway.",
+                detailText: config.derbyIntensity > 0
+                    ? "A ferocious atmosphere at \(homeClub.stadium) as the referee gets the derby underway. Bragging rights are on the line."
+                    : "The referee blows the whistle and the match begins at \(homeClub.stadium).",
                 isHomeTeam: true
             )
-        )
+        ) }
         
-        // Calculate injury times
-        let firstHalfStoppage = Int.random(in: 1...4)
-        let secondHalfStoppage = Int.random(in: 2...6)
+        // Second-half stoppage time (first-half added time is folded into
+        // the minute-by-minute flow rather than extending the clock).
+        var secondHalfStoppage = Int.random(in: 2...6)
         
         // Determine total minutes (90 + stoppage, or 120 if knockout & draw)
         var maxMinute = 90 + secondHalfStoppage
         
         // Minute-by-minute simulation
         var minute = 1
+
+        // Picking a paused match back up: restore the state at the whistle
+        // and apply any half-time changes to either side.
+        if let r = resume {
+            homeActive = r.homeActive; awayActive = r.awayActive
+            homeDeparted = r.homeDeparted; awayDeparted = r.awayDeparted
+            homeBench = r.homeBench; awayBench = r.awayBench
+            homeSubsUsed = r.homeSubsUsed; awaySubsUsed = r.awaySubsUsed
+            homeGoals = r.homeGoals; awayGoals = r.awayGoals
+            events = r.events
+            homeShots = Int(r.counters[0]); awayShots = Int(r.counters[1])
+            homeShotsOnTarget = Int(r.counters[2]); awayShotsOnTarget = Int(r.counters[3])
+            homeCorners = Int(r.counters[4]); awayCorners = Int(r.counters[5])
+            homeFouls = Int(r.counters[6]); awayFouls = Int(r.counters[7])
+            homeXG = r.counters[8]; awayXG = r.counters[9]
+            homeSaves = Int(r.counters[10]); awaySaves = Int(r.counters[11])
+            homePossessionSeconds = r.counters[12]; awayPossessionSeconds = r.counters[13]
+            secondHalfStoppage = r.secondHalfStoppage
+            maxMinute = r.maxMinute
+            minute = r.minute
+            applyLineupChanges(club: homeClub, active: &homeActive, bench: &homeBench, departed: &homeDeparted,
+                               subsUsed: &homeSubsUsed, isHome: true, minute: minute, events: &events)
+            applyLineupChanges(club: awayClub, active: &awayActive, bench: &awayBench, departed: &awayDeparted,
+                               subsUsed: &awaySubsUsed, isHome: false, minute: minute, events: &events)
+        }
+
         while minute <= maxMinute {
             
             // Half-time whistle
@@ -244,13 +390,13 @@ public struct MatchEngine {
                 tactics: homeClub.tactics,
                 isHome: true,
                 neutralVenue: config.neutralVenue
-            )
+            ) * config.homeCoachingMultiplier
             let awayStrength = calculateTeamStrength(
                 activePlayers: awayActive,
                 tactics: awayClub.tactics,
                 isHome: false,
                 neutralVenue: config.neutralVenue
-            )
+            ) * config.awayCoachingMultiplier
             
             // Possession allocation for this minute. Clamp so a stronger side cannot
             // monopolise every chance; real matches rarely exceed ~70/30 possession.
@@ -260,9 +406,16 @@ public struct MatchEngine {
                 * homeClub.tactics.pressing.defensiveMultiplier
             let awayPossessionFactor = awayClub.tactics.passingStyle.possessionMultiplier
                 * awayClub.tactics.pressing.defensiveMultiplier
-            let totalStrength = max(1.0, homeStrength * homePossessionFactor + awayStrength * awayPossessionFactor)
-            let rawPossessionChance = (homeStrength * homePossessionFactor) / totalStrength
-            let homePossessionChance = min(0.68, max(0.32, rawPossessionChance))
+            // Quality differences are amplified (a power curve rather than a
+            // straight ratio): with a linear split an 80-rated side facing a
+            // 70-rated one won only 53% of the match's events, so favourites
+            // won barely more often than underdogs.
+            // In a derby the form book counts for less.
+            let sensitivity = strengthSensitivity - Double(config.derbyIntensity) * 1.2
+            let homeWeight = pow(max(1.0, homeStrength * homePossessionFactor), sensitivity)
+            let awayWeight = pow(max(1.0, awayStrength * awayPossessionFactor), sensitivity)
+            let rawPossessionChance = homeWeight / (homeWeight + awayWeight)
+            let homePossessionChance = min(0.78, max(0.22, rawPossessionChance))
             let isHomeInPossession = Double.random(in: 0...1) < homePossessionChance
             if isHomeInPossession {
                 homePossessionSeconds += 60.0
@@ -297,8 +450,21 @@ public struct MatchEngine {
             // The defending side's tactical solidity reduces the chance of events.
             let defendingTactics = isHomeInPossession ? awayClub.tactics : homeClub.tactics
             let defenceModifier = 1.0 / defensiveFactor(tactics: defendingTactics)
+
+            // Cumulative thresholds for each event band. Each band starts where
+            // the previous one ends, so a fast tempo widens the attacking bands
+            // without swallowing the foul and injury bands (previously a fast
+            // tempo pushed the free-kick band past the fixed foul ceiling of 18,
+            // so sides facing a fast-tempo team never committed a foul or
+            // received a card).
+            let chanceCeiling = 10.5 * tempoChanceModifier * marginModifier * defenceModifier
+            let cornerCeiling = max(chanceCeiling, 13.0 * tempoChanceModifier)
+            let freeKickCeiling = max(cornerCeiling, 14.5 * tempoChanceModifier)
+            // Derbies are fiercer: more fouls and, through them, more cards.
+            let foulCeiling = freeKickCeiling + 3.5 + Double(config.derbyIntensity) * 1.2
+            let injuryCeiling = foulCeiling + 1.5
             
-            if eventRoll < (8.5 * tempoChanceModifier * marginModifier * defenceModifier) {
+            if eventRoll < chanceCeiling {
                 // Open play chance
                 resolveChance(
                     isHomeAttacking: isHomeInPossession,
@@ -319,7 +485,7 @@ public struct MatchEngine {
                     minute: minute,
                     events: &events
                 )
-            } else if eventRoll < (13.0 * tempoChanceModifier) {
+            } else if eventRoll < cornerCeiling {
                 // Corner Kick
                 resolveCorner(
                     isHomeAttacking: isHomeInPossession,
@@ -340,7 +506,7 @@ public struct MatchEngine {
                     minute: minute,
                     events: &events
                 )
-            } else if eventRoll < (14.5 * tempoChanceModifier) {
+            } else if eventRoll < freeKickCeiling {
                 // Dangerous Free Kick
                 resolveFreeKick(
                     isHomeAttacking: isHomeInPossession,
@@ -359,7 +525,7 @@ public struct MatchEngine {
                     minute: minute,
                     events: &events
                 )
-            } else if eventRoll < 18.0 {
+            } else if eventRoll < foulCeiling {
                 // Foul and Disciplinary check
                 resolveFoul(
                     isHomeTeamFouling: !isHomeInPossession,
@@ -382,7 +548,7 @@ public struct MatchEngine {
                     minute: minute,
                     events: &events
                 )
-            } else if eventRoll < 19.5 {
+            } else if eventRoll < injuryCeiling {
                 // In-match injury roll
                 checkInMatchInjury(
                     homeActive: &homeActive,
@@ -392,6 +558,13 @@ public struct MatchEngine {
                     minute: minute,
                     events: &events
                 )
+            }
+            
+            // Minor, unpunished fouls that break up play. They feed the match
+            // stats (real matches see ~20 fouls) without triggering cards or set
+            // pieces; only the disciplinary fouls above can be booked.
+            if Double.random(in: 0..<1) < 0.17 {
+                if isHomeInPossession { awayFouls += 1 } else { homeFouls += 1 }
             }
             
             // Check if knockout match reached full time tied -> Trigger Extra Time (91-120)
@@ -406,6 +579,34 @@ public struct MatchEngine {
                     )
                 )
                 maxMinute = 120
+            }
+
+            // Half-time: hand the match back so changes can be made.
+            if let pauseAfter, minute == pauseAfter {
+                let total = max(1.0, homePossessionSeconds + awayPossessionSeconds)
+                let homePoss = ((homePossessionSeconds / total) * 1000.0).rounded() / 10.0
+                func stats(_ poss: Double, _ shots: Int, _ onTarget: Int, _ corners: Int, _ fouls: Int, _ saves: Int, _ xg: Double) -> MatchStats {
+                    MatchStats(possession: poss, shots: shots, shotsOnTarget: onTarget, corners: corners, fouls: fouls,
+                               offsides: 0, passAccuracy: 82, tacklesWon: 8, saves: saves, xG: (xg * 100).rounded() / 100)
+                }
+                var ratings: [UUID: Double] = [:]
+                for ap in homeActive + homeDeparted + awayActive + awayDeparted { ratings[ap.player.id] = (ap.currentRating * 10).rounded() / 10 }
+                let snapshot = MatchResult(
+                    homeClubId: homeClub.id, awayClubId: awayClub.id, homeGoals: homeGoals, awayGoals: awayGoals,
+                    events: events, matchWeek: config.matchWeek, competition: config.competition, date: config.date,
+                    attendance: homeClub.finances.expectedAttendance(opponentReputation: awayClub.reputation),
+                    homeStats: stats(homePoss, homeShots, homeShotsOnTarget, homeCorners, homeFouls, homeSaves, homeXG),
+                    awayStats: stats(((100.0 - homePoss) * 10).rounded() / 10, awayShots, awayShotsOnTarget, awayCorners, awayFouls, awaySaves, awayXG),
+                    playerRatings: ratings, manOfTheMatch: nil)
+                let paused = PausedMatch(
+                    homeActive: homeActive, awayActive: awayActive, homeDeparted: homeDeparted, awayDeparted: awayDeparted,
+                    homeBench: homeBench, awayBench: awayBench, homeSubsUsed: homeSubsUsed, awaySubsUsed: awaySubsUsed,
+                    homeGoals: homeGoals, awayGoals: awayGoals, events: events,
+                    counters: [Double(homeShots), Double(awayShots), Double(homeShotsOnTarget), Double(awayShotsOnTarget),
+                               Double(homeCorners), Double(awayCorners), Double(homeFouls), Double(awayFouls), homeXG, awayXG,
+                               Double(homeSaves), Double(awaySaves), homePossessionSeconds, awayPossessionSeconds],
+                    secondHalfStoppage: secondHalfStoppage, maxMinute: maxMinute, minute: minute + 1, snapshot: snapshot)
+                return (snapshot, paused)
             }
             
             minute += 1
@@ -485,14 +686,7 @@ public struct MatchEngine {
         // visiting side, rather than a flat random fill of the stadium.
         let attendance = homeClub.finances.expectedAttendance(opponentReputation: awayClub.reputation)
         
-        // Offsides: real flags in the commentary that match the stat line.
-        events.append(contentsOf: offsideEvents(count: homeStats.offsides, club: homeClub, squad: homeAll, isHome: true, lastMinute: maxMinute))
-        events.append(contentsOf: offsideEvents(count: awayStats.offsides, club: awayClub, squad: awayAll, isHome: false, lastMinute: maxMinute))
-        events = events.enumerated()
-            .sorted { $0.element.minute == $1.element.minute ? $0.offset < $1.offset : $0.element.minute < $1.element.minute }
-            .map { $0.element }
-
-        var matchResult = MatchResult(
+        let matchResult = MatchResult(
             homeClubId: homeClub.id,
             awayClubId: awayClub.id,
             homeGoals: homeGoals,
@@ -507,10 +701,6 @@ public struct MatchEngine {
             playerRatings: ratingsMap,
             manOfTheMatch: motm?.player.id
         )
-        matchResult.homeLineup = homeClub.tactics.startingXI
-        matchResult.awayLineup = awayClub.tactics.startingXI
-        matchResult.homeFormation = homeClub.tactics.formation
-        matchResult.awayFormation = awayClub.tactics.formation
         
         // 9. Sync results back to clubs and update players' persistent models
         applyMatchToClub(club: &homeClub, activePlayers: homeAll, opponentGoals: awayGoals, motmId: motm?.player.id)
@@ -519,23 +709,9 @@ public struct MatchEngine {
         homeClub.seasonResults.append(matchResult)
         awayClub.seasonResults.append(matchResult)
         
-        return matchResult
+        return (matchResult, nil)
     }
     
-    /// Builds offside flags at believable moments, avoiding the half-time whistle.
-    private static func offsideEvents(count: Int, club: Club, squad: [ActiveMatchPlayer], isHome: Bool, lastMinute: Int) -> [MatchEvent] {
-        let runners = squad.filter { [PositionCategory.forward, .midfielder].contains($0.player.primaryPosition.category) }
-        guard !runners.isEmpty else { return [] }
-        var minutes = Set<Int>()
-        while minutes.count < count { minutes.insert([Int](2...min(88, lastMinute)).filter { $0 != 45 }.randomElement()!) }
-        return minutes.sorted().map { minute in
-            let runner = (runners.filter { $0.player.primaryPosition.category == .forward }.randomElement() ?? runners.randomElement()!).player
-            let commentary = Commentary.offside(player: runner, club: club, minute: minute)
-            return MatchEvent(minute: minute, type: .offside, clubId: club.id, playerId: runner.id,
-                              shortText: commentary.short, detailText: commentary.detail, isHomeTeam: isHome)
-        }
-    }
-
     // MARK: - Chance Resolution
     
     private static func resolveChance(
@@ -585,7 +761,11 @@ public struct MatchEngine {
         let baseChanceQuality = (shootingSkill * 0.6 + composureSkill * 0.4) / 100.0
         
         let chanceXG = min(0.50, max(0.03, baseChanceQuality * Double.random(in: 0.25...0.70)))
-        if isHomeAttacking { homeXG += chanceXG } else { awayXG += chanceXG }
+        // Reported xG is the chance's real scoring probability against an
+        // average keeper (the raw chance quality used to be reported, which
+        // overstated xG nearly twofold: 11 shots could show 3.8 xG).
+        let reportedXG = chanceXG * 0.78 * (1.20 - 0.70 * 0.55)
+        if isHomeAttacking { homeXG += reportedXG } else { awayXG += reportedXG }
         
         // Opposition goalkeeper
         let defendingSquad = isHomeAttacking ? awayActive : homeActive
@@ -711,27 +891,6 @@ public struct MatchEngine {
                     isHomeTeam: isHomeAttacking
                 )
             )
-        } else if Double.random(in: 0...1) < 0.3 {
-            // Blocked by a defender before it reaches the goalkeeper.
-            let blockers = (isHomeAttacking ? awayActive : homeActive)
-                .filter { !$0.isSentOff && !$0.isSubstitutedOut && $0.player.primaryPosition.category == .defender }
-            let commentary = Commentary.blocked(
-                shooter: shooter.player,
-                blocker: blockers.randomElement()?.player,
-                club: attackingClub,
-                minute: minute
-            )
-            events.append(
-                MatchEvent(
-                    minute: minute,
-                    type: .shotBlocked,
-                    clubId: attackingClub.id,
-                    playerId: shooter.player.id,
-                    shortText: commentary.short,
-                    detailText: commentary.detail,
-                    isHomeTeam: isHomeAttacking
-                )
-            )
         } else {
             // Chance missed off-target
             let commentary = Commentary.miss(
@@ -788,31 +947,17 @@ public struct MatchEngine {
             available.max(by: { $0.player.attributes.crossing < $1.player.attributes.crossing }) ??
             available.first else { return }
         
-        let cornerCommentary = Commentary.corner(taker: taker.player, club: attackingClub, minute: minute)
-        events.append(
-            MatchEvent(
-                minute: minute,
-                type: .corner,
-                clubId: attackingClub.id,
-                playerId: taker.player.id,
-                shortText: cornerCommentary.short,
-                detailText: cornerCommentary.detail,
-                isHomeTeam: isHomeAttacking
-            )
-        )
-
         // Find top aerial threat
         let aerialTargets = available.filter { $0.player.id != taker.player.id }
         let headerTarget = aerialTargets.max(by: { ($0.player.attributes.heading + $0.player.attributes.jumping) < ($1.player.attributes.heading + $1.player.attributes.jumping) }) ?? taker
         
-        // xG for corner
-        let cornerXG = 0.08 + (Double(taker.player.attributes.crossing) / 500.0)
-        if isHomeAttacking { homeXG += cornerXG } else { awayXG += cornerXG }
-        if isHomeAttacking { homeShots += 1 } else { awayShots += 1 }
-        
         // Goal chance (~4% for high quality set-pieces)
         let headingSkill = Double(headerTarget.player.attributes.heading)
         let goalChance = (Double(taker.player.attributes.crossing) * 0.02 + headingSkill * 0.035) / 100.0
+
+        // xG for the header is its real scoring chance.
+        if isHomeAttacking { homeXG += goalChance } else { awayXG += goalChance }
+        if isHomeAttacking { homeShots += 1 } else { awayShots += 1 }
         
         if Double.random(in: 0...1) < goalChance {
             if isHomeAttacking {
@@ -899,16 +1044,16 @@ public struct MatchEngine {
             available.first else { return }
         
         let fkSkill = Double(taker.player.attributes.freeKicks)
-        let chanceXG = 0.07 + (fkSkill / 400.0)
+        let conversionChance = (fkSkill * 0.05) / 100.0
+        // A direct free kick's xG is its real conversion chance (~3-5%).
         if isHomeAttacking {
             homeShots += 1
-            homeXG += chanceXG
+            homeXG += conversionChance
         } else {
             awayShots += 1
-            awayXG += chanceXG
+            awayXG += conversionChance
         }
-        
-        let conversionChance = (fkSkill * 0.05) / 100.0
+
         if Double.random(in: 0...1) < conversionChance {
             if isHomeAttacking {
                 homeGoals += 1
@@ -1018,35 +1163,12 @@ public struct MatchEngine {
 
         // Probability of a card given foul. Penalty-box offences are more likely
         // to be punished, but still depend on the challenge.
-        var cardProbability = (aggression * 0.45 + (100.0 - tackling) * 0.3) / 100.0
+        // Scaled so a typical match produces around three bookings, in line
+        // with real top-flight football (it previously averaged just over one).
+        var cardProbability = min(0.9, (aggression * 0.45 + (100.0 - tackling) * 0.3) / 100.0 * 2.0)
         if isPenalty { cardProbability = min(0.92, cardProbability + 0.30) }
 
-        guard Double.random(in: 0...1) < cardProbability else {
-            // No booking: still describe the foul so the commentary never skips it.
-            if !isPenalty {
-                let victimClub = isHomeTeamFouling ? awayClub : homeClub
-                let victims = (isHomeTeamFouling ? awayActive : homeActive).filter { !$0.isSentOff && !$0.isSubstitutedOut }
-                let commentary = Commentary.foul(
-                    fouler: fouler.player,
-                    victim: victims.randomElement()?.player,
-                    club: foulingClub,
-                    victimClub: victimClub,
-                    minute: minute
-                )
-                events.append(
-                    MatchEvent(
-                        minute: minute,
-                        type: .foul,
-                        clubId: foulingClub.id,
-                        playerId: fouler.player.id,
-                        shortText: commentary.short,
-                        detailText: commentary.detail,
-                        isHomeTeam: isHomeTeamFouling
-                    )
-                )
-            }
-            return
-        }
+        guard Double.random(in: 0...1) < cardProbability else { return }
 
         // Card roll: yellow or straight red
         let isStraightRed = Double.random(in: 0...1) < 0.03
@@ -1370,6 +1492,14 @@ public struct MatchEngine {
     
     // MARK: - Tactical Strength Calculator
     
+    /// Exponent applied to team strength when sharing out the match's events.
+    /// Tuned by simulating full seasons of every league so that home/draw/away
+    /// lands near 48/22/30 and a clearly stronger side (8+ rating points) wins
+    /// about three times in four, as in real football.
+    static let strengthSensitivity = 8.0
+    /// Strength multiplier for the home side.
+    static let homeAdvantage = 1.05
+
     private static func calculateTeamStrength(
         activePlayers: [ActiveMatchPlayer],
         tactics: Tactics,
@@ -1400,9 +1530,10 @@ public struct MatchEngine {
         // Formation shape shapes threat (more forwards = more attacking bite).
         total *= tactics.formation.attackingBias
         
-        // Home advantage (~8% boost unless neutral venue)
+        // Home advantage. Small, because it is amplified by the strength curve
+        // used to share out the match's events (see `strengthSensitivity`).
         if isHome && !neutralVenue {
-            total *= 1.08
+            total *= homeAdvantage
         }
         
         return total

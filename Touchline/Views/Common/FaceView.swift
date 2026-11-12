@@ -146,9 +146,9 @@ public struct FaceView: View {
             .frame(width: size, height: size)
         }
         .frame(width: size, height: size)
-        .clipShape(style == .avatar ? FaceClipShape(Circle()) : FaceClipShape(RoundedRectangle(cornerRadius: size * 0.12)))
+        .clipShape(style == .avatar ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: size * 0.12)))
         .overlay(
-            (style == .avatar ? FaceClipShape(Circle()) : FaceClipShape(RoundedRectangle(cornerRadius: size * 0.12)))
+            (style == .avatar ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: size * 0.12)))
                 .stroke(Color.black.opacity(0.15), lineWidth: 1)
         )
         .accessibilityHidden(true)
@@ -394,20 +394,6 @@ public struct FaceView: View {
     }
 }
 
-// MARK: - FaceClipShape Helper
-
-/// Type-erased shape allowing dynamic switching between clip shapes.
-private struct FaceClipShape: Shape {
-    private let pathBuilder: (CGRect) -> Path
-    
-    init<S: Shape>(_ shape: S) {
-        self.pathBuilder = { rect in shape.path(in: rect) }
-    }
-    
-    func path(in rect: CGRect) -> Path {
-        pathBuilder(rect)
-    }
-}
 
 // MARK: - Preview
 

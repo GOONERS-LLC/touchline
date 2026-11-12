@@ -132,6 +132,56 @@ public final class GameState: Codable {
     public var internationalTournaments: [InternationalTournament.State]
     /// The national team the user is currently managing, if any.
     public var managedNationalTeamId: String?
+
+    /// True once the user has actually launched a career (founded or taken over
+    /// a club). A freshly bootstrapped world is not a career, so it is never
+    /// written over the autosave and the menu never offers to "continue" it.
+    public var hasStartedCareer: Bool
+
+    /// This season's national knockout cups, one per country.
+    public var domesticCups: [DomesticCupState]
+
+    /// Real derbies and rivalries between clubs.
+    public var rivalries: [Rivalry]
+
+    /// Clubs that earned European places last season, keyed by competition
+    /// raw value. Consumed when the next season's competitions are drawn.
+    public var europeanQualifiers: [String: [UUID]]
+
+    /// The user's most recent completed season, shown until the next begins.
+    public var lastSeasonReview: SeasonReview?
+    /// Champions, awards and Hall of Fame across the career.
+    public var history: WorldHistory
+    /// Players the manager is tracking in the transfer market.
+    public var shortlist: [UUID]
+    /// The usual lineup, kept while a one-off lineup is used for the next match.
+    public var matchOnlyLineupBackup: Tactics?
+    /// A live match stopped at half-time. Not saved: leaving mid-match restarts it.
+    public var liveMatch: LiveMatchSession?
+    public var pendingWinBonusRequest: Bool
+    public var winBonusAskedSeason: String
+    public var winBonusPercent: Int
+    public var pendingRecordMoment: ClubRecordMoment?
+    public var clubRecords: ClubRecords
+    public var dismissedTips: [String]
+    public var achievements: [String: String]
+    public var pendingOwnerDecision: OwnerDecision?
+    public var answeredPressFixtureIds: [UUID]
+
+    /// Season-to-date income and spending at the user's club.
+    public var seasonLedger: FinanceLedger?
+    /// Points deducted this season (administration), by club.
+    public var pointsDeductions: [UUID: Int]
+    /// A signing the owner's manager wants funded.
+    public var pendingManagerRequest: ManagerRequest?
+    /// A consortium's offer to buy the owner's club.
+    public var pendingTakeover: TakeoverOffer?
+    /// Sponsors waiting for the owner's answer.
+    public var pendingSponsorOffers: [SponsorOffer] = []
+    /// Weeks before the sponsorship agency can be briefed again.
+    public var sponsorAgencyCooldown: Int = 0
+    /// The owner has sold the club and is choosing which club to buy next.
+    public var awaitingClubPurchase: Bool = false
     
     // MARK: - Initializer
     
@@ -162,7 +212,28 @@ public final class GameState: Codable {
         europeanMatchweek: Int = 0,
         nationalTeams: [NationalTeam] = [],
         internationalTournaments: [InternationalTournament.State] = [],
-        managedNationalTeamId: String? = nil
+        managedNationalTeamId: String? = nil,
+        hasStartedCareer: Bool = false,
+        domesticCups: [DomesticCupState] = [],
+        rivalries: [Rivalry] = [],
+        europeanQualifiers: [String: [UUID]] = [:],
+        lastSeasonReview: SeasonReview? = nil,
+        history: WorldHistory = WorldHistory(),
+        shortlist: [UUID] = [],
+        matchOnlyLineupBackup: Tactics? = nil,
+        pendingWinBonusRequest: Bool = false,
+        winBonusAskedSeason: String = "",
+        winBonusPercent: Int = 0,
+        pendingRecordMoment: ClubRecordMoment? = nil,
+        clubRecords: ClubRecords = ClubRecords(),
+        dismissedTips: [String] = [],
+        achievements: [String: String] = [:],
+        pendingOwnerDecision: OwnerDecision? = nil,
+        answeredPressFixtureIds: [UUID] = [],
+        seasonLedger: FinanceLedger? = nil,
+        pointsDeductions: [UUID: Int] = [:],
+        pendingManagerRequest: ManagerRequest? = nil,
+        pendingTakeover: TakeoverOffer? = nil
     ) {
         self.gameMode = gameMode
         self.clubs = clubs
@@ -191,7 +262,255 @@ public final class GameState: Codable {
         self.nationalTeams = nationalTeams
         self.internationalTournaments = internationalTournaments
         self.managedNationalTeamId = managedNationalTeamId
-    }    // MARK: - Computed Properties
+        self.hasStartedCareer = hasStartedCareer
+        self.domesticCups = domesticCups
+        self.rivalries = rivalries
+        self.europeanQualifiers = europeanQualifiers
+        self.lastSeasonReview = lastSeasonReview
+        self.history = history
+        self.shortlist = shortlist
+        self.matchOnlyLineupBackup = matchOnlyLineupBackup
+        self.pendingWinBonusRequest = pendingWinBonusRequest
+        self.winBonusAskedSeason = winBonusAskedSeason
+        self.winBonusPercent = winBonusPercent
+        self.pendingRecordMoment = pendingRecordMoment
+        self.clubRecords = clubRecords
+        self.dismissedTips = dismissedTips
+        self.achievements = achievements
+        self.pendingOwnerDecision = pendingOwnerDecision
+        self.answeredPressFixtureIds = answeredPressFixtureIds
+        self.seasonLedger = seasonLedger
+        self.pointsDeductions = pointsDeductions
+        self.pendingManagerRequest = pendingManagerRequest
+        self.pendingTakeover = pendingTakeover
+    }
+
+    // MARK: - World Bootstrap & Career Lifecycle
+
+    /// Builds a brand-new world from the bundled data: every league, a fresh
+    /// fixture list, European and international competitions, free agents and
+    /// youth academies. No career is attached yet.
+    public static func makeFreshWorld() -> GameState {
+        let (clubs, leagues) = DataLoader.loadAllData()
+
+        var allFixtures: [Fixture] = []
+        for league in leagues {
+            allFixtures.append(contentsOf: FixtureGenerator.generateDoubleRoundRobin(
+                clubIds: league.clubIds,
+                competitionName: league.name,
+                startDateString: "2026-08-08",
+                skippingWeeks: Set(DomesticCups.cupWeeks),
+                singleRoundRobin: league.clubIds.count > 24
+            ))
+        }
+
+        let initialSeason = Season(
+            year: "2026-27",
+            currentWeek: 1,
+            currentPhase: .preseason,
+            fixtures: allFixtures,
+            currentDate: "2026-08-01"
+        )
+
+        let state = GameState(
+            gameMode: .createClub,
+            clubs: clubs,
+            leagues: leagues,
+            season: initialSeason,
+            currentScreen: .mainMenu,
+            europeanCompetitions: EuropeanCompetitionBuilder.build(from: clubs),
+            nationalTeams: DataLoader.loadNationalTeams()
+        )
+        state.seedFreeAgents()
+        state.seedAcademies()
+        state.seedInternationalTournaments()
+        state.seedDomesticCups()
+        // Start every club at a realistic wage-to-turnover ratio.
+        // Facilities by stature: the elite have the best training grounds,
+        // academies and medical departments.
+        for idx in state.clubs.indices {
+            let rep = state.clubs[idx].reputation
+            let base = max(1, min(5, (rep - 30) / 14 + 1))
+            // AI academies top out at level 3 and training grounds at 4: each
+            // academy level raises every prospect's ceiling, and level-5
+            // academies at all the big clubs flooded the world with stars.
+            // The user can still build to level 5 for an edge.
+            state.clubs[idx].trainingFacilityLevel = max(1, min(4, base + Int.random(in: -1...0)))
+            state.clubs[idx].youthAcademyLevel = max(1, min(3, base + Int.random(in: -1...0)))
+            state.clubs[idx].medicalFacilityLevel = max(1, min(5, base + Int.random(in: -1...0)))
+        }
+        for idx in state.clubs.indices {
+            state.applyWageInflation(clubIdx: idx, maximumRise: 3.0, targetShare: 0.55)
+            state.clubs[idx].ensureWageHeadroom()
+        }
+        state.rivalries = DataLoader.loadRivalries(for: clubs)
+        state.payEuropeanParticipationFees()
+        return state
+    }
+
+    /// Replaces every piece of world and career state with `other`'s, in place.
+    /// The SwiftUI environment holds this exact instance, so loading a save or
+    /// starting a new career must mutate it rather than swap in a new object.
+    /// User preferences (sound, match settings) are kept from this instance.
+    public func replaceContents(with other: GameState, keepPreferences: Bool = true) {
+        gameMode = other.gameMode
+        clubs = other.clubs
+        leagues = other.leagues
+        season = other.season
+        userClubId = other.userClubId
+        freeAgents = other.freeAgents
+        transferHistory = other.transferHistory
+        pendingTransferOffers = other.pendingTransferOffers
+        news = other.news
+        currentScreen = other.currentScreen
+        isMatchInProgress = other.isMatchInProgress
+        activeMatchFixtureId = other.activeMatchFixtureId
+        negotiationTargetPlayerId = other.negotiationTargetPlayerId
+        if !keepPreferences {
+            soundEnabled = other.soundEnabled
+            matchSettings = other.matchSettings
+        }
+        manager = other.manager
+        jobOffers = other.jobOffers
+        owner = other.owner
+        lastTrainingWeek = other.lastTrainingWeek
+        jobSecurity = other.jobSecurity
+        teamTalk = other.teamTalk
+        teamTalkAppliedWeek = other.teamTalkAppliedWeek
+        europeanCompetitions = other.europeanCompetitions
+        europeanMatchweek = other.europeanMatchweek
+        nationalTeams = other.nationalTeams
+        internationalTournaments = other.internationalTournaments
+        managedNationalTeamId = other.managedNationalTeamId
+        hasStartedCareer = other.hasStartedCareer
+        domesticCups = other.domesticCups
+        rivalries = other.rivalries
+        europeanQualifiers = other.europeanQualifiers
+        lastSeasonReview = other.lastSeasonReview
+        history = other.history
+        shortlist = other.shortlist
+        matchOnlyLineupBackup = other.matchOnlyLineupBackup
+        pendingWinBonusRequest = other.pendingWinBonusRequest
+        winBonusAskedSeason = other.winBonusAskedSeason
+        winBonusPercent = other.winBonusPercent
+        pendingRecordMoment = other.pendingRecordMoment
+        clubRecords = other.clubRecords
+        dismissedTips = other.dismissedTips
+        achievements = other.achievements
+        pendingOwnerDecision = other.pendingOwnerDecision
+        answeredPressFixtureIds = other.answeredPressFixtureIds
+        seasonLedger = other.seasonLedger
+        pointsDeductions = other.pointsDeductions
+        pendingManagerRequest = other.pendingManagerRequest
+        pendingTakeover = other.pendingTakeover
+        pendingSponsorOffers = other.pendingSponsorOffers
+        sponsorAgencyCooldown = other.sponsorAgencyCooldown
+        awaitingClubPurchase = other.awaitingClubPurchase
+    }
+
+    /// An independent copy of the whole state. Every stored property is a value
+    /// type, so this is cheap (copy-on-write) and the copy can be encoded on a
+    /// background queue while the live state keeps changing on the main thread.
+    public func makeSnapshot() -> GameState {
+        let snapshot = GameState(
+            gameMode: gameMode,
+            clubs: clubs,
+            leagues: leagues,
+            season: season,
+            userClubId: userClubId,
+            freeAgents: freeAgents,
+            transferHistory: transferHistory,
+            pendingTransferOffers: pendingTransferOffers,
+            news: news,
+            currentScreen: currentScreen,
+            isMatchInProgress: isMatchInProgress,
+            activeMatchFixtureId: activeMatchFixtureId,
+            negotiationTargetPlayerId: negotiationTargetPlayerId,
+            soundEnabled: soundEnabled,
+            matchSettings: matchSettings,
+            manager: manager,
+            jobOffers: jobOffers,
+            owner: owner,
+            lastTrainingWeek: lastTrainingWeek,
+            jobSecurity: jobSecurity,
+            teamTalk: teamTalk,
+            teamTalkAppliedWeek: teamTalkAppliedWeek,
+            europeanCompetitions: europeanCompetitions,
+            europeanMatchweek: europeanMatchweek,
+            nationalTeams: nationalTeams,
+            internationalTournaments: internationalTournaments,
+            managedNationalTeamId: managedNationalTeamId,
+            hasStartedCareer: hasStartedCareer,
+            domesticCups: domesticCups,
+            rivalries: rivalries,
+            europeanQualifiers: europeanQualifiers,
+            lastSeasonReview: lastSeasonReview,
+            history: history,
+            shortlist: shortlist,
+            matchOnlyLineupBackup: matchOnlyLineupBackup,
+            pendingWinBonusRequest: pendingWinBonusRequest,
+            winBonusAskedSeason: winBonusAskedSeason,
+            winBonusPercent: winBonusPercent,
+            pendingRecordMoment: pendingRecordMoment,
+            clubRecords: clubRecords,
+            dismissedTips: dismissedTips,
+            achievements: achievements,
+            pendingOwnerDecision: pendingOwnerDecision,
+            answeredPressFixtureIds: answeredPressFixtureIds,
+            seasonLedger: seasonLedger,
+            pointsDeductions: pointsDeductions,
+            pendingManagerRequest: pendingManagerRequest,
+            pendingTakeover: pendingTakeover
+        )
+        snapshot.pendingSponsorOffers = pendingSponsorOffers
+        snapshot.sponsorAgencyCooldown = sponsorAgencyCooldown
+        snapshot.awaitingClubPurchase = awaitingClubPurchase
+        return snapshot
+    }
+
+    /// Discards the current career and world, leaving a fresh world ready for a
+    /// new career in `mode`. The autosave on disk is untouched until the new
+    /// career is actually launched.
+    public func resetForNewCareer(mode: GameMode) {
+        replaceContents(with: GameState.makeFreshWorld())
+        gameMode = mode
+    }
+
+    /// Shrinks results saved by older builds, which kept full commentary for
+    /// every match in the world. Only the user's own matches stay detailed.
+    public func compactArchivedResults() {
+        let uid = userClubId
+        for idx in season.fixtures.indices {
+            guard let result = season.fixtures[idx].result, !result.isCompacted else { continue }
+            if let uid, season.fixtures[idx].involves(clubId: uid) { continue }
+            season.fixtures[idx].result = result.compactedForArchive()
+        }
+        for cIdx in clubs.indices where !clubs[cIdx].isUserClub {
+            if clubs[cIdx].seasonResults.count > 6
+                || clubs[cIdx].seasonResults.contains(where: { !$0.isCompacted || $0.homeStats != .empty }) {
+                clubs[cIdx].seasonResults = clubs[cIdx].seasonResults.suffix(6).map { $0.compactedForArchive() }
+            }
+        }
+    }
+
+    /// Loads a saved career into this instance. Lands on the dashboard (or the
+    /// job market for an unemployed manager) rather than mid-match.
+    public func loadCareer(from loaded: GameState) {
+        replaceContents(with: loaded)
+        compactArchivedResults()
+        seedRivalriesIfNeeded()
+        isMatchInProgress = false
+        negotiationTargetPlayerId = nil
+        if userClub != nil {
+            currentScreen = .dashboard
+        } else if gameMode == .manageClub {
+            currentScreen = .jobOffers
+        } else {
+            currentScreen = .mainMenu
+        }
+    }
+
+    // MARK: - Computed Properties
     
     public var userClub: Club? {
         guard let id = userClubId else { return nil }
@@ -204,8 +523,16 @@ public final class GameState: Codable {
         return userClub == nil
     }
     
+    /// The division the user's club is contesting this season. After the
+    /// final matchweek, promotion/relegation has already moved the club to
+    /// next season's tier, so prefer the league its fixtures belong to;
+    /// otherwise the end-of-season table would be a division it never played in.
     public var currentLeague: League? {
         guard let club = userClub else { return nil }
+        if let competition = season.fixtures.first(where: { $0.involves(clubId: club.id) })?.competition,
+           let league = leagues.first(where: { $0.name == competition }) {
+            return league
+        }
         return leagues.first { $0.tier == club.leagueTier }
     }
     
@@ -231,19 +558,30 @@ public final class GameState: Codable {
     
     public func standings(for league: League) -> [LeagueStanding] {
         var table: [UUID: LeagueStanding] = [:]
-        
-        for clubId in league.clubIds {
-            table[clubId] = LeagueStanding(clubId: clubId)
-        }
-        
-        let leagueFixtures = season.fixtures.filter { f in
-            league.clubIds.contains(f.homeClubId) && f.isPlayed
-        }
-        
+
+        // Build the table from this division's own fixtures. Using the league's
+        // current club list broke the final table once promotions and
+        // relegations had been applied: arriving clubs dragged in their results
+        // from the division they had just left, and departing clubs vanished.
+        let leagueFixtures = season.fixtures.filter { $0.competition == league.name }
         for f in leagueFixtures {
+            if table[f.homeClubId] == nil { table[f.homeClubId] = LeagueStanding(clubId: f.homeClubId) }
+            if table[f.awayClubId] == nil { table[f.awayClubId] = LeagueStanding(clubId: f.awayClubId) }
+        }
+        if table.isEmpty {
+            for clubId in league.clubIds {
+                table[clubId] = LeagueStanding(clubId: clubId)
+            }
+        }
+        
+        for f in leagueFixtures where f.isPlayed {
             guard let res = f.result else { continue }
             table[f.homeClubId]?.recordResult(goalsFor: res.homeGoals, goalsAgainst: res.awayGoals)
             table[f.awayClubId]?.recordResult(goalsFor: res.awayGoals, goalsAgainst: res.homeGoals)
+        }
+        // Administration and similar sanctions.
+        for (clubId, deduction) in pointsDeductions where table[clubId] != nil {
+            table[clubId]?.points -= deduction
         }
         
         return table.values.sorted(by: LeagueStanding.standardSort)
@@ -270,7 +608,7 @@ public final class GameState: Codable {
     public func transferSearchCandidates() -> [(player: Player, club: Club?)] {
         var results: [(Player, Club?)] = []
         for club in clubs where !club.isUserClub {
-            for player in club.players {
+            for player in club.players where !player.isOnLoan {
                 results.append((player, club))
             }
         }
@@ -302,7 +640,7 @@ public final class GameState: Codable {
             if player.overall < minOverall { return false }
             if player.age > maxAge { return false }
             if !includeFreeAgents && entry.club == nil { return false }
-            if let maxFee = maxFee, let club = entry.club, player.value > maxFee { return false }
+            if let maxFee = maxFee, entry.club != nil, player.value > maxFee { return false }
             return true
         }
     }
@@ -331,6 +669,19 @@ public final class GameState: Codable {
     public func advanceCalendar() -> Bool {
         if isEndOfSeason { return false }
         guard let userClubId = userClubId else { return false }
+        scheduleUserEuropeanTies()
+        // Run full weekly upkeep (finances, recovery, transfers, Europe) for any
+        // matchweek in which the user's club does not play — a bye week in an
+        // odd-sized league, for example — rather than jumping straight past it.
+        var byeWeeksProcessed = 0
+        while !isEndOfSeason, byeWeeksProcessed < 10,
+              let upcoming = season.nextFixture(forClub: userClubId),
+              upcoming.matchWeek > season.currentWeek {
+            advanceWeek()
+            byeWeeksProcessed += 1
+        }
+        if isEndOfSeason { return false }
+
         guard let nextFixture = season.nextFixture(forClub: userClubId) else {
             // The user's club has completed all of its fixtures for the campaign.
             // Simulate the rest of the world in one pass so the user is not forced
@@ -365,23 +716,70 @@ public final class GameState: Codable {
         return true
     }
     
-    /// Simulates every unplayed fixture in matchweeks whose date has already passed,
-    /// optionally leaving the user's own fixtures for the player to manage.
-    private func simulateDueWeeks(excludingUserMatch: Bool) {
+    /// One tick of the animated calendar.
+    public enum CalendarStep: Equatable {
+        /// The calendar moved on (a day, or a whole week when the user has no
+        /// match in it). Carries the new date.
+        case advanced(String)
+        /// The user's next match day has arrived.
+        case matchDay
+        /// The season is over (or there is no club to manage).
+        case seasonOver
+    }
+
+    /// Advances the calendar by a single day (or one week when the user has
+    /// no fixture in the current week), playing other clubs' matches as their
+    /// dates arrive. The animated calendar calls this repeatedly; the result
+    /// is identical to `advanceCalendar()`, just in visible steps.
+    public func advanceCalendarOneDay() -> CalendarStep {
+        if isEndOfSeason { return .seasonOver }
+        guard let userClubId = userClubId else { return .seasonOver }
+        scheduleUserEuropeanTies()
+        guard let next = season.nextFixture(forClub: userClubId) else {
+            // Campaign finished for the user: run the rest of the world weekly.
+            advanceWeek()
+            return isEndOfSeason ? .seasonOver : .advanced(season.currentDate)
+        }
+        if next.matchWeek > season.currentWeek {
+            // A week without a match for the user (a bye or a cup round they
+            // are out of): full weekly upkeep.
+            advanceWeek()
+            return isEndOfSeason ? .seasonOver : .advanced(season.currentDate)
+        }
+        if season.currentDate >= next.date {
+            season.currentWeek = next.matchWeek
+            activeMatchFixtureId = next.id
+            return .matchDay
+        }
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        guard let today = formatter.date(from: season.currentDate) else { return }
-        
-        for idx in season.fixtures.indices {
-            let fixture = season.fixtures[idx]
-            guard !fixture.isPlayed else { continue }
-            guard let fixtureDate = formatter.date(from: fixture.date) else { continue }
-            guard fixtureDate <= today else { continue }
-            if excludingUserMatch, let userClubId, fixture.involves(clubId: userClubId) {
-                continue
+        guard let date = formatter.date(from: season.currentDate),
+              let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: date) else {
+            return advanceCalendar() ? .matchDay : .seasonOver
+        }
+        season.currentDate = formatter.string(from: tomorrow)
+        simulateDueWeeks(excludingUserMatch: true)
+        return .advanced(season.currentDate)
+    }
+
+    /// Simulates every unplayed fixture in matchweeks whose date has already passed,
+    /// optionally leaving the user's own fixtures for the player to manage.
+    private func simulateDueWeeks(excludingUserMatch: Bool) {
+        // Dates are stored as zero-padded "yyyy-MM-dd", which orders correctly as
+        // plain strings. Comparing strings avoids parsing every fixture date on
+        // every simulated day (thousands of DateFormatter calls per advance).
+        let today = season.currentDate
+        let excludedClubId: UUID? = excludingUserMatch ? userClubId : nil
+        let dueIds = season.fixtures.compactMap { fixture -> UUID? in
+            guard !fixture.isPlayed, fixture.date <= today else { return nil }
+            if let excludedClubId, fixture.involves(clubId: excludedClubId) {
+                return nil
             }
-            simulateMatch(fixture: &season.fixtures[idx])
+            return fixture.id
+        }
+        for id in dueIds {
+            simulateFixture(id: id)
         }
     }
 
@@ -391,71 +789,132 @@ public final class GameState: Codable {
     /// the post-user-match flow so the rest of the league always keeps pace.
     /// Each completed matchday is auto-saved, overwriting the previous autosave.
     public func finishMatchweekAfterUserMatch() {
-        let matchDate = season.currentDate
-        advanceWeek()
-        // advanceWeek() jumps the calendar a full seven days, which lands exactly
-        // on the next fixture's date. That skipped the build-up entirely: the
-        // Home screen only ever offered "Play" and never "Continue to Match Day".
-        // Resume the calendar the day after this match instead, so the next
-        // Continue walks the user through the days before their next fixture.
-        if !isEndOfSeason {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd"
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            if let played = formatter.date(from: matchDate),
-               let dayAfter = Calendar.current.date(byAdding: .day, value: 1, to: played),
-               let advanced = formatter.date(from: season.currentDate),
-               dayAfter < advanced {
-                season.currentDate = formatter.string(from: dayAfter)
-            }
+        // A European tie in midweek is still to be played: leave the week open
+        // so the calendar takes the user to it before the round is completed.
+        scheduleUserEuropeanTies()
+        if let uid = userClubId,
+           season.fixtures.contains(where: { $0.matchWeek == season.currentWeek && !$0.isPlayed && $0.involves(clubId: uid) }) {
+            // Keep the played fixture active so the full-time report shows it.
+            try? SaveManager.shared.autoSave(gameState: self)
+            return
         }
+        advanceWeek()
         try? SaveManager.shared.autoSave(gameState: self)
     }
 
-    /// Days between today and the user's next fixture (0 on match day).
-    public var daysUntilNextUserFixture: Int? {
-        guard let userClubId, let next = season.nextFixture(forClub: userClubId) else { return nil }
+    /// Puts the manager's next European tie into the fixture list as a midweek
+    /// match after this week's domestic game, so it is played as a normal
+    /// match day. The European competition then uses that result.
+    /// Idempotent: a tie already scheduled is left alone.
+    public func scheduleUserEuropeanTies() {
+        guard gameMode == .manageClub, let uid = userClubId else { return }
+        // Europe advances at the end of selected domestic weeks.
+        guard isEuropeanWeek(season.currentWeek + 1), !season.isSeasonFinished else { return }
+        let nextEuropeanWeek = europeanMatchweek + 1
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        guard let today = formatter.date(from: season.currentDate),
-              let matchDate = formatter.date(from: next.date) else { return nil }
-        return max(0, Calendar.current.dateComponents([.day], from: today, to: matchDate).day ?? 0)
+        for competition in europeanCompetitions {
+            for tie in competition.fixtures where tie.matchweek == nextEuropeanWeek && !tie.isPlayed
+                && (tie.homeClubId == uid || tie.awayClubId == uid) {
+                guard !season.fixtures.contains(where: { $0.europeanFixtureId == tie.id }) else { continue }
+                // Midweek: three days after this week's domestic game.
+                let domesticDate = season.fixtures
+                    .filter { $0.matchWeek == season.currentWeek && $0.involves(clubId: uid) && !$0.isEuropean }
+                    .map { $0.date }.min() ?? season.currentDate
+                let base = formatter.date(from: domesticDate) ?? Date()
+                let midweek = Calendar.current.date(byAdding: .day, value: 3, to: base) ?? base
+                let round = tie.leg > 0 && tie.stage != "League Phase" ? "\(tie.stage), leg \(tie.leg)" : tie.stage
+                season.fixtures.append(Fixture(
+                    homeClubId: tie.homeClubId,
+                    awayClubId: tie.awayClubId,
+                    matchWeek: season.currentWeek,
+                    date: formatter.string(from: midweek),
+                    competition: competition.competition.displayName,
+                    cupRound: tie.stage == "Final" ? "Final" : round,
+                    europeanFixtureId: tie.id
+                ))
+            }
+        }
     }
 
     /// Advances the in-game week: simulates all pending matchweek matches, recovers fitness,
     /// runs AI transfer evaluation, updates financial balances, and checks promotion/relegation.
     public func advanceWeek() {
         // 1. Simulate all unplayed fixtures of the current matchweek
-        let currentWeekFixtures = season.fixtures(forWeek: season.currentWeek).filter { !$0.isPlayed }
-        for fixture in currentWeekFixtures {
-            if let idx = season.fixtures.firstIndex(where: { $0.id == fixture.id }) {
-                simulateMatch(fixture: &season.fixtures[idx])
-            }
+        let thisWeek = season.fixtures(forWeek: season.currentWeek)
+        for fixture in thisWeek where !fixture.isPlayed {
+            simulateFixture(id: fixture.id)
         }
+        // A fixture left behind in an earlier week (an abandoned live match, a
+        // tie added late) is played now. Left unplayed it stayed "next" for
+        // ever and the same match kept coming back.
+        let staleIds = season.fixtures.filter { !$0.isPlayed && $0.matchWeek < season.currentWeek }.map { $0.id }
+        for id in staleIds { simulateFixture(id: id) }
+
+        // Index this week's home fixtures and club reputations once, rather than
+        // rescanning every fixture and club for every club in the world.
+        var homeOpponentByClub: [UUID: UUID] = [:]
+        for fixture in thisWeek where homeOpponentByClub[fixture.homeClubId] == nil {
+            homeOpponentByClub[fixture.homeClubId] = fixture.awayClubId
+        }
+        var reputationByClub: [UUID: Int] = [:]
+        for club in clubs { reputationByClub[club.id] = club.reputation }
         
         // 2. Weekly player fitness recovery & sharpness decay
         for clubIdx in 0..<clubs.count {
+            let medical = clubs[clubIdx].medicalFacilityLevel
             for playerIdx in 0..<clubs[clubIdx].players.count {
                 clubs[clubIdx].players[playerIdx].advanceWeekRecovery()
+                if let injury = InjuryEngine.trainingInjury(player: clubs[clubIdx].players[playerIdx], medicalLevel: medical) {
+                    clubs[clubIdx].players[playerIdx].injury = injury
+                    if clubs[clubIdx].isUserClub {
+                        let player = clubs[clubIdx].players[playerIdx]
+                        addNews(headline: "\(player.fullName) Injured in Training",
+                                body: "\(player.fullName) has a \(injury.type.displayName.lowercased()) and is expected to miss \(injury.weeksRemaining) week\(injury.weeksRemaining == 1 ? "" : "s").",
+                                category: .general, sender: "Medical Department")
+                    }
+                }
             }
             // Weekly financial accounting. Home clubs bank gate receipts scaled
             // by the calibre of the visiting side.
-            let homeFixture = season.fixtures(forWeek: season.currentWeek)
-                .first { $0.homeClubId == clubs[clubIdx].id }
+            let opponentId = homeOpponentByClub[clubs[clubIdx].id]
             var gate = 0
-            if let homeFixture,
-               let away = club(withId: homeFixture.awayClubId) {
-                gate = clubs[clubIdx].finances.matchdayRevenue(opponentReputation: away.reputation)
+            if let opponentId, let opponentReputation = reputationByClub[opponentId] {
+                gate = clubs[clubIdx].finances.matchdayRevenue(opponentReputation: opponentReputation)
+                // Derbies sell out and command premium prices.
+                if let derby = rivalry(between: clubs[clubIdx].id, and: opponentId) {
+                    gate = Int(Double(gate) * (1.0 + 0.15 * Double(derby.intensity)))
+                }
+                // An owner's pricing policy and the fans' mood shape the gate.
+                if gameMode == .createClub && clubs[clubIdx].isUserClub {
+                    let mood = 0.85 + Double(owner.supporterConfidence) * 0.003
+                    gate = Int(Double(gate) * owner.ticketPricing.revenueMultiplier * mood)
+                    if Double.random(in: 0..<1) < 0.4 {
+                        adjustFans(owner.ticketPricing.confidenceDrift)
+                    }
+                }
+            }
+            if clubs[clubIdx].isUserClub {
+                let f = clubs[clubIdx].finances
+                seasonLedger?.broadcasting += f.weeklyTvShare
+                seasonLedger?.commercial += f.weeklySponsorshipShare
+                seasonLedger?.merchandise += f.weeklyMerchandiseShare
+                seasonLedger?.matchday += opponentId != nil ? (gate > 0 ? gate : f.matchdayIncome) : 0
+                seasonLedger?.wages += f.currentWageBill
             }
             clubs[clubIdx].finances.processWeeklyCashFlow(
-                isHomeMatchThisWeek: homeFixture != nil,
+                isHomeMatchThisWeek: opponentId != nil,
                 gateReceipts: gate
             )
         }
         
+        // Draw the next round of any cup whose current round has finished.
+        progressDomesticCups()
+        
         // 3. AI manager autonomous dealings and transfer negotiation resolution
         processAITransfers()
+        processAILoans()
         processTransferNegotiations()
         processAIIncomingBids()
         
@@ -465,7 +924,15 @@ public final class GameState: Codable {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         if let currentDate = formatter.date(from: season.currentDate),
            let nextWeekDate = Calendar.current.date(byAdding: .day, value: 7, to: currentDate) {
-            season.currentDate = formatter.string(from: nextWeekDate)
+            var next = formatter.string(from: nextWeekDate)
+            // A midweek European game moves the date on a few days; snap back to
+            // next week's domestic fixtures so the calendar never drifts.
+            if let firstNext = season.fixtures(forWeek: season.currentWeek + 1)
+                .filter({ !$0.isEuropean }).map({ $0.date }).min(),
+               firstNext < next, firstNext > season.currentDate {
+                next = firstNext
+            }
+            season.currentDate = next
         }
         
         // 5. Advance matchweek counter
@@ -477,6 +944,15 @@ public final class GameState: Codable {
         // 5c. Advance international tournaments.
         advanceInternationalTournaments()
         
+        warnAboutExpiringContracts()
+        reviewPlayingTime()
+        reviewSupporterMood()
+        runOwnerBusinessWeek()
+        evaluateManagerJobSecurity()
+        checkManagerContractExpiry()
+        reviewFanPressureOnManager()
+        checkOwnerWeeklyAchievements()
+
         // 6. Check if season has completed
         if season.isSeasonFinished && season.currentPhase != .endOfSeason {
             processEndOfSeason()
@@ -486,35 +962,963 @@ public final class GameState: Codable {
     /// Advances every European competition one matchweek, simulating its fixtures
     /// with an Elo-style scoreline derived from club strength. Lakes a week off to
     /// avoid clashing with the very start of the domestic season.
+    /// Domestic weeks that host a European matchweek, spaced like the UEFA
+    /// calendar: eight league-phase rounds from September to January, then the
+    /// knockout play-off, round of 16, quarter-finals and semi-finals over two
+    /// legs each, and the final in late spring.
+    static let europeanDomesticWeeks = [5, 7, 9, 11, 13, 15, 20, 22, 25, 26, 28, 29, 32, 33, 35, 36, 40]
+
+    /// Whether the end of the given domestic week plays a European round.
+    func isEuropeanWeek(_ domesticWeek: Int) -> Bool {
+        let weeks = GameState.europeanDomesticWeeks
+        if weeks.contains(domesticWeek) { return true }
+        // A competition that needs more rounds keeps going weekly afterwards.
+        return domesticWeek > (weeks.last ?? 40)
+            && europeanCompetitions.contains { $0.stage != .complete }
+    }
+
     public func advanceEuropeanCompetitions() {
         guard !europeanCompetitions.isEmpty else { return }
-        guard season.currentWeek >= 3 else { return }
+        guard isEuropeanWeek(season.currentWeek) else { return }
 
         europeanMatchweek += 1
         let week = europeanMatchweek
 
         for idx in europeanCompetitions.indices {
             var competition = europeanCompetitions[idx]
-            competition.advanceMatchweek(week: week) { [weak self] home, away in
-                guard let self, let hc = self.club(withId: home), let ac = self.club(withId: away) else {
-                    return (0, 0)
+            let name = competition.competition.displayName
+            let alreadyPlayed = Set(competition.fixtures.filter { $0.isPlayed }.map { $0.id })
+            // Ties the manager played as a match day keep their real score.
+            var playedByUser: [String: (Int, Int)] = [:]
+            for tie in competition.fixtures where tie.matchweek == week && !tie.isPlayed {
+                if let mirror = season.fixtures.first(where: { $0.europeanFixtureId == tie.id }),
+                   let result = mirror.result {
+                    playedByUser["\(tie.homeClubId)|\(tie.awayClubId)"] = (result.homeGoals, result.awayGoals)
                 }
-                return Self.simulateEuropeanScore(home: hc, away: ac)
+            }
+            competition.advanceMatchweek(week: week) { home, away in
+                if let score = playedByUser["\(home)|\(away)"] { return score }
+                return self.playEuropeanMatch(home: home, away: away, competition: name, week: week)
+            }
+
+            // Pay UEFA-style result money and report the user's results.
+            let prizes = EuropeanPrizes(competition.competition)
+            for fixture in competition.fixtures where fixture.isPlayed && !alreadyPlayed.contains(fixture.id) {
+                let homeWon = fixture.homeGoals > fixture.awayGoals
+                let draw = fixture.homeGoals == fixture.awayGoals
+                payEuropeanMoney(fixture.homeClubId, homeWon ? prizes.win : (draw ? prizes.win / 3 : 0))
+                payEuropeanMoney(fixture.awayClubId, !homeWon && !draw ? prizes.win : (draw ? prizes.win / 3 : 0))
+                if let uid = userClubId, fixture.homeClubId == uid || fixture.awayClubId == uid {
+                    let stage = fixture.stage + (fixture.leg > 0 ? ", leg \(fixture.leg)" : "")
+                    addNews(
+                        headline: "\(competition.competition.shortName): \(clubName(for: fixture.homeClubId)) \(fixture.homeGoals)-\(fixture.awayGoals) \(clubName(for: fixture.awayClubId))",
+                        body: "\(name), \(stage).",
+                        category: .general,
+                        sender: name
+                    )
+                }
             }
 
             // Surface the final result as news when a champion is crowned.
             if competition.stage == .complete, competition.championClubId != nil,
                europeanCompetitions[idx].championClubId == nil,
                let champ = competition.championClubId {
+                payEuropeanMoney(champ, prizes.championBonus)
                 addNews(
                     headline: "\(clubName(for: champ)) Win the \(competition.competition.displayName)!",
                     body: "\(clubName(for: champ)) are crowned champions of Europe.",
                     category: .award
                 )
+                if champ == userClubId { unlockOwnerMilestone(id: "cup_winner") }
             }
 
             europeanCompetitions[idx] = competition
         }
+    }
+
+    /// Plays a European tie through the full match engine, so it costs
+    /// fitness, can cause injuries and counts towards player stats. UEFA
+    /// discipline is separate: European cards do not change domestic bans.
+    private func playEuropeanMatch(home: UUID, away: UUID, competition: String, week: Int) -> (Int, Int) {
+        guard let hIdx = clubs.firstIndex(where: { $0.id == home }),
+              let aIdx = clubs.firstIndex(where: { $0.id == away }) else { return (0, 0) }
+        var homeClub = clubs[hIdx]
+        var awayClub = clubs[aIdx]
+        let assistantRotates = matchSettings.assistantRotatesTiredPlayers
+        for idx in [0, 1] {
+            var side = idx == 0 ? homeClub : awayClub
+            if !(side.isUserClub && gameMode == .manageClub) { side.prepareAIMatchday() }
+            else if assistantRotates { side.rotateTiredStarters() }
+            if idx == 0 { homeClub = side } else { awayClub = side }
+        }
+        var discipline: [UUID: (Int, Int)] = [:]
+        for player in homeClub.players + awayClub.players {
+            discipline[player.id] = (player.suspendedMatches, player.yellowCards)
+        }
+        let config = MatchEngine.SimulationConfig(
+            neutralVenue: false,
+            matchWeek: week,
+            competition: competition,
+            date: season.currentDate,
+            isKnockout: false,
+            derbyIntensity: rivalry(between: home, and: away)?.intensity ?? 0,
+            homeCoachingMultiplier: coachingMultiplier(for: home),
+            awayCoachingMultiplier: coachingMultiplier(for: away)
+        )
+        let result = MatchEngine.simulateFullMatch(home: &homeClub, away: &awayClub, config: config)
+        for club in [homeClub, awayClub] {
+            var updated = club
+            for p in updated.players.indices {
+                if let saved = discipline[updated.players[p].id] {
+                    updated.players[p].suspendedMatches = saved.0
+                    updated.players[p].yellowCards = saved.1
+                }
+            }
+            // European results are not part of the domestic form record.
+            updated.seasonResults.removeAll { $0.id == result.id }
+            if let i = clubs.firstIndex(where: { $0.id == updated.id }) { clubs[i] = updated }
+        }
+        return (result.homeGoals, result.awayGoals)
+    }
+
+    private func payEuropeanMoney(_ clubId: UUID, _ amount: Int) {
+        guard amount > 0, let idx = clubs.firstIndex(where: { $0.id == clubId }) else { return }
+        clubs[idx].finances.balance += amount
+        clubs[idx].finances.transferBudget += amount / 2
+        if clubs[idx].isUserClub { seasonLedger?.prizeMoney += amount }
+    }
+
+    /// Participation fees for every club entered in a European competition.
+    private func payEuropeanParticipationFees() {
+        for competition in europeanCompetitions {
+            let fee = EuropeanPrizes(competition.competition).participation
+            for id in competition.participantClubIds { payEuropeanMoney(id, fee) }
+            if let uid = userClubId, competition.participantClubIds.contains(uid) {
+                addNews(
+                    headline: "\(competition.competition.displayName) Draw",
+                    body: "We are in this season's \(competition.competition.displayName), worth \(Player.formatCurrency(fee)) just for taking part.",
+                    category: .general,
+                    sender: competition.competition.displayName
+                )
+            }
+        }
+    }
+
+    // MARK: - Coaching & Owner Operations
+
+    /// How much a club's manager lifts (or drags) its performance. AI clubs are
+    /// neutral; the user's club reflects the manager's coaching ability in
+    /// manager mode, or the appointed manager's quality in owner mode.
+    public func coachingMultiplier(for clubId: UUID) -> Double {
+        guard clubId == userClubId else { return 1.0 }
+        let rating = gameMode == .createClub ? owner.managerRating : manager.overallCoaching
+        return 1.0 + Double(rating - 60) / 1000.0
+    }
+
+    /// This season's manager shortlist for an owner, pitched at the club's level.
+    public var managerShortlist: [ManagerCandidate] {
+        guard let club = userClub else { return ManagerCandidate.shortlist }
+        let yearSeed = UInt64(season.year.hashValueStable)
+        return ManagerCandidate.shortlist(clubReputation: club.reputation, country: club.leagueTier.country,
+                                          seed: yearSeed ^ UInt64(truncatingIfNeeded: club.name.hashValueStable))
+    }
+
+    /// In owner mode the appointed manager runs recruitment: while a window is
+    /// open he looks for an upgrade on the weakest area of the starting XI that
+    /// the transfer allocation and wage budget can afford. Better managers
+    /// find bigger upgrades. An interim manager does not sign players.
+    private func ownerManagerTransfers() {
+        guard gameMode == .createClub, isTransferWindowOpen, !owner.isInAdministration,
+              pendingManagerRequest == nil,
+              let buyerIdx = clubs.firstIndex(where: { $0.isUserClub }),
+              clubs[buyerIdx].manager != "Interim Manager",
+              Double.random(in: 0..<1) < 0.3 else { return }
+        let buyer = clubs[buyerIdx]
+        let starters = buyer.startingXIPlayers
+        guard let weakest = starters.min(by: { $0.overall < $1.overall }) else { return }
+        let category = weakest.primaryPosition.category
+        let policy = owner.recruitmentPolicy
+        let ambition = policy.requiredUpgrade + max(0, (owner.managerRating - 55) / 8)
+        var best: (player: Player, sellerIdx: Int, fee: Int, wage: Int)?
+        for (sellerIdx, seller) in clubs.enumerated() where sellerIdx != buyerIdx && seller.players.count > 18 {
+            guard rivalry(between: buyer.id, and: seller.id) == nil else { continue }
+            for player in seller.players where !player.isOnLoan && player.primaryPosition.category == category
+                && player.overall >= weakest.overall + ambition && player.age <= policy.maximumAge
+                && (policy != .youth || player.potential >= player.overall + 5) {
+                let fee = Int(Double(player.value) * 1.15)
+                let wage = max(player.wage, Player.calculateWage(overall: player.overall, age: player.age, tier: buyer.leagueTier))
+                // He will ask the owner for up to twice the allocation.
+                guard fee <= max(buyer.finances.transferBudget * 2, 0),
+                      buyer.totalWeeklyWageBill + wage <= Int(Double(buyer.finances.wageBudget) * 1.3) else { continue }
+                // A youth policy values ceiling over current ability.
+                let score = policy == .youth ? player.potential : player.overall
+                let bestScore = best.map { policy == .youth ? $0.player.potential : $0.player.overall } ?? -1
+                if score > bestScore {
+                    best = (player, sellerIdx, fee, wage)
+                }
+            }
+        }
+        guard let deal = best else { return }
+        let sellerName = clubs[deal.sellerIdx].name
+        // Big deals, or deals beyond the budgets, need the owner's approval.
+        let delegatedLimit = buyer.finances.transferBudget * owner.delegatedSpendPercent / 100
+        if deal.fee > delegatedLimit || deal.fee > buyer.finances.transferBudget
+            || buyer.totalWeeklyWageBill + deal.wage > buyer.finances.wageBudget {
+            pendingManagerRequest = ManagerRequest(
+                playerId: deal.player.id,
+                playerName: deal.player.fullName,
+                position: deal.player.primaryPosition.displayName,
+                rating: deal.player.overall,
+                sellerClubId: clubs[deal.sellerIdx].id,
+                sellerName: sellerName,
+                fee: deal.fee,
+                wage: deal.wage,
+                createdDate: season.currentDate
+            )
+            addNews(
+                headline: "\(buyer.manager) Requests Funds",
+                body: "Your manager wants \(Player.formatCurrency(deal.fee)) to sign \(deal.player.fullName) (\(deal.player.primaryPosition.displayName), rated \(deal.player.overall)) from \(sellerName). Decide in the Boardroom.",
+                category: .transfer,
+                sender: buyer.manager
+            )
+            return
+        }
+        if completeSigning(player: deal.player, buyerIdx: buyerIdx, sellerIdx: deal.sellerIdx,
+                           fee: deal.fee, wage: deal.wage, years: 3) {
+            clubs[buyerIdx].ensureTacticalIntegrity()
+            addNews(
+                headline: "\(buyer.manager) Signs \(deal.player.fullName)",
+                body: "Your manager has brought in \(deal.player.fullName) (\(deal.player.primaryPosition.displayName), rated \(deal.player.overall)) from \(sellerName) for \(Player.formatCurrency(deal.fee)), funded from the transfer allocation.",
+                category: .transfer,
+                sender: buyer.manager
+            )
+        }
+    }
+
+    /// Weekly fan sentiment checks for owners: protests when confidence
+    /// collapses, praise when it soars.
+    private func reviewSupporterMood() {
+        guard gameMode == .createClub, userClub != nil, season.currentWeek % 6 == 0 else { return }
+        if owner.supporterConfidence < 25 {
+            addNews(
+                headline: "Fans Protest Against the Owner",
+                body: "Supporters marched on the stadium before kick-off. Ticket prices, results and investment are all under fire. Attendances are falling.",
+                category: .board,
+                sender: "Supporters' Trust"
+            )
+        } else if owner.supporterConfidence > 85 {
+            addNews(
+                headline: "Supporters Back the Project",
+                body: "Season-ticket demand is soaring and the fans are firmly behind the owner's vision.",
+                category: .board,
+                sender: "Supporters' Trust"
+            )
+        }
+    }
+
+    // MARK: - Owner Business
+
+    /// The owner's club's current market valuation.
+    public var clubValuation: Int {
+        guard let club = userClub else { return 0 }
+        return OwnerBusiness.valuation(of: club, debt: owner.totalDebt)
+    }
+
+    /// Loans the bank will offer: sized to the club's turnover, priced by how
+    /// much the club already owes. None once debt reaches a year's turnover.
+    public var loanOffers: [(amount: Int, rate: Double)] {
+        guard gameMode == .createClub, let club = userClub, !owner.isInAdministration else { return [] }
+        let turnover = OwnerBusiness.annualRevenue(club.finances)
+        let headroom = turnover - owner.totalDebt
+        guard headroom > 100_000 else { return [] }
+        let gearing = Double(owner.totalDebt) / Double(max(1, turnover))
+        let rate = 0.06 + gearing * 0.08
+        return [0.1, 0.3, 0.6].map { share in
+            (amount: max(250_000, min(headroom, Int(Double(turnover) * share))), rate: rate)
+        }
+    }
+
+    /// The owner puts personal money into the club. The share set by the
+    /// budget allocation is earmarked for transfers.
+    @discardableResult
+    public func investInClub(_ amount: Int) -> Bool {
+        guard gameMode == .createClub, amount > 0, amount <= owner.personalWealth,
+              let idx = clubs.firstIndex(where: { $0.isUserClub }) else { return false }
+        owner.personalWealth -= amount
+        owner.totalInvested += amount
+        clubs[idx].finances.balance += amount
+        clubs[idx].finances.transferBudget += amount * owner.budgetAllocation.transferBudgetPercent / 100
+        seasonLedger?.ownerInvestment += amount
+        adjustFans((amount >= 5_000_000 ? 4 : 2))
+        owner.managerSatisfaction = min(100, owner.managerSatisfaction + 3)
+        addNews(headline: "Owner Invests \(Player.formatCurrency(amount))",
+                body: "\(owner.name) has injected \(Player.formatCurrency(amount)) of personal funds into \(clubs[idx].name).",
+                category: .board, sender: "Owner's Office")
+        return true
+    }
+
+    /// Takes a bank loan repaid weekly over two seasons.
+    @discardableResult
+    public func takeLoan(amount: Int, rate: Double) -> Bool {
+        guard gameMode == .createClub, amount > 0, !owner.isInAdministration,
+              let idx = clubs.firstIndex(where: { $0.isUserClub }) else { return false }
+        let loan = ClubLoan(principal: amount, rate: rate, termWeeks: 104)
+        owner.loans.append(loan)
+        clubs[idx].finances.balance += amount
+        seasonLedger?.loansReceived += amount
+        addNews(headline: "Bank Loan Agreed",
+                body: "A \(Player.formatCurrency(amount)) loan at \(Int((rate * 100).rounded()))% has been secured, repaid at \(Player.formatCurrency(loan.weeklyRepayment)) a week for two seasons.",
+                category: .board, sender: "Finance Director")
+        return true
+    }
+
+    /// Clears a loan early from club cash.
+    @discardableResult
+    public func repayLoan(id: UUID) -> Bool {
+        guard let loanIdx = owner.loans.firstIndex(where: { $0.id == id }),
+              let idx = clubs.firstIndex(where: { $0.isUserClub }),
+              clubs[idx].finances.balance >= owner.loans[loanIdx].remaining else { return false }
+        let amount = owner.loans[loanIdx].remaining
+        clubs[idx].finances.balance -= amount
+        seasonLedger?.loanRepayments += amount
+        owner.loans.remove(at: loanIdx)
+        return true
+    }
+
+    /// Sells the stadium's naming rights: steady commercial income, but fans
+    /// dislike losing the ground's name.
+    @discardableResult
+    public func signNamingRights() -> Bool {
+        guard gameMode == .createClub, owner.namingRightsValue == nil,
+              let idx = clubs.firstIndex(where: { $0.isUserClub }) else { return false }
+        let value = OwnerBusiness.namingRightsValue(capacity: clubs[idx].stadiumCapacity, reputation: clubs[idx].reputation)
+        let brand = OwnerBusiness.namingRightsBrands[abs(clubs[idx].name.hashValueStable) % OwnerBusiness.namingRightsBrands.count]
+        let oldName = clubs[idx].stadium
+        clubs[idx].stadium = "\(brand) Stadium"
+        clubs[idx].finances.sponsorshipIncome += value
+        owner.namingRightsValue = value
+        adjustFans(-(6))
+        addNews(headline: "\(oldName) Becomes the \(brand) Stadium",
+                body: "A naming-rights deal worth \(Player.formatCurrency(value)) a year has been signed. Some supporters are unhappy to see the old name go.",
+                category: .board, sender: "Commercial Director")
+        return true
+    }
+
+    /// Cost and size of a new stadium for the owner's club.
+    public var newStadiumPlan: (capacity: Int, cost: Int)? {
+        guard let club = userClub, club.stadiumCapacity < 75_000 else { return nil }
+        let capacity = min(80_000, max(club.stadiumCapacity + 8_000, Int(Double(club.stadiumCapacity) * 1.8)))
+        return (capacity, (capacity - club.stadiumCapacity) * 3_500)
+    }
+
+    /// Starts a year-long new-stadium build, paid from club cash up front.
+    @discardableResult
+    public func startStadiumProject() -> Bool {
+        guard gameMode == .createClub, owner.stadiumProject == nil, let plan = newStadiumPlan,
+              let idx = clubs.firstIndex(where: { $0.isUserClub }),
+              clubs[idx].finances.balance >= plan.cost else { return false }
+        clubs[idx].finances.balance -= plan.cost
+        owner.stadiumProject = StadiumProject(newCapacity: plan.capacity, cost: plan.cost, weeks: 52)
+        adjustFans(8)
+        addNews(headline: "New Stadium Approved",
+                body: "Work begins on a \(plan.capacity.formatted())-seat stadium costing \(Player.formatCurrency(plan.cost)). It will open in a year.",
+                category: .board, sender: "Owner's Office")
+        return true
+    }
+
+    /// The owner funds the manager's requested signing.
+    @discardableResult
+    public func approveManagerRequest() -> String {
+        guard let request = pendingManagerRequest,
+              let buyerIdx = clubs.firstIndex(where: { $0.isUserClub }),
+              let sellerIdx = clubs.firstIndex(where: { $0.id == request.sellerClubId }),
+              let player = clubs[sellerIdx].player(withId: request.playerId) else {
+            pendingManagerRequest = nil
+            return "The player is no longer available."
+        }
+        pendingManagerRequest = nil
+        // The owner's approval tops the allocation up if it falls short.
+        if clubs[buyerIdx].finances.transferBudget < request.fee {
+            clubs[buyerIdx].finances.transferBudget = request.fee
+        }
+        if clubs[buyerIdx].totalWeeklyWageBill + request.wage > clubs[buyerIdx].finances.wageBudget {
+            clubs[buyerIdx].finances.wageBudget = clubs[buyerIdx].totalWeeklyWageBill + request.wage
+        }
+        guard completeSigning(player: player, buyerIdx: buyerIdx, sellerIdx: sellerIdx,
+                              fee: request.fee, wage: request.wage, years: 3) else {
+            return "The deal could not be completed."
+        }
+        clubs[buyerIdx].ensureTacticalIntegrity()
+        owner.managerSatisfaction = min(100, owner.managerSatisfaction + 8)
+        addNews(headline: "\(request.playerName) Signs",
+                body: "With your backing, \(clubs[buyerIdx].manager) has signed \(request.playerName) from \(request.sellerName) for \(Player.formatCurrency(request.fee)).",
+                category: .transfer, sender: clubs[buyerIdx].manager)
+        return "\(request.playerName) has joined the club."
+    }
+
+    /// The owner refuses the manager's request.
+    public func declineManagerRequest() {
+        guard pendingManagerRequest != nil else { return }
+        pendingManagerRequest = nil
+        owner.managerSatisfaction = max(0, owner.managerSatisfaction - managerMoodChange(12))
+        checkManagerResignation()
+    }
+
+    /// A manager whose patience has run out walks away.
+    private func checkManagerResignation() {
+        guard gameMode == .createClub,
+              owner.managerSatisfaction <= (owner.managerContract?.personality.resignationThreshold ?? 15),
+              let idx = clubs.firstIndex(where: { $0.isUserClub }),
+              clubs[idx].manager != "Interim Manager" else { return }
+        let outgoing = clubs[idx].manager
+        owner.managerContract = nil
+        clubs[idx].manager = "Interim Manager"
+        owner.managerRating = 45
+        owner.managerSatisfaction = 55
+        adjustFans(-(6))
+        addNews(headline: "\(outgoing) Resigns",
+                body: "\(outgoing) has resigned, citing a lack of backing from the owner. Appoint a successor from the People tab.",
+                category: .board, sender: "Owner's Office")
+    }
+
+    // MARK: - Supporters' mood
+
+    /// Moves the supporters' mood and remembers why, so the owner can see
+    /// what is pleasing or angering the fans. The reason comes from the
+    /// calling function unless given.
+    func adjustFans(_ change: Int, reason: String = #function) {
+        guard change != 0 else { return }
+        owner.supporterConfidence = max(0, min(100, owner.supporterConfidence + change))
+        let readable = GameState.fanReasons[reason.components(separatedBy: "(").first ?? reason] ?? reason
+        if var last = owner.fanMoodLog.last, last.reason == readable, last.date.prefix(7) == season.currentDate.prefix(7) {
+            last.change += change
+            owner.fanMoodLog[owner.fanMoodLog.count - 1] = last
+        } else {
+            owner.fanMoodLog.append(FanMoodEntry(date: season.currentDate, reason: readable, change: change))
+        }
+        if owner.fanMoodLog.count > 40 { owner.fanMoodLog.removeFirst(owner.fanMoodLog.count - 40) }
+    }
+
+    static let fanReasons: [String: String] = [
+        "advanceWeek": "Ticket prices",
+        "investInClub": "Owner investing their own money",
+        "signNamingRights": "Stadium renamed for a sponsor",
+        "startStadiumProject": "New stadium plans",
+        "checkManagerResignation": "Manager walked out",
+        "declineTakeover": "Takeover bid rejected",
+        "runOwnerBusinessWeek": "Club business",
+        "enterAdministration": "Club in administration",
+        "applyDerbyAftermath": "Derby result",
+        "acceptIncomingOffer": "Selling a first-team player",
+        "approveOwnerInvestment": "Investment in the club",
+        "updateOwnerMatchPerformance": "Results on the pitch",
+        "appointManager": "New manager appointed",
+        "dismissManager": "Manager sacked"
+    ]
+
+    /// The main reasons behind the fans' mood over the last few months,
+    /// largest first.
+    public var fanMoodReasons: [(reason: String, change: Int)] {
+        let recent = owner.fanMoodLog.suffix(30)
+        var totals: [String: Int] = [:]
+        for entry in recent { totals[entry.reason, default: 0] += entry.change }
+        return totals.filter { $0.value != 0 }
+            .map { (reason: $0.key, change: $0.value) }
+            .sorted { abs($0.change) > abs($1.change) }
+    }
+
+    // MARK: - Manager contracts
+
+    /// Wage the manager asks for to extend his contract: a rise after a
+    /// good relationship and a rising reputation, a small one otherwise.
+    public var managerRenewalWage: Int? {
+        guard let contract = owner.managerContract else { return nil }
+        let rise = owner.managerSatisfaction >= 60 ? 1.15 : 1.05
+        return Int(Double(contract.weeklyWage) * rise)
+    }
+
+    /// Extends the manager's contract by `years` at his asking wage.
+    @discardableResult
+    public func renewManagerContract(years: Int) -> Bool {
+        guard gameMode == .createClub, var contract = owner.managerContract,
+              let wage = managerRenewalWage else { return false }
+        if owner.managerSatisfaction < 25 {
+            addNews(headline: "\(contract.managerName) Rejects New Deal",
+                    body: "\(contract.managerName) feels unsupported by the board and will not sign a new contract.",
+                    category: .board, sender: contract.managerName)
+            return false
+        }
+        contract.yearsRemaining += max(1, min(4, years))
+        contract.weeklyWage = wage
+        owner.managerContract = contract
+        owner.managerSatisfaction = min(100, owner.managerSatisfaction + 10)
+        addNews(headline: "\(contract.managerName) Signs New Contract",
+                body: "\(contract.managerName) has committed his future to the club until \(contract.yearsRemaining) more season\(contract.yearsRemaining == 1 ? "" : "s") are up, on \(Player.formatCurrency(wage))/w.",
+                category: .board, sender: "Owner's Office")
+        return true
+    }
+
+    /// Summer: a year comes off the manager's contract. One that has run out
+    /// must be renewed in the first weeks of the season or he leaves.
+    func ageManagerContract() {
+        guard gameMode == .createClub, var contract = owner.managerContract else { return }
+        contract.yearsRemaining -= 1
+        contract.age += 1
+        owner.managerContract = contract
+        if contract.yearsRemaining <= 0 {
+            addNews(headline: "\(contract.managerName)'s Contract Has Expired",
+                    body: "\(contract.managerName) is working without a contract. Offer him a new deal in the People tab before the end of September or he will leave.",
+                    category: .board, sender: "Owner's Office")
+        }
+    }
+
+    /// A manager without a contract walks once September is over.
+    func checkManagerContractExpiry() {
+        guard gameMode == .createClub, let contract = owner.managerContract, contract.yearsRemaining <= 0,
+              currentMonth == 10,
+              let idx = clubs.firstIndex(where: { $0.isUserClub }) else { return }
+        owner.managerContract = nil
+        clubs[idx].manager = "Interim Manager"
+        owner.managerRating = 45
+        addNews(headline: "\(contract.managerName) Leaves",
+                body: "With no new contract offered, \(contract.managerName) has left the club. Appoint a successor from the People tab.",
+                category: .board, sender: "Owner's Office")
+    }
+
+    /// Accepts the takeover: the owner sells up and the career ends.
+    /// Returns a closing summary for the UI.
+    public func acceptTakeover() -> String? {
+        guard let offer = pendingTakeover, let club = userClub else { return nil }
+        pendingTakeover = nil
+        owner.personalWealth += offer.amount
+        let startValue = owner.valuationAtTakeover ?? offer.amount
+        let growth = Int((Double(offer.amount) / Double(max(1, startValue)) - 1) * 100)
+        return "You sold \(club.name) to \(offer.bidder) for \(Player.formatCurrency(offer.amount)), \(growth)% more than the club was worth when you founded it. You invested \(Player.formatCurrency(owner.totalInvested)) of your own money and leave with a fortune of \(Player.formatCurrency(owner.personalWealth)).\n\nThank you for running the club."
+    }
+
+    public func declineTakeover() {
+        guard pendingTakeover != nil else { return }
+        pendingTakeover = nil
+        adjustFans(3)
+    }
+
+    /// Weekly business cycle for an owner: loan repayments, the stadium build,
+    /// cash-flow distress and administration, and takeover interest.
+    private func runOwnerBusinessWeek() {
+        guard gameMode == .createClub, let idx = clubs.firstIndex(where: { $0.isUserClub }) else { return }
+
+        // An unanswered request lapses when the window shuts, and the manager
+        // takes it as a snub.
+        if pendingManagerRequest != nil && !isTransferWindowOpen {
+            pendingManagerRequest = nil
+            owner.managerSatisfaction = max(0, owner.managerSatisfaction - managerMoodChange(6))
+            checkManagerResignation()
+        }
+
+        // Loan repayments.
+        for loanIdx in owner.loans.indices {
+            let payment = min(owner.loans[loanIdx].remaining, owner.loans[loanIdx].weeklyRepayment)
+            owner.loans[loanIdx].remaining -= payment
+            clubs[idx].finances.balance -= payment
+            seasonLedger?.loanRepayments += payment
+        }
+        owner.loans.removeAll { $0.remaining <= 0 }
+
+        // Stadium construction.
+        if var project = owner.stadiumProject {
+            project.weeksRemaining -= 1
+            if project.weeksRemaining <= 0 {
+                let previous = clubs[idx].stadiumCapacity
+                clubs[idx].stadiumCapacity = project.newCapacity
+                clubs[idx].finances.stadiumCapacity = project.newCapacity
+                clubs[idx].finances.matchdayIncome = Int(Double(clubs[idx].finances.matchdayIncome) * Double(project.newCapacity) / Double(max(1, previous)))
+                clubs[idx].reputation = min(99, clubs[idx].reputation + 3)
+                adjustFans(10)
+                owner.stadiumProject = nil
+                addNews(headline: "The New Stadium Opens!",
+                        body: "\(clubs[idx].name)'s new \(project.newCapacity.formatted())-seat home is complete. Bigger crowds and a bigger profile await.",
+                        category: .board, sender: "Owner's Office")
+            } else {
+                owner.stadiumProject = project
+            }
+        }
+
+        // Cash-flow distress. Weeks overdrawn lead to warnings, then
+        // administration: a points deduction, a transfer embargo and the
+        // administrators selling the most valuable players.
+        if clubs[idx].finances.balance < 0 {
+            owner.weeksInDebt += 1
+            if owner.weeksInDebt == 4 {
+                addNews(headline: "Bank Warns Over Overdraft",
+                        body: "The club has been overdrawn for a month. Invest, borrow or sell players, or the club will be placed into administration.",
+                        category: .board, sender: "Finance Director")
+            } else if owner.weeksInDebt >= 10 && !owner.isInAdministration {
+                enterAdministration(clubIdx: idx)
+            }
+        } else {
+            owner.weeksInDebt = 0
+        }
+
+        processSponsorMarketWeek()
+
+        // Takeover bids arrive at the start of a season (ownerSeasonStartMarket).
+        if gameMode == .manageClub, pendingTakeover == nil, season.currentWeek == 30,
+           let start = owner.valuationAtTakeover, clubValuation > start, Double.random(in: 0..<1) < 0.35 {
+            let bidders = ["a Gulf investment fund", "an American sports group", "a local consortium", "a private equity firm"]
+            let amount = Int(Double(clubValuation) * Double.random(in: 1.1...1.35))
+            pendingTakeover = TakeoverOffer(bidder: bidders.randomElement() ?? "a consortium", amount: amount)
+            addNews(headline: "Takeover Bid Received",
+                    body: "\(pendingTakeover?.bidder.capitalized ?? "A consortium") has offered \(Player.formatCurrency(amount)) to buy the club. Review it in the Boardroom.",
+                    category: .board, sender: "Owner's Office")
+        }
+    }
+
+    private func enterAdministration(clubIdx idx: Int) {
+        owner.isInAdministration = true
+        let deduction = clubs[idx].leagueTier.country == .england ? 12 : 10
+        pointsDeductions[clubs[idx].id, default: 0] += deduction
+        adjustFans(-(25))
+        owner.managerSatisfaction = max(0, owner.managerSatisfaction - managerMoodChange(20))
+        owner.legacyPoints = max(0, owner.legacyPoints - 10)
+
+        // Administrators raise cash by selling the two most valuable players
+        // to clubs that can afford them, at a discount.
+        var sold: [String] = []
+        let saleable = clubs[idx].players.sorted { $0.value > $1.value }.prefix(2)
+        for player in saleable {
+            let fee = Int(Double(player.value) * 0.7)
+            guard let buyerIdx = clubs.indices.first(where: {
+                $0 != idx && !clubs[$0].isUserClub && clubs[$0].finances.transferBudget >= fee
+                    && clubs[$0].reputation >= clubs[idx].reputation
+            }) else { continue }
+            let wage = max(player.wage, Player.calculateWage(overall: player.overall, age: player.age, tier: clubs[buyerIdx].leagueTier))
+            if clubs[buyerIdx].totalWeeklyWageBill + wage > clubs[buyerIdx].finances.wageBudget {
+                clubs[buyerIdx].finances.wageBudget = clubs[buyerIdx].totalWeeklyWageBill + wage
+            }
+            if completeSigning(player: player, buyerIdx: buyerIdx, sellerIdx: idx, fee: fee, wage: wage, years: 3) {
+                sold.append("\(player.fullName) (\(Player.formatCurrency(fee)))")
+            }
+        }
+        clubs[idx].ensureTacticalIntegrity()
+        addNews(headline: "\(clubs[idx].name) Enter Administration",
+                body: "After ten weeks in the red the club has been placed into administration: a \(deduction)-point deduction and a transfer embargo.\(sold.isEmpty ? "" : " The administrators have sold " + sold.joined(separator: " and ") + ".")",
+                category: .board, sender: "League Office")
+    }
+
+    /// Leaves administration at season's end if the books are back in the black.
+    private func reviewAdministration() {
+        guard owner.isInAdministration, let club = userClub else { return }
+        if club.finances.balance >= 0 {
+            owner.isInAdministration = false
+            owner.weeksInDebt = 0
+            addNews(headline: "Out of Administration",
+                    body: "\(club.name) have exited administration. The transfer embargo is lifted.",
+                    category: .board, sender: "League Office")
+        }
+    }
+
+    /// A successful manager attracts bigger clubs, which pay compensation.
+    private func reviewManagerPoaching(position: Int, leagueSize: Int) {
+        guard gameMode == .createClub, owner.managerRating >= 65,
+              position <= max(1, leagueSize / 3),
+              let idx = clubs.firstIndex(where: { $0.isUserClub }),
+              clubs[idx].manager != "Interim Manager",
+              Double.random(in: 0..<1) < 0.3 * (owner.managerContract?.personality.poachingRisk ?? 1) else { return }
+        let outgoing = clubs[idx].manager
+        // The poaching club pays his release fee: the rest of his contract.
+        let compensation = owner.managerContract?.releaseFee
+            ?? 150 * max(2_000, Int(pow(1.07, Double(owner.managerRating - 40)) * 2_500))
+        owner.managerContract = nil
+        clubs[idx].finances.balance += compensation
+        clubs[idx].manager = "Interim Manager"
+        owner.managerRating = 45
+        owner.managerSatisfaction = 60
+        addNews(headline: "\(outgoing) Poached",
+                body: "A bigger club has triggered \(outgoing)'s release clause after a fine season, paying \(Player.formatCurrency(compensation)) in compensation. You need a new manager.",
+                category: .board, sender: "Owner's Office")
+    }
+
+    // MARK: - Rivalries
+
+    /// The user's European ties this season, with the competition's name.
+    public var userEuropeanFixtures: [(competition: String, fixture: EuropeanFixture)] {
+        guard let uid = userClubId else { return [] }
+        return europeanCompetitions.flatMap { comp in
+            comp.fixtures
+                .filter { $0.homeClubId == uid || $0.awayClubId == uid }
+                .map { (comp.competition.shortName, $0) }
+        }
+        .sorted { $0.fixture.matchweek < $1.fixture.matchweek }
+    }
+
+    /// The rivalry between two clubs, if any.
+    public func rivalry(between a: UUID, and b: UUID) -> Rivalry? {
+        rivalries.first { $0.involves(a, b) }
+    }
+
+    /// The derby name for a fixture, e.g. "North London Derby".
+    public func derbyName(for fixture: Fixture) -> String? {
+        rivalry(between: fixture.homeClubId, and: fixture.awayClubId)?.name
+    }
+
+    /// Clubs the user's club counts as rivals.
+    public var userRivals: [(club: Club, rivalry: Rivalry)] {
+        guard let uid = userClubId else { return [] }
+        return rivalries.compactMap { rivalry in
+            guard rivalry.clubA == uid || rivalry.clubB == uid else { return nil }
+            let otherId = rivalry.clubA == uid ? rivalry.clubB : rivalry.clubA
+            return club(withId: otherId).map { ($0, rivalry) }
+        }
+        .sorted { $0.rivalry.intensity > $1.rivalry.intensity }
+    }
+
+    /// Fills in rivalries for saves made before they existed.
+    /// Makes sure every club has two goalkeepers (old saves and source data
+    /// could leave a side with none). The user hears about any emergency
+    /// signing for their own club.
+    public func ensureGoalkeepersEverywhere() {
+        for idx in clubs.indices {
+            let added = clubs[idx].ensureGoalkeepers()
+            guard added > 0 else { continue }
+            if clubs[idx].isUserClub {
+                if !clubs[idx].tactics.startingXI.compactMap({ id in clubs[idx].players.first { $0.id == id } })
+                    .contains(where: { $0.primaryPosition == .GK }) {
+                    clubs[idx].autoPickStartingXI()
+                }
+                addNews(
+                    headline: "Emergency Goalkeeper Signed",
+                    body: "\(clubs[idx].name) had \(added == 2 ? "no" : "only one") senior goalkeeper, so the club has signed \(added == 1 ? "a keeper" : "two keepers") from the free market. Check your lineup.",
+                    category: .transfer,
+                    sender: "Director of Football"
+                )
+            } else {
+                clubs[idx].autoPickStartingXI()
+            }
+        }
+    }
+
+    public func seedRivalriesIfNeeded() {
+        guard rivalries.isEmpty else { return }
+        rivalries = DataLoader.loadRivalries(for: clubs)
+    }
+
+    /// Derby results matter far beyond three points: the squad's morale, the
+    /// board's patience and the fans' mood all swing with them.
+    private func applyDerbyAftermath(_ derby: Rivalry, result: MatchResult, userWasHome: Bool) {
+        guard let clubIdx = clubs.firstIndex(where: { $0.isUserClub }) else { return }
+        let goalsFor = userWasHome ? result.homeGoals : result.awayGoals
+        let goalsAgainst = userWasHome ? result.awayGoals : result.homeGoals
+        let opponentId = userWasHome ? result.awayClubId : result.homeClubId
+        let opponent = clubName(for: opponentId)
+        let swing = 3 * derby.intensity
+
+        if goalsFor > goalsAgainst {
+            for p in clubs[clubIdx].players.indices {
+                clubs[clubIdx].players[p].boostMorale()
+                if derby.intensity >= 3 { clubs[clubIdx].players[p].boostMorale() }
+            }
+            jobSecurity.boardConfidence = min(100, jobSecurity.boardConfidence + swing)
+            adjustFans(swing)
+            addNews(
+                headline: "\(derby.name) Glory!",
+                body: "A \(goalsFor)-\(goalsAgainst) win over \(opponent). The fans will be talking about this one for weeks, and the dressing room is buzzing.",
+                category: .general,
+                sender: "Supporters' Club"
+            )
+        } else if goalsFor < goalsAgainst {
+            for p in clubs[clubIdx].players.indices {
+                clubs[clubIdx].players[p].dampenMorale()
+            }
+            jobSecurity.boardConfidence = max(0, jobSecurity.boardConfidence - swing)
+            adjustFans(-(swing))
+            addNews(
+                headline: "\(derby.name) Misery",
+                body: "Losing \(goalsFor)-\(goalsAgainst) to \(opponent) hurts. Supporters are furious and the board expect a reaction.",
+                category: .general,
+                sender: "Supporters' Club"
+            )
+        }
+    }
+
+    // MARK: - Domestic Cups
+
+    /// The calendar date of a matchweek, derived from the season's opening week.
+    private func dateForWeek(_ week: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        let openingDate = season.fixtures.first(where: { $0.matchWeek == 1 })?.date ?? season.currentDate
+        guard let base = formatter.date(from: openingDate),
+              let date = Calendar.current.date(byAdding: .day, value: (week - 1) * 7, to: base) else {
+            return season.currentDate
+        }
+        return formatter.string(from: date)
+    }
+
+    /// Creates each country's cup and draws its first round. The strongest
+    /// clubs (top division first, then reputation) receive byes so the bracket
+    /// is a power of two from the second round on.
+    public func seedDomesticCups() {
+        domesticCups = []
+        var clubsByCountry: [LeagueCountry: [Club]] = [:]
+        for league in leagues {
+            let members = league.clubIds.compactMap { club(withId: $0) }
+            clubsByCountry[league.tier.country, default: []].append(contentsOf: members)
+        }
+        for (country, members) in clubsByCountry where members.count >= DomesticCups.minimumEntrants {
+            let seeded = members.sorted { lhs, rhs in
+                if lhs.leagueTier.level != rhs.leagueTier.level { return lhs.leagueTier.level < rhs.leagueTier.level }
+                return lhs.reputation > rhs.reputation
+            }
+            let size = DomesticCups.bracketSize(for: seeded.count)
+            let byeCount = size - seeded.count
+            let roundCount = Int(log2(Double(size)).rounded())
+            // Play the rounds in the last cup weeks so every final lands together.
+            let weeks = Array(DomesticCups.cupWeeks.suffix(roundCount))
+            guard roundCount >= 2, weeks.count == roundCount else { continue }
+
+            var cup = DomesticCupState(
+                country: country,
+                name: DomesticCups.cupName(for: country),
+                rounds: DomesticCups.roundNames(count: roundCount),
+                roundWeeks: weeks,
+                byeClubIds: seeded.prefix(byeCount).map { $0.id }
+            )
+            let firstRoundClubs = seeded.dropFirst(byeCount).map { $0.id }
+            drawCupRound(&cup, entrants: firstRoundClubs)
+            domesticCups.append(cup)
+        }
+        domesticCups.sort { $0.country.index < $1.country.index }
+    }
+
+    /// Pairs `entrants` at random into ties for the cup's current round.
+    private func drawCupRound(_ cup: inout DomesticCupState, entrants: [UUID]) {
+        let week = cup.roundWeeks[cup.currentRoundIndex]
+        let date = dateForWeek(week)
+        let roundName = cup.currentRoundName
+        var pool = entrants.shuffled()
+        while pool.count >= 2 {
+            let home = pool.removeFirst()
+            let away = pool.removeFirst()
+            season.fixtures.append(Fixture(
+                homeClubId: home,
+                awayClubId: away,
+                matchWeek: week,
+                date: date,
+                competition: cup.name,
+                cupRound: roundName
+            ))
+            if let uid = userClubId, home == uid || away == uid {
+                let opponent = home == uid ? away : home
+                addNews(
+                    headline: "\(cup.name) \(roundName) Draw",
+                    body: "You have been drawn \(home == uid ? "at home to" : "away to") \(clubName(for: opponent)) in the \(cup.name) \(roundName.lowercased()).",
+                    category: .general,
+                    sender: "\(cup.name)"
+                )
+            }
+        }
+    }
+
+    /// Prize money for winning a tie in the given round.
+    private func cupPrize(roundIndex: Int, of roundCount: Int, country: LeagueCountry) -> Int {
+        let scale: Double
+        switch country {
+        case .england, .spain, .italy, .germany, .france: scale = 1.0
+        case .portugal, .netherlands, .turkey, .scotland, .belgium, .brazil, .argentina: scale = 0.5
+        default: scale = 0.3
+        }
+        // Escalates towards the final: the last round pays the most.
+        let stepsFromFinal = roundCount - 1 - roundIndex
+        let base = 2_400_000.0 / pow(2.0, Double(stepsFromFinal))
+        return max(25_000, Int(base * scale))
+    }
+
+    /// Advances cups whose current round has been fully played: pays prize
+    /// money, then draws the next round or crowns the winner.
+    public func progressDomesticCups() {
+        for index in domesticCups.indices where !domesticCups[index].isFinished {
+            var cup = domesticCups[index]
+            let ties = season.fixtures.filter { $0.competition == cup.name && $0.cupRound == cup.currentRoundName }
+            guard !ties.isEmpty, ties.allSatisfy({ $0.isPlayed }) else { continue }
+
+            var winners: [UUID] = []
+            for tie in ties {
+                // A tie can only be level if a shootout could not be staged;
+                // the higher-ranked club then goes through.
+                let winner: UUID
+                if let decided = tie.winnerClubId {
+                    winner = decided
+                } else {
+                    let home = club(withId: tie.homeClubId)?.reputation ?? 0
+                    let away = club(withId: tie.awayClubId)?.reputation ?? 0
+                    winner = home >= away ? tie.homeClubId : tie.awayClubId
+                }
+                winners.append(winner)
+                let loser = winner == tie.homeClubId ? tie.awayClubId : tie.homeClubId
+                let prize = cupPrize(roundIndex: cup.currentRoundIndex, of: cup.rounds.count, country: cup.country)
+                if let w = clubs.firstIndex(where: { $0.id == winner }) {
+                    clubs[w].finances.balance += prize
+                    clubs[w].finances.transferBudget += prize / 2
+                    if clubs[w].isUserClub { seasonLedger?.prizeMoney += prize }
+                }
+                if let uid = userClubId {
+                    if loser == uid {
+                        addNews(
+                            headline: "Out of the \(cup.name)",
+                            body: "\(clubName(for: winner)) knocked us out in the \(cup.currentRoundName.lowercased()).",
+                            category: .general,
+                            sender: "\(cup.name)"
+                        )
+                    } else if winner == uid && cup.currentRoundIndex < cup.rounds.count - 1 {
+                        addNews(
+                            headline: "Through in the \(cup.name)",
+                            body: "Victory over \(clubName(for: loser)) takes us into the next round and earns \(Player.formatCurrency(prize)) in prize money.",
+                            category: .general,
+                            sender: "\(cup.name)"
+                        )
+                    }
+                }
+                // Giant-killing headlines: a club two or more divisions lower
+                // knocking out a top-flight side.
+                if let w = club(withId: winner), let l = club(withId: loser),
+                   l.leagueTier.level == 1, w.leagueTier.level >= 3 {
+                    addNews(
+                        headline: "Giant-Killing! \(w.name) Stun \(l.name)",
+                        body: "\(w.leagueTier.displayName) side \(w.name) have knocked \(l.name) out of the \(cup.name).",
+                        category: .general,
+                        sender: "\(cup.name)"
+                    )
+                }
+            }
+
+            if cup.currentRoundIndex >= cup.rounds.count - 1 {
+                cup.championClubId = winners.first
+                if let champion = winners.first {
+                    addNews(
+                        headline: "\(clubName(for: champion)) Win the \(cup.name)!",
+                        body: "\(clubName(for: champion)) lift the \(cup.name) after victory in the final.",
+                        category: .award,
+                        sender: "\(cup.name)"
+                    )
+                    if champion == userClubId {
+                        unlockOwnerMilestone(id: "cup_winner")
+                    }
+                }
+            } else {
+                var entrants = winners
+                if cup.currentRoundIndex == 0 { entrants += cup.byeClubIds }
+                cup.currentRoundIndex += 1
+                drawCupRound(&cup, entrants: entrants)
+            }
+            domesticCups[index] = cup
+        }
+    }
+
+    /// Cups the user's club has won this season, for the honours list.
+    public var userCupWins: [String] {
+        guard let uid = userClubId else { return [] }
+        return domesticCups.filter { $0.championClubId == uid }.map { "\($0.name) Winners" }
     }
 
     // MARK: - International Management
@@ -632,17 +2036,18 @@ public final class GameState: Codable {
     
     // MARK: - Match Engine Simulation
     
-    /// Simulates a single fixture by delegating to the shared `MatchEngine`, then
-    /// writes the updated rosters (fatigue, injuries, stats) and result back into world state.
-    public func simulateMatch(fixture: inout Fixture) {
-        guard !fixture.isPlayed else { return }
-        guard let homeIdx = clubs.firstIndex(where: { $0.id == fixture.homeClubId }),
-              let awayIdx = clubs.firstIndex(where: { $0.id == fixture.awayClubId }) else {
-            return
-        }
-        
+    /// Everything decided before kick-off: rotated lineups, the bans that
+    /// are being served, and the engine's settings for the fixture.
+    func prepareMatch(_ fixture: Fixture, homeIdx: Int, awayIdx: Int)
+        -> (home: Club, away: Club, homeSuspensions: [UUID: Int], awaySuspensions: [UUID: Int], config: MatchEngine.SimulationConfig) {
         var homeClub = clubs[homeIdx]
         var awayClub = clubs[awayIdx]
+        // Clubs not managed by the user rotate tired players. (An owner's club
+        // is run by the appointed manager, so it rotates too.)
+        let userManages: (Club) -> Bool = { $0.isUserClub && self.gameMode == .manageClub }
+        let assistantRotates = matchSettings.assistantRotatesTiredPlayers
+        if !userManages(homeClub) { homeClub.prepareAIMatchday() } else if assistantRotates { homeClub.rotateTiredStarters() }
+        if !userManages(awayClub) { awayClub.prepareAIMatchday() } else if assistantRotates { awayClub.rotateTiredStarters() }
         
         // Snapshot pre-match bans. Players who were already suspended when the
         // fixture kicked off have now served one match of that ban.
@@ -658,10 +2063,88 @@ public final class GameState: Codable {
             matchWeek: fixture.matchWeek,
             competition: fixture.competition,
             date: fixture.date,
-            isKnockout: false
+            // European ties are decided over two legs by the competition, so
+            // only a European final goes to extra time and penalties here.
+            isKnockout: fixture.isCupTie && (!fixture.isEuropean || fixture.cupRound == "Final"),
+            derbyIntensity: rivalry(between: fixture.homeClubId, and: fixture.awayClubId)?.intensity ?? 0,
+            homeCoachingMultiplier: coachingMultiplier(for: fixture.homeClubId),
+            awayCoachingMultiplier: coachingMultiplier(for: fixture.awayClubId)
         )
+        return (homeClub, awayClub, homeSuspensionsBefore, awaySuspensionsBefore, config)
+    }
+
+    /// Kicks off a live match and plays it to half-time. The second half
+    /// runs when `simulateFixture(id:)` is called for the same fixture.
+    @discardableResult
+    public func beginLiveMatch(fixtureId: UUID) -> Bool {
+        guard let fixture = season.fixtures.first(where: { $0.id == fixtureId }), !fixture.isPlayed,
+              let homeIdx = clubs.firstIndex(where: { $0.id == fixture.homeClubId }),
+              let awayIdx = clubs.firstIndex(where: { $0.id == fixture.awayClubId }) else { return false }
+        if liveMatch?.fixtureId == fixtureId { return true }
+        var prepared = prepareMatch(fixture, homeIdx: homeIdx, awayIdx: awayIdx)
+        guard let paused = MatchEngine.playFirstHalf(home: &prepared.home, away: &prepared.away, config: prepared.config) else { return false }
+        liveMatch = LiveMatchSession(fixtureId: fixtureId, paused: paused, home: prepared.home, away: prepared.away,
+                                     homeSuspensions: prepared.homeSuspensions, awaySuspensions: prepared.awaySuspensions,
+                                     config: prepared.config)
+        // Show the manager who is actually on the pitch at the break. Changes
+        // are for this match only; the usual lineup returns afterwards.
+        if let uid = userClubId, gameMode == .manageClub, fixture.involves(clubId: uid),
+           let userIdx = clubs.firstIndex(where: { $0.id == uid }) {
+            beginMatchOnlyLineup()
+            let isHome = fixture.homeClubId == uid
+            clubs[userIdx].tactics.startingXI = isHome ? paused.homeOnPitch : paused.awayOnPitch
+            clubs[userIdx].tactics.substitutes = isHome ? paused.homeBenchIds : paused.awayBenchIds
+        }
+        return true
+    }
+
+    /// Substitutions the user can still make in the live match.
+    public var liveSubsRemaining: Int {
+        guard let session = liveMatch, let uid = userClubId else { return 0 }
+        return session.home.id == uid ? session.paused.homeSubsRemaining : session.paused.awaySubsRemaining
+    }
+
+    /// Simulates a single fixture by delegating to the shared `MatchEngine`, then
+    /// writes the updated rosters (fatigue, injuries, stats) and result back into world state.
+    ///
+    /// Callers holding a fixture inside `season.fixtures` must use
+    /// `simulateFixture(id:)` instead of passing `&season.fixtures[i]`: the
+    /// post-match hooks (board confidence, owner milestones, news) read
+    /// `season`, and reading it while an inout access to it is open is a Swift
+    /// exclusivity violation that traps at runtime.
+    public func simulateMatch(fixture: inout Fixture) {
+        guard !fixture.isPlayed else { return }
+        guard let homeIdx = clubs.firstIndex(where: { $0.id == fixture.homeClubId }),
+              let awayIdx = clubs.firstIndex(where: { $0.id == fixture.awayClubId }) else {
+            return
+        }
         
-        let result = MatchEngine.simulateFullMatch(home: &homeClub, away: &awayClub, config: config)
+        var homeClub: Club
+        var awayClub: Club
+        let homeSuspensionsBefore: [UUID: Int]
+        let awaySuspensionsBefore: [UUID: Int]
+        let result: MatchResult
+        if let session = liveMatch, session.fixtureId == fixture.id {
+            // The second half of a live match: pick up where the whistle went,
+            // with the user's half-time lineup and tactics.
+            homeClub = session.home
+            awayClub = session.away
+            if let uid = userClubId, let current = club(withId: uid) {
+                if homeClub.id == uid { homeClub.tactics = current.tactics }
+                if awayClub.id == uid { awayClub.tactics = current.tactics }
+            }
+            homeSuspensionsBefore = session.homeSuspensions
+            awaySuspensionsBefore = session.awaySuspensions
+            result = MatchEngine.resume(session.paused, home: &homeClub, away: &awayClub, config: session.config)
+            liveMatch = nil
+        } else {
+            let prepared = prepareMatch(fixture, homeIdx: homeIdx, awayIdx: awayIdx)
+            homeClub = prepared.home
+            awayClub = prepared.away
+            homeSuspensionsBefore = prepared.homeSuspensions
+            awaySuspensionsBefore = prepared.awaySuspensions
+            result = MatchEngine.simulateFullMatch(home: &homeClub, away: &awayClub, config: prepared.config)
+        }
         
         for pIdx in homeClub.players.indices {
             let id = homeClub.players[pIdx].id
@@ -676,11 +2159,34 @@ public final class GameState: Codable {
             }
         }
         
+        // Archive results the user did not take part in in compact form; keep
+        // the full commentary and ratings only for the user's own matches.
+        let userInvolved = userClubId.map { fixture.involves(clubId: $0) } ?? false
+        let archived = userInvolved ? result : result.compactedForArchive()
+        // Other clubs only ever need their recent form, so they keep the last
+        // six results as scores. (Every club kept a full copy of every
+        // result, a third of the save file.)
+        if !homeClub.isUserClub,
+           let i = homeClub.seasonResults.lastIndex(where: { $0.id == result.id }) {
+            homeClub.seasonResults[i] = result.compactedForArchive()
+            if homeClub.seasonResults.count > 6 { homeClub.seasonResults.removeFirst(homeClub.seasonResults.count - 6) }
+        }
+        if !awayClub.isUserClub,
+           let i = awayClub.seasonResults.lastIndex(where: { $0.id == result.id }) {
+            awayClub.seasonResults[i] = result.compactedForArchive()
+            if awayClub.seasonResults.count > 6 { awayClub.seasonResults.removeFirst(awayClub.seasonResults.count - 6) }
+        }
+
         clubs[homeIdx] = homeClub
         clubs[awayIdx] = awayClub
         
         fixture.isPlayed = true
-        fixture.result = result
+        fixture.result = archived
+
+        if let uid = userClubId, fixture.involves(clubId: uid),
+           let derby = rivalry(between: fixture.homeClubId, and: fixture.awayClubId) {
+            applyDerbyAftermath(derby, result: result, userWasHome: fixture.homeClubId == uid)
+        }
 
         if fixture.involves(clubId: userClubId ?? UUID()) {
             if gameMode == .createClub {
@@ -691,6 +2197,56 @@ public final class GameState: Codable {
         }
     }
     
+    /// Simulates the fixture with the given id in place. Works on a local copy
+    /// so no exclusive access to `season` is held while the match hooks run.
+    /// Returns `true` when the fixture was found and is now played.
+    @discardableResult
+    public func simulateFixture(id: UUID) -> Bool {
+        guard let idx = season.fixtures.firstIndex(where: { $0.id == id }) else { return false }
+        var fixture = season.fixtures[idx]
+        guard !fixture.isPlayed else { return true }
+        simulateMatch(fixture: &fixture)
+        // Re-resolve the index: the hooks must not reorder fixtures, but never
+        // write through a stale index if they ever do.
+        if idx < season.fixtures.count, season.fixtures[idx].id == id {
+            season.fixtures[idx] = fixture
+        } else if let freshIdx = season.fixtures.firstIndex(where: { $0.id == id }) {
+            season.fixtures[freshIdx] = fixture
+        }
+        // A one-off lineup was only for this match.
+        if fixture.isPlayed, let uid = userClubId, fixture.involves(clubId: uid) {
+            if matchOnlyLineupBackup != nil { restoreUsualLineup() }
+            checkMatchAchievements(fixture)
+            checkClubRecords(fixture)
+            payWinBonusIfDue(fixture)
+        }
+        return fixture.isPlayed
+    }
+
+    // MARK: - Transfer Windows
+
+    /// The in-game month (1-12), from the "yyyy-MM-dd" calendar date.
+    private var currentMonth: Int {
+        let parts = season.currentDate.split(separator: "-")
+        return parts.count >= 2 ? Int(parts[1]) ?? 8 : 8
+    }
+
+    /// Club-to-club transfers happen in the summer window (June to the end of
+    /// August) and the January window. Free agents can be signed at any time.
+    public var isTransferWindowOpen: Bool {
+        [6, 7, 8, 1].contains(currentMonth)
+    }
+
+    /// A short description for the transfer screens.
+    public var transferWindowStatus: String {
+        switch currentMonth {
+        case 6, 7, 8: return "Summer window open until 1 September"
+        case 1: return "January window open until 1 February"
+        case 9, 10, 11, 12: return "Window closed. Reopens 1 January"
+        default: return "Window closed. Reopens in the summer"
+        }
+    }
+
     // MARK: - User Transfer Bidding
     
     /// Opens a transfer negotiation by submitting an opening bid from the user's
@@ -727,14 +2283,42 @@ public final class GameState: Codable {
             isFreeAgent = false
         }
 
-        guard let player = targetPlayer else { return nil }
+        guard let player = targetPlayer, !player.isOnLoan else { return nil }
         guard offeredWage > 0, contractYears > 0 else { return nil }
+        // Players under contract can only move while a window is open.
+        guard isFreeAgent || isTransferWindowOpen else { return nil }
 
         // Free agents never command a fee; enforce that here so the UI or a
         // stale slider value cannot charge the buyer for an unattached player.
         let resolvedFee = isFreeAgent ? 0 : max(0, fee)
 
         let buyer = clubs[buyerIdx]
+        // Clubs will not strengthen their fiercest rivals.
+        if let sellerIdx, let derby = rivalry(between: buyer.id, and: clubs[sellerIdx].id) {
+            var refused = TransferOffer(
+                playerId: playerId,
+                fromClubId: clubs[sellerIdx].id,
+                toClubId: userClubId,
+                fee: resolvedFee,
+                isLoan: false,
+                status: .rejected,
+                offeredWage: offeredWage,
+                contractYears: contractYears,
+                askingPrice: 0,
+                isIncoming: false,
+                createdDate: season.currentDate,
+                weeksUntilResponse: 0
+            )
+            refused.status = .rejected
+            pendingTransferOffers.append(refused)
+            addNews(
+                headline: "\(clubs[sellerIdx].name) Refuse to Deal",
+                body: "\(clubs[sellerIdx].name) will not sell \(player.fullName) to their \(derby.name) rivals at any price.",
+                category: .transfer,
+                sender: clubs[sellerIdx].name
+            )
+            return refused
+        }
         let askingPrice = sellingValuation(for: player, at: sellerIdx.map { clubs[$0] }, buyerReputation: buyer.reputation)
 
         var offer = TransferOffer(
@@ -852,6 +2436,9 @@ public final class GameState: Codable {
         guard wage > 0, years >= 1, years <= 5 else {
             return ContractRenewalResult(accepted: false, message: "Choose a positive wage and a contract length between one and five years.")
         }
+        if let loan = clubs[clubIdx].players[playerIdx].loan {
+            return ContractRenewalResult(accepted: false, message: "He is on loan from \(loan.parentClubName); only they can offer him a new contract.")
+        }
 
         let player = clubs[clubIdx].players[playerIdx]
         let demand = contractRenewalWage(for: player)
@@ -903,6 +2490,29 @@ public final class GameState: Codable {
 
         for idx in pendingTransferOffers.indices {
             guard pendingTransferOffers[idx].isLive else { continue }
+
+            // AI bids for the user's players wait on the user. Give them a
+            // deadline so an ignored bid does not stay actionable forever.
+            if pendingTransferOffers[idx].isIncoming {
+                if pendingTransferOffers[idx].weeksUntilResponse > 0 {
+                    pendingTransferOffers[idx].weeksUntilResponse -= 1
+                }
+                if pendingTransferOffers[idx].weeksUntilResponse <= 0 {
+                    let offer = pendingTransferOffers[idx]
+                    pendingTransferOffers[idx].status = .withdrawn
+                    pendingTransferOffers[idx].weeksUntilResponse = 0
+                    markOfferMailRead(offerId: offer.id)
+                    addNews(
+                        headline: "\(club(withId: offer.toClubId)?.name ?? "The bidding club") Withdraw Their Bid",
+                        body: offer.isLoan
+                            ? "With no response, the loan request for \(playerName(for: offer.playerId)) has lapsed."
+                            : "With no response from the club, the \(Player.formatCurrency(offer.fee)) offer for \(playerName(for: offer.playerId)) has been withdrawn.",
+                        category: .transfer,
+                        sender: "Director of Football"
+                    )
+                }
+                continue
+            }
 
             // Once the user has a counter or wage demand to answer, the clock is
             // on them. Do not let the counterparty auto-resolve the offer on the
@@ -1170,27 +2780,42 @@ public final class GameState: Codable {
     // MARK: - User Actions on Offers
 
     /// The user accepts a counter-offer from a selling club, continuing the deal.
-    public func acceptCounter(offerId: UUID) {
-        guard let idx = pendingTransferOffers.firstIndex(where: { $0.id == offerId }) else { return }
+    /// The user accepts the selling club's counter-offer. The club named the
+    /// price, so the deal completes immediately (budgets permitting).
+    @discardableResult
+    public func acceptCounter(offerId: UUID) -> Bool {
+        guard let idx = pendingTransferOffers.firstIndex(where: { $0.id == offerId }) else { return false }
         var offer = pendingTransferOffers[idx]
-        guard let counter = offer.counterFee else { return }
+        guard offer.isLive, !offer.isIncoming, let counter = offer.counterFee,
+              let player = player(withId: offer.playerId)?.player,
+              let buyerIdx = clubs.firstIndex(where: { $0.id == userClubId }) else { return false }
         offer.fee = counter
-        offer.status = .pending
-        offer.weeksUntilResponse = 1
-        pendingTransferOffers[idx] = offer
+        offer.weeksUntilResponse = 0
         markOfferMailRead(offerId: offerId)
-
-        addNews(
-            headline: "You Accept the Counter for \(playerName(for: offer.playerId))",
-            body: "You have met the asking price of \(Player.formatCurrency(counter)). The selling club will now finalise the paperwork and personal terms.",
-            category: .transfer,
-            sender: "Director of Football"
-        )
+        let sellerIdx = clubs.firstIndex(where: { $0.id == offer.fromClubId })
+        let completed = completeSigning(player: player, buyerIdx: buyerIdx, sellerIdx: sellerIdx,
+                                        fee: counter, wage: offer.offeredWage ?? player.wage,
+                                        years: offer.contractYears ?? 3)
+        offer.status = completed ? .completed : .rejected
+        pendingTransferOffers[idx] = offer
+        if completed {
+            clubs[buyerIdx].ensureTacticalIntegrity()
+            completeOfferMessage(offer, player: player)
+        } else {
+            addNews(
+                headline: "Deal for \(player.fullName) Collapses",
+                body: "The \(Player.formatCurrency(counter)) fee or his wage no longer fits your budgets (transfer budget \(Player.formatCurrency(clubs[buyerIdx].finances.transferBudget)), wage headroom \(Player.formatCurrency(max(0, clubs[buyerIdx].finances.wageBudget - clubs[buyerIdx].totalWeeklyWageBill)))/w).",
+                category: .transfer,
+                sender: "Director of Football"
+            )
+        }
+        return completed
     }
 
     /// The user walks away from an offer.
     public func withdrawOffer(offerId: UUID) {
-        guard let idx = pendingTransferOffers.firstIndex(where: { $0.id == offerId }) else { return }
+        guard let idx = pendingTransferOffers.firstIndex(where: { $0.id == offerId }),
+              pendingTransferOffers[idx].isLive else { return }
         pendingTransferOffers[idx].status = .withdrawn
         pendingTransferOffers[idx].weeksUntilResponse = 0
         markOfferMailRead(offerId: offerId)
@@ -1204,9 +2829,25 @@ public final class GameState: Codable {
 
     /// The user raises their bid on an outgoing offer (renegotiation from the inbox).
     public func bumpOffer(offerId: UUID, newFee: Int, newWage: Int? = nil) {
-        guard let idx = pendingTransferOffers.firstIndex(where: { $0.id == offerId }) else { return }
+        guard let idx = pendingTransferOffers.firstIndex(where: { $0.id == offerId }),
+              pendingTransferOffers[idx].isLive, !pendingTransferOffers[idx].isIncoming else { return }
         var offer = pendingTransferOffers[idx]
-        offer.fee = newFee
+        // Meeting a player's stated wage demand settles personal terms on the
+        // spot (it used to wait a week and could still fall through).
+        if offer.status == .personalTerms, let demand = offer.demandedWage, let w = newWage, w >= demand,
+           let uid = userClubId, let player = player(withId: offer.playerId)?.player {
+            pendingTransferOffers[idx].offeredWage = w
+            markOfferMailRead(offerId: offerId)
+            resolvePersonalTerms(at: idx, player: player, userClubId: uid)
+            if pendingTransferOffers[idx].status == .completed,
+               let buyerIdx = clubs.firstIndex(where: { $0.id == uid }) {
+                clubs[buyerIdx].ensureTacticalIntegrity()
+            }
+            return
+        }
+        // Free agents never carry a fee, and a revised bid can never be negative.
+        let isFreeAgentDeal = !clubs.contains(where: { $0.id == offer.fromClubId })
+        offer.fee = isFreeAgentDeal ? 0 : max(0, newFee)
         if let w = newWage { offer.offeredWage = w }
         // A revised offer is a normal response from the user. Free agents have
         // no selling club, so resolveOffer routes it back to personal terms.
@@ -1217,7 +2858,7 @@ public final class GameState: Codable {
 
         addNews(
             headline: "Revised Bid Submitted",
-            body: "You have raised your bid for \(playerName(for: offer.playerId)) to \(Player.formatCurrency(newFee)).",
+            body: "You have raised your bid for \(playerName(for: offer.playerId)) to \(Player.formatCurrency(offer.fee)).",
             category: .transfer,
             sender: "Director of Football"
         )
@@ -1227,12 +2868,33 @@ public final class GameState: Codable {
     public func acceptIncomingOffer(offerId: UUID) {
         guard let idx = pendingTransferOffers.firstIndex(where: { $0.id == offerId }) else { return }
         var offer = pendingTransferOffers[idx]
-        guard offer.isIncoming,
+        guard offer.isIncoming, offer.isLive,
               let (player, _) = player(withId: offer.playerId),
               let sellerIdx = clubs.firstIndex(where: { $0.id == userClubId }),
               let buyerIdx = clubs.firstIndex(where: { $0.id == offer.toClubId }) else { return }
 
-        if completeSigning(player: player, buyerIdx: buyerIdx, sellerIdx: sellerIdx, fee: offer.fee, wage: offer.offeredWage ?? player.wage, years: offer.contractYears ?? 3) {
+        let wasKeyPlayer = !offer.isLoan
+            && Double(player.overall) >= clubs[sellerIdx].startingXIAverageOverall - 1
+        let completed: Bool
+        if offer.isLoan {
+            let share = player.wage > 0 ? min(100, (offer.offeredWage ?? player.wage) * 100 / player.wage) : 100
+            completed = completeAgreedLoan(playerId: player.id, fromIdx: sellerIdx, toIdx: buyerIdx, wageShare: share)
+        } else {
+            completed = completeSigning(player: player, buyerIdx: buyerIdx, sellerIdx: sellerIdx, fee: offer.fee, wage: offer.offeredWage ?? player.wage, years: offer.contractYears ?? 3)
+        }
+        if completed && wasKeyPlayer && gameMode == .createClub {
+            // Selling a first-team regular costs the owner goodwill.
+            let rival = rivalry(between: clubs[sellerIdx].id, and: offer.toClubId) != nil
+            adjustFans(-((rival ? 12 : 5)))
+            owner.managerSatisfaction = max(0, owner.managerSatisfaction - managerMoodChange(6))
+            addNews(
+                headline: "Fans Unhappy at \(player.fullName) Sale",
+                body: "Supporters have reacted angrily to the sale of \(player.fullName) to \(club(withId: offer.toClubId)?.name ?? "another club"), and \(clubs[sellerIdx].manager) is frustrated to lose a first-team regular.",
+                category: .board,
+                sender: "Supporters' Trust"
+            )
+        }
+        if completed {
             offer.status = .completed
             offer.weeksUntilResponse = 0
             pendingTransferOffers[idx] = offer
@@ -1255,7 +2917,7 @@ public final class GameState: Codable {
     public func rejectIncomingOffer(offerId: UUID) {
         guard let idx = pendingTransferOffers.firstIndex(where: { $0.id == offerId }) else { return }
         var offer = pendingTransferOffers[idx]
-        guard offer.isIncoming else { return }
+        guard offer.isIncoming, offer.isLive else { return }
         offer.status = .rejected
         offer.weeksUntilResponse = 0
         pendingTransferOffers[idx] = offer
@@ -1263,7 +2925,9 @@ public final class GameState: Codable {
 
         addNews(
             headline: "Bid for \(playerName(for: offer.playerId)) Rejected",
-            body: "You have turned down \(club(withId: offer.toClubId)?.name ?? "the club")'s \(Player.formatCurrency(offer.fee)) offer.",
+            body: offer.isLoan
+                ? "You have turned down \(club(withId: offer.toClubId)?.name ?? "the club")'s loan request."
+                : "You have turned down \(club(withId: offer.toClubId)?.name ?? "the club")'s \(Player.formatCurrency(offer.fee)) offer.",
             category: .transfer,
             sender: "Director of Football"
         )
@@ -1281,7 +2945,7 @@ public final class GameState: Codable {
         pendingTransferOffers.filter { $0.isLive }
     }
 
-    private func playerName(for id: UUID) -> String {
+    func playerName(for id: UUID) -> String {
         player(withId: id)?.player.fullName ?? "the player"
     }
 
@@ -1294,27 +2958,48 @@ public final class GameState: Codable {
         let userClub = clubs[userIdx]
         guard userClub.players.count > 18 else { return }
 
-        // Only a handful of realistic bids per week.
+        // Only a handful of realistic bids per week, and only in a window.
+        guard isTransferWindowOpen else { return }
         guard Double.random(in: 0...1) < 0.6 else { return }
 
-        // Find an AI club that can afford a squad player and wants them.
-        let candidates = clubs.enumerated().filter { !$0.element.isUserClub }
-        guard let (_, bidder) = candidates.randomElement() else { return }
-
-        // Target a non-star player the user might be willing to sell.
-        let sellable = userClub.players
+        // Transfer-listed players attract most of the interest; players marked
+        // not for sale are left alone. Otherwise clubs target a non-star the
+        // user might be willing to sell.
+        let open = userClub.players.filter { !$0.isOnLoan && $0.transferStatus != .notForSale }
+        let listed = open.filter { $0.transferStatus == .transferListed }
+        let sellable = open
             .filter { $0.overall < 88 && (($0.contract?.yearsRemaining ?? 0) <= 2) }
             .sorted { $0.value < $1.value }
-        guard let target = sellable.first ?? userClub.players.min(by: { $0.overall < $1.overall }) else { return }
+        let target: Player
+        if let pick = listed.randomElement(), Double.random(in: 0..<1) < 0.75 {
+            target = pick
+        } else if let pick = sellable.first ?? open.min(by: { $0.overall < $1.overall }) {
+            target = pick
+        } else {
+            return
+        }
 
-        let bid = Int(Double(target.value) * Double.random(in: 1.0...1.6))
-        guard bid <= bidder.finances.transferBudget else { return }
+        // Clubs know a listed player is available and bid nearer his value.
+        let bid = Int(Double(target.value) * (target.transferStatus == .transferListed
+            ? Double.random(in: 0.8...1.15) : Double.random(in: 1.0...1.6)))
 
         // Avoid duplicate live bids for the same player.
         guard !pendingTransferOffers.contains(where: { $0.playerId == target.id && $0.isLive }) else { return }
 
+        // The bidder is a club that can actually afford him and would improve
+        // with him: picking any club at random meant most weeks no bid came.
         let wage = max(target.wage, Int(Double(bid) / 250))
-        guard bidder.totalWeeklyWageBill + wage <= bidder.finances.wageBudget else { return }
+        let candidates = clubs.filter { club in
+            !club.isUserClub
+                && club.finances.transferBudget >= bid
+                && club.totalWeeklyWageBill + wage <= club.finances.wageBudget
+                && club.players.count < 30
+                && Double(target.overall) >= club.startingXIAverageOverall - 6
+                && rivalry(between: club.id, and: userClub.id) == nil
+        }
+        // Mostly domestic interest, sometimes from abroad.
+        let domestic = candidates.filter { $0.leagueTier.country == userClub.leagueTier.country }
+        guard let bidder = (Double.random(in: 0..<1) < 0.7 && !domestic.isEmpty ? domestic : candidates).randomElement() else { return }
         var offer = TransferOffer(
             playerId: target.id,
             fromClubId: userClub.id,
@@ -1326,7 +3011,7 @@ public final class GameState: Codable {
             askingPrice: bid,
             isIncoming: true,
             createdDate: season.currentDate,
-            weeksUntilResponse: 0
+            weeksUntilResponse: 3
         )
         offer.isIncoming = true
         pendingTransferOffers.append(offer)
@@ -1360,7 +3045,8 @@ public final class GameState: Codable {
         // The player may have moved (or been signed from the free-agent pool) in
         // the weeks since the bid was made. Never complete against a stale club.
         if let sellerIdx = sellerIdx {
-            guard clubs[sellerIdx].player(withId: player.id) != nil else { return false }
+            // A player on loan belongs to another club and cannot be sold.
+            guard let current = clubs[sellerIdx].player(withId: player.id), !current.isOnLoan else { return false }
         } else {
             guard freeAgents.contains(where: { $0.id == player.id }) else { return false }
         }
@@ -1372,6 +3058,7 @@ public final class GameState: Codable {
         guard buyer.totalWeeklyWageBill + wage <= buyer.finances.wageBudget else { return false }
 
         var signed = player
+        signed.transferStatus = nil
         let previousContract = player.contract
 
         // Any sell-on attached to the old contract is settled by this transfer.
@@ -1403,11 +3090,17 @@ public final class GameState: Codable {
                 clubs[entitledIdx].finances.transferBudget += owed
             }
             clubs[sellerIdx].finances.transferBudget += sellerProceeds
+            // The fee is real money: it lands in the seller's bank account.
+            clubs[sellerIdx].finances.balance += sellerProceeds
+            if clubs[sellerIdx].isUserClub { seasonLedger?.playerSales += sellerProceeds }
         } else {
             freeAgents.removeAll { $0.id == player.id }
         }
         
         clubs[buyerIdx].finances.transferBudget -= fee
+        clubs[buyerIdx].finances.balance -= fee
+        if clubs[buyerIdx].isUserClub { seasonLedger?.transfers += fee; checkTransferAchievements(fee: fee, userBought: true) }
+        if let sellerIdx, clubs[sellerIdx].isUserClub { checkTransferAchievements(fee: fee, userBought: false) }
         clubs[buyerIdx].addPlayer(signed)
         clubs[buyerIdx].finances.currentWageBill = clubs[buyerIdx].totalWeeklyWageBill
         
@@ -1440,8 +3133,9 @@ public final class GameState: Codable {
     
     /// Populates the free-agent market with a pool of unattached players so the
     /// user (and AI clubs) always have signings available from day one.
-    public func seedFreeAgents(count: Int = 40) {
-        guard freeAgents.count < 8 else { return }
+    public func seedFreeAgents(count: Int = 40, force: Bool = false) {
+        // Idempotent at bootstrap; `force` tops the pool up between seasons.
+        guard force || freeAgents.count < 8 else { return }
         
         let firstNames = ["Jack", "Liam", "Marcus", "Tom", "Sam", "Ollie", "Callum", "Reuben",
                           "Tyrese", "Kwame", "Diego", "Bruno", "Yuki", "Andrei", "Mateo", "Idris",
@@ -1485,12 +3179,17 @@ public final class GameState: Codable {
     // MARK: - AI Manager Transfer Engine
     
     public func processAITransfers() {
+        ownerManagerTransfers()
         // AI clubs look to fill vacancies or offload surplus players
         for clubIdx in 0..<clubs.count {
             if clubs[clubIdx].isUserClub { continue }
             
-            // AI buys from free agency if squad depth is under 20
-            if clubs[clubIdx].players.count < 20 && !freeAgents.isEmpty {
+            // AI dips into free agency when its squad is genuinely thin. With
+            // hundreds of AI clubs, signing every week whenever a squad was
+            // under 20 emptied the whole market in the first week of a career.
+            let squadSize = clubs[clubIdx].players.count
+            let needsCover = squadSize < 16 || (squadSize < 20 && Double.random(in: 0..<1) < 0.08)
+            if needsCover && !freeAgents.isEmpty {
                 let candidateIdx = Int.random(in: 0..<freeAgents.count)
                 let candidate = freeAgents[candidateIdx]
                 let weeklyWage = max(500, candidate.overall * 35)
@@ -1515,35 +3214,128 @@ public final class GameState: Codable {
             }
         }
 
-        // Occasional AI-to-AI transfers between clubs, keeping the league fluid.
-        guard Double.random(in: 0...1) < 0.35 else { return }
-        let clubIndices = clubs.indices.filter { !clubs[$0].isUserClub && clubs[$0].players.count > 18 }
-        guard clubIndices.count >= 2 else { return }
-        guard let buyerIdx = clubIndices.randomElement() else { return }
-        let buyer = clubs[buyerIdx]
-        let sellers = clubIndices.filter { $0 != buyerIdx && clubs[$0].players.count > 20 }
-        guard let sellerIdx = sellers.randomElement() else { return }
+        processAIMarket()
+    }
 
-        // Target an affordable player from the seller's squad.
-        let affordable = clubs[sellerIdx].players.filter {
-            $0.value > 0 && $0.value <= buyer.finances.transferBudget
+    /// The AI transfer market. While a window is open, clubs with money to
+    /// spend try to upgrade their weakest starter. A selling club lets a
+    /// player go when he is not a regular, or when the buyer is the bigger
+    /// club and pays a premium; nobody sells to a fierce rival.
+    private func processAIMarket() {
+        guard isTransferWindowOpen else { return }
+        let summer = currentMonth != 1
+        let userManages = gameMode == .manageClub
+        let eligible = clubs.indices.filter { !(clubs[$0].isUserClub) && clubs[$0].finances.transferBudget > 250_000 }
+        guard !eligible.isEmpty else { return }
+        let attempts = max(1, clubs.count / (summer ? 12 : 24))
+        // The biggest clubs are always on every scout's list.
+        let eliteClubs = clubs.indices.sorted { clubs[$0].reputation > clubs[$1].reputation }.prefix(40)
+        // Players signed in this window or the last one are not resold.
+        let windowCutoff: String = {
+            let year = Int(season.currentDate.prefix(4)) ?? 2026
+            return summer ? "\(year - 1)-12-31" : "\(year - 1)-05-31"
+        }()
+        for buyerIdx in eligible.shuffled().prefix(attempts) {
+            let buyer = clubs[buyerIdx]
+            guard buyer.players.count < 30,
+                  let weakest = buyer.startingXIPlayers.min(by: { $0.overall < $1.overall }) else { continue }
+            let category = weakest.primaryPosition.category
+            let budget = buyer.finances.transferBudget
+            let wageRoom = buyer.finances.wageBudget - buyer.totalWeeklyWageBill
+            var best: (sellerIdx: Int, player: Player, fee: Int, wage: Int, regular: Bool)?
+            // Scout a sample of clubs: mostly at home, sometimes abroad.
+            var scouted = Array(clubs.indices.shuffled().prefix(30))
+            if buyer.reputation >= 70 { scouted += eliteClubs.shuffled().prefix(15) }
+            for sellerIdx in Set(scouted) where sellerIdx != buyerIdx {
+                let seller = clubs[sellerIdx]
+                if seller.isUserClub && userManages { continue }
+                guard seller.players.count > 19 else { continue }
+                if seller.leagueTier.country != buyer.leagueTier.country && Double.random(in: 0..<1) < 0.5 { continue }
+                let sellerXI = Set(seller.tactics.startingXI)
+                let sellerLevel = seller.startingXIAverageOverall
+                for player in seller.players where !player.isOnLoan
+                    && (player.contract?.signingDate ?? "") < windowCutoff
+                    && player.primaryPosition.category == category
+                    && player.overall >= weakest.overall + 2
+                    && player.age <= 31
+                    && player.injury == nil {
+                    // Never strip a club of its last two goalkeepers.
+                    if player.primaryPosition == .GK
+                        && seller.players.filter({ $0.primaryPosition == .GK }).count <= 2 { continue }
+                    // A club only sells a regular to a bigger club.
+                    let isRegular = sellerXI.contains(player.id) || Double(player.overall) >= sellerLevel - 1
+                    if isRegular && seller.reputation >= buyer.reputation - 5 { continue }
+                    let premium = isRegular ? 1.3 : 1.05
+                    let fee = Int(Double(sellingValuation(for: player, at: seller, buyerReputation: buyer.reputation)) * premium)
+                    let wage = max(player.wage, Player.calculateWage(overall: player.overall, age: player.age, tier: buyer.leagueTier))
+                    guard fee <= budget, wage <= wageRoom else { continue }
+                    if rivalry(between: buyer.id, and: seller.id) != nil { continue }
+                    if best == nil || player.overall > best!.player.overall
+                        || (player.overall == best!.player.overall && fee < best!.fee) {
+                        best = (sellerIdx, player, fee, wage, isRegular)
+                    }
+                }
+            }
+            guard let deal = best else { continue }
+            let sellerWasUser = clubs[deal.sellerIdx].isUserClub
+            // An owner signs off on the sale of a first-team player: the bid
+            // goes to the inbox instead of being completed by the manager.
+            if sellerWasUser && deal.regular {
+                guard !pendingTransferOffers.contains(where: { $0.playerId == deal.player.id && $0.isLive }) else { continue }
+                let offer = TransferOffer(
+                    playerId: deal.player.id,
+                    fromClubId: clubs[deal.sellerIdx].id,
+                    toClubId: buyer.id,
+                    fee: deal.fee,
+                    status: .pending,
+                    offeredWage: deal.wage,
+                    contractYears: 3,
+                    askingPrice: deal.fee,
+                    isIncoming: true,
+                    createdDate: season.currentDate,
+                    weeksUntilResponse: 3
+                )
+                pendingTransferOffers.append(offer)
+                addNews(
+                    headline: "\(buyer.name) Bid \(Player.formatCurrency(deal.fee)) for \(deal.player.fullName)",
+                    body: "\(buyer.name) want \(deal.player.fullName) (\(deal.player.primaryPosition.displayName), \(deal.player.overall)). He is a first-team regular, so the decision is yours: accept or reject the offer.",
+                    category: .transfer,
+                    sender: buyer.name,
+                    transferOfferId: offer.id
+                )
+                continue
+            }
+            if completeSigning(player: deal.player, buyerIdx: buyerIdx, sellerIdx: deal.sellerIdx,
+                               fee: deal.fee, wage: deal.wage, years: deal.player.age >= 29 ? 2 : Int.random(in: 3...5)) {
+                clubs[deal.sellerIdx].ensureTacticalIntegrity()
+                // Agents' and intermediaries' fees: about a tenth of the fee leaves the game.
+                clubs[buyerIdx].finances.balance -= deal.fee / 10
+                // The buyer moves on a surplus squad player to make room.
+                if clubs[buyerIdx].players.count > 27,
+                   let surplus = clubs[buyerIdx].players
+                    .filter({ !$0.isOnLoan && !clubs[buyerIdx].tactics.startingXI.contains($0.id) })
+                    .min(by: { $0.overall < $1.overall }),
+                   var released = clubs[buyerIdx].removePlayer(withId: surplus.id) {
+                    released.contract = nil
+                    freeAgents.append(released)
+                }
+                if sellerWasUser {
+                    addNews(
+                        headline: "\(deal.player.fullName) Sold to \(clubs[buyerIdx].name)",
+                        body: "Your manager has sold \(deal.player.fullName) to \(clubs[buyerIdx].name) for \(Player.formatCurrency(deal.fee)).",
+                        category: .transfer,
+                        sender: clubs[deal.sellerIdx].manager
+                    )
+                } else if deal.fee >= 40_000_000 {
+                    addNews(
+                        headline: "\(clubs[buyerIdx].name) Sign \(deal.player.fullName)",
+                        body: "\(clubs[buyerIdx].name) have paid \(clubs[deal.sellerIdx].name) \(Player.formatCurrency(deal.fee)) for \(deal.player.fullName) (\(deal.player.primaryPosition.displayName), \(deal.player.overall)).",
+                        category: .transfer,
+                        sender: "Transfer Desk"
+                    )
+                }
+            }
         }
-        guard let target = affordable.randomElement(),
-              clubs[sellerIdx].players.contains(where: { $0.id == target.id }) else { return }
-
-        let fee = Int(Double(target.value) * Double.random(in: 1.0...1.4))
-        guard fee <= buyer.finances.transferBudget else { return }
-
-        let wage = max(target.wage, Int(Double(fee) / 260))
-        guard buyer.totalWeeklyWageBill + wage <= buyer.finances.wageBudget else { return }
-        completeSigning(
-            player: target,
-            buyerIdx: buyerIdx,
-            sellerIdx: sellerIdx,
-            fee: fee,
-            wage: wage,
-            years: 3
-        )
     }
     
     // MARK: - Club Creation Helper
@@ -1592,7 +3384,7 @@ public final class GameState: Codable {
             tier: replacedClub.leagueTier
         )
         userClub.autoPickStartingXI()
-        userClub.finances.currentWageBill = userClub.totalWeeklyWageBill
+        userClub.ensureWageHeadroom()
         
         // Substitute in clubs array
         clubs[replacedIdx] = userClub
@@ -1635,6 +3427,19 @@ public final class GameState: Codable {
                 europeanCompetitions[competitionIndex].championClubId = userClub.id
             }
         }
+        rivalries = rivalries.map { r in
+            Rivalry(
+                clubA: r.clubA == replaceClubId ? userClub.id : r.clubA,
+                clubB: r.clubB == replaceClubId ? userClub.id : r.clubB,
+                name: r.name,
+                intensity: r.intensity
+            )
+        }
+        for cupIndex in domesticCups.indices {
+            domesticCups[cupIndex].byeClubIds = domesticCups[cupIndex].byeClubIds.map {
+                $0 == replaceClubId ? userClub.id : $0
+            }
+        }
         
         addNews(
             headline: "\(userClub.name) Enters \(userClub.leagueTier.displayName)!",
@@ -1646,6 +3451,13 @@ public final class GameState: Codable {
         )
         if gameMode != .createClub { seedManagerInbox() }
         seedAcademies()
+        hasStartedCareer = true
+        if let created = self.userClub {
+            seasonLedger = FinanceLedger(startingBalance: created.finances.balance)
+            if gameMode == .createClub {
+                owner.valuationAtTakeover = OwnerBusiness.valuation(of: created, debt: owner.totalDebt)
+            }
+        }
         
         return userClub
     }
@@ -1654,12 +3466,23 @@ public final class GameState: Codable {
     /// simulated; the owner then reacts through appointments and investment.
     public func advanceOwnerWeek() {
         guard gameMode == .createClub, userClub != nil else { return }
+        checkWinBonusRequest()
         if isEndOfSeason {
             startNewSeason()
             try? SaveManager.shared.autoSave(gameState: self)
             return
         }
         advanceWeek()
+        // Once the club's own league campaign is over, play out the rest of the
+        // world in one go instead of making the owner tap through idle weeks
+        // while longer leagues elsewhere finish.
+        if let uid = userClubId, season.nextFixture(forClub: uid) == nil {
+            var guardWeeks = 0
+            while !isEndOfSeason && guardWeeks < 100 {
+                advanceWeek()
+                guardWeeks += 1
+            }
+        }
         checkOwnerWeeklyMilestones()
         try? SaveManager.shared.autoSave(gameState: self)
     }
@@ -1676,12 +3499,12 @@ public final class GameState: Codable {
         switch investment {
         case .recruitment:
             clubs[index].finances.transferBudget += 650_000
-            owner.supporterConfidence = min(100, owner.supporterConfidence + 1)
+            adjustFans(1)
         case .facilities:
             clubs[index].finances.balance += 450_000
-            owner.supporterConfidence = min(100, owner.supporterConfidence + 2)
+            adjustFans(2)
         case .community:
-            owner.supporterConfidence = min(100, owner.supporterConfidence + 6)
+            adjustFans(6)
             clubs[index].reputation = min(100, clubs[index].reputation + 1)
         }
         addNews(
@@ -1761,6 +3584,7 @@ public final class GameState: Codable {
     }
 
     private func updateBoardConfidence(after result: MatchResult, userWasHome: Bool) {
+        let previousStatus = jobSecurity.status
         let goalsFor = userWasHome ? result.homeGoals : result.awayGoals
         let goalsAgainst = userWasHome ? result.awayGoals : result.homeGoals
         let won = goalsFor > goalsAgainst
@@ -1775,8 +3599,85 @@ public final class GameState: Codable {
             let drop = drawn ? 1 : min(8, 3 + jobSecurity.gamesWithoutWin / 2)
             jobSecurity.boardConfidence = max(0, jobSecurity.boardConfidence - drop)
         }
+        // Only write to the inbox when the board's stance actually changes;
+        // a message after every match buried everything else.
+        guard jobSecurity.status != previousStatus else { return }
         let tone = jobSecurity.boardConfidence < 40 ? "The board need an immediate improvement." : "The board remain focused on the season objective."
-        addNews(headline: "Board Confidence: \(jobSecurity.status)", body: "Confidence is \(jobSecurity.boardConfidence) out of 100 after the result. \(tone)", category: .board, sender: "The Board")
+        addNews(headline: "Board Confidence: \(jobSecurity.status)", body: "Confidence is \(jobSecurity.boardConfidence) out of 100. \(tone)", category: .board, sender: "The Board")
+    }
+
+    /// The board sacks a manager whose confidence has collapsed during a poor
+    /// run. Called once a matchweek has been completed.
+    private func evaluateManagerJobSecurity() {
+        guard gameMode == .manageClub,
+              let clubIdx = clubs.firstIndex(where: { $0.isUserClub }),
+              season.currentWeek >= 8,
+              jobSecurity.boardConfidence <= 10,
+              jobSecurity.gamesWithoutWin >= 5 else { return }
+        let sackedFrom = clubs[clubIdx]
+        abandonLiveTransferTalks()
+        clubs[clubIdx].isUserClub = false
+        clubs[clubIdx].manager = "Caretaker Manager"
+        userClubId = nil
+        manager.reputation = max(5, manager.reputation - 8)
+        jobSecurity = JobSecurity()
+        teamTalk = nil
+        addNews(
+            headline: "Sacked by \(sackedFrom.name)",
+            body: "After \(sackedFrom.name)'s poor run, the board have relieved you of your duties. Other clubs may still be interested — check your job offers.",
+            category: .board,
+            sender: "The Board — \(sackedFrom.name)"
+        )
+        generateJobOffers(maxCount: 4, excludeUserClub: false)
+        jobOffers.removeAll { $0.clubId == sackedFrom.id }
+    }
+
+    /// In January, established players who are rarely picked grow unhappy
+    /// and say so. Rotation and squad size become real decisions.
+    private func reviewPlayingTime() {
+        guard gameMode == .manageClub,
+              let clubIdx = clubs.firstIndex(where: { $0.isUserClub }) else { return }
+        let parts = season.currentDate.split(separator: "-")
+        guard parts.count == 3, parts[1] == "01", let day = Int(parts[2]), day <= 7 else { return }
+        let club = clubs[clubIdx]
+        let matchesPlayed = season.completedFixtures(forClub: club.id).count
+        guard matchesPlayed >= 10 else { return }
+        let squadLevel = club.squadAverageOverall
+        let unhappy = club.players.filter { player in
+            player.age >= 20 && player.age <= 31 && !player.isOnLoan
+                && Double(player.overall) >= squadLevel
+                && player.injury == nil
+                && Double(player.seasonStats.appearances) < Double(matchesPlayed) * 0.3
+        }
+        .sorted { $0.overall > $1.overall }
+        .prefix(2)
+        for player in unhappy {
+            guard let pIdx = clubs[clubIdx].players.firstIndex(where: { $0.id == player.id }) else { continue }
+            clubs[clubIdx].players[pIdx].dampenMorale()
+            clubs[clubIdx].players[pIdx].dampenMorale()
+            addNews(
+                headline: "\(player.fullName) Unhappy With Playing Time",
+                body: "\(player.fullName) has started only \(player.seasonStats.appearances) of our \(matchesPlayed) matches and wants regular football. Pick him more often or consider offers.",
+                category: .general,
+                sender: "Agent of \(player.fullName)"
+            )
+        }
+    }
+
+    /// January reminder of the user's contracts that expire in the summer.
+    private func warnAboutExpiringContracts() {
+        guard gameMode == .manageClub, let club = userClub else { return }
+        let parts = season.currentDate.split(separator: "-")
+        guard parts.count == 3, parts[1] == "01", let day = Int(parts[2]), day <= 7 else { return }
+        let expiring = club.players.filter { !$0.isOnLoan && ($0.contract?.yearsRemaining ?? 2) <= 1 }
+        guard !expiring.isEmpty else { return }
+        let names = expiring.sorted { $0.overall > $1.overall }.prefix(6).map { $0.fullName }.joined(separator: ", ")
+        addNews(
+            headline: "\(expiring.count) Contract\(expiring.count == 1 ? "" : "s") Expire This Summer",
+            body: "\(names)\(expiring.count > 6 ? " and others" : "") will leave on free transfers unless offered new deals. Open a player's profile to negotiate.",
+            category: .contractExpiry,
+            sender: "Director of Football"
+        )
     }
 
     private func updateOwnerMatchPerformance(after result: MatchResult, userWasHome: Bool) {
@@ -1788,7 +3689,7 @@ public final class GameState: Codable {
         var pointsEarned = 0
         if won {
             pointsEarned += 2
-            owner.supporterConfidence = min(100, owner.supporterConfidence + 3)
+            adjustFans(3)
             unlockOwnerMilestone(id: "first_win")
             if goalsAgainst == 0 {
                 pointsEarned += 1
@@ -1804,10 +3705,11 @@ public final class GameState: Codable {
                 unlockOwnerMilestone(id: "clean_sheet")
             }
         } else {
-            owner.supporterConfidence = max(0, owner.supporterConfidence - 3)
+            adjustFans(-(3))
         }
 
         owner.legacyPoints += pointsEarned
+        owner.managerSatisfaction = max(0, min(100, owner.managerSatisfaction + (won ? 1 : (drawn ? 0 : -1))))
 
         // Check 5 games unbeaten
         if let userClub = userClub {
@@ -1886,14 +3788,24 @@ public final class GameState: Codable {
         return true
     }
 
-    public func appointManager(_ candidate: ManagerCandidate) -> Bool {
+    /// How strongly a setback moves the manager's mood, by personality.
+    func managerMoodChange(_ base: Int) -> Int {
+        Int((Double(base) * (owner.managerContract?.personality.sensitivity ?? 1.0)).rounded())
+    }
+
+    public func appointManager(_ candidate: ManagerCandidate, years: Int = 2) -> Bool {
         guard gameMode == .createClub,
               let index = clubs.firstIndex(where: { $0.isUserClub }),
               clubs[index].finances.balance >= candidate.compensation else { return false }
         clubs[index].finances.balance -= candidate.compensation
         clubs[index].finances.wageBudget = max(clubs[index].finances.wageBudget, candidate.wage + 2_000)
         clubs[index].manager = candidate.name
-        owner.supporterConfidence = min(100, owner.supporterConfidence + 5)
+        owner.managerContract = ManagerContract(managerName: candidate.name, weeklyWage: candidate.wage,
+                                                yearsRemaining: max(1, min(4, years)), age: candidate.age,
+                                                personality: candidate.personality, style: candidate.style)
+        owner.managerSatisfaction = 60
+        owner.managerRating = candidate.reputation
+        adjustFans(5)
         addNews(headline: "\(candidate.name) Appointed Manager", body: "The board have appointed \(candidate.name). Their stated approach: \(candidate.style).", category: .board, sender: "Owner's Office")
         return true
     }
@@ -1903,11 +3815,15 @@ public final class GameState: Codable {
               let index = clubs.firstIndex(where: { $0.isUserClub }),
               clubs[index].manager != "Interim Manager" else { return false }
         let outgoing = clubs[index].manager
-        let settlement = max(250_000, clubs[index].finances.wageBudget * 8)
+        // Severance: half the wages left on his contract.
+        let settlement = owner.managerContract?.severance ?? max(250_000, clubs[index].finances.wageBudget * 8)
         guard clubs[index].finances.balance >= settlement else { return false }
         clubs[index].finances.balance -= settlement
+        seasonLedger?.wages += settlement
+        owner.managerContract = nil
         clubs[index].manager = "Interim Manager"
-        owner.supporterConfidence = max(0, owner.supporterConfidence - 4)
+        owner.managerRating = 45
+        adjustFans(-(4))
         addNews(headline: "\(outgoing) Leaves \(clubs[index].name)", body: "The manager has been relieved of duties. A compensation payment of \(Player.formatCurrency(settlement)) has been made; appoint a successor promptly.", category: .board, sender: "Owner's Office")
         return true
     }
@@ -1926,6 +3842,8 @@ public final class GameState: Codable {
         clubs[idx].ensureTacticalIntegrity()
         clubs[idx].manager = manager.fullName
         self.userClubId = clubId
+        hasStartedCareer = true
+        seasonLedger = FinanceLedger(startingBalance: clubs[idx].finances.balance)
         seedAcademies()
         
         addNews(
@@ -1974,6 +3892,15 @@ public final class GameState: Codable {
     // MARK: - Season Transition
 
     public func startNewSeason() {
+        // Loanees go home before contracts, retirements and squad sizes are reviewed.
+        returnLoanedPlayers()
+        ageManagerContract()
+        // Keep three seasons of world transfer history (and all of the user's).
+        if let startYear = Int(season.year.prefix(4)) {
+            let cutoff = "\(startYear - 2)-06-01"
+            let userId = userClubId
+            transferHistory.removeAll { $0.date < cutoff && $0.toClubId != userId && $0.fromClubId != userId }
+        }
         let years = season.year.components(separatedBy: "-")
         let startYearInt: Int
         let endYearInt: Int
@@ -1996,7 +3923,9 @@ public final class GameState: Codable {
             let generated = FixtureGenerator.generateDoubleRoundRobin(
                 clubIds: league.clubIds,
                 competitionName: league.name,
-                startDateString: seasonStartDate
+                startDateString: seasonStartDate,
+                skippingWeeks: Set(DomesticCups.cupWeeks),
+                singleRoundRobin: league.clubIds.count > 24
             )
             allNewFixtures.append(contentsOf: generated)
         }
@@ -2010,9 +3939,28 @@ public final class GameState: Codable {
         )
         activeMatchFixtureId = nil
         isMatchInProgress = false
+        seedDomesticCups()
 
-        // Rebuild the European competitions for the new season.
-        europeanCompetitions = EuropeanCompetitionBuilder.build(from: clubs)
+        pointsDeductions = [:]
+        if let club = userClub {
+            seasonLedger = FinanceLedger(startingBalance: club.finances.balance)
+        }
+
+        // A new season brings renewed (if partial) patience from the board.
+        jobSecurity.boardConfidence = max(45, (jobSecurity.boardConfidence + 70) / 2)
+        jobSecurity.gamesWithoutWin = 0
+        jobSecurity.underperformingWeeks = 0
+
+        // Rebuild the European competitions for the new season from the clubs
+        // that earned their places (the bundled real entry list is only used
+        // for the very first season).
+        var qualifiers: [EuropeanCompetition: [UUID]] = [:]
+        for competition in EuropeanCompetition.allCases {
+            if let ids = europeanQualifiers[competition.rawValue] { qualifiers[competition] = ids }
+        }
+        europeanCompetitions = EuropeanCompetitionBuilder.build(from: clubs, qualifiers: qualifiers.isEmpty ? nil : qualifiers)
+        europeanQualifiers = [:]
+        payEuropeanParticipationFees()
         europeanMatchweek = 0
 
         // Refresh the international calendar so tournaments recur each campaign.
@@ -2025,12 +3973,16 @@ public final class GameState: Codable {
         for cIdx in 0..<clubs.count {
             clubs[cIdx].seasonResults = []
             for pIdx in 0..<clubs[cIdx].players.count {
+                let appearances = clubs[cIdx].players[pIdx].seasonStats.appearances
                 clubs[cIdx].players[pIdx].seasonStats = SeasonStats()
                 clubs[cIdx].players[pIdx].yellowCards = 0
                 // Players age one year each summer. Preseason rest clears injuries
                 // and restores fitness, while sharpness starts below peak because
                 // nobody has played competitive football for several weeks.
                 clubs[cIdx].players[pIdx].age += 1
+                // Young players develop, veterans decline; values are re-rated.
+                clubs[cIdx].players[pIdx].applySeasonalDevelopment(appearances: appearances,
+                                                                    trainingLevel: clubs[cIdx].trainingFacilityLevel)
                 clubs[cIdx].players[pIdx].injury = nil
                 clubs[cIdx].players[pIdx].matchFitness = 100.0
                 clubs[cIdx].players[pIdx].sharpness = 65.0
@@ -2038,20 +3990,53 @@ public final class GameState: Codable {
                 // Decrement contract duration.
                 if var contract = clubs[cIdx].players[pIdx].contract {
                     contract.yearsRemaining -= 1
-                    if contract.yearsRemaining <= 0 {
-                        // No contract-negotiation flow yet, so the club exercises a
-                        // one-year extension rather than deleting the player. Give
-                        // the renewal a modest raise so it is not a silent free pass.
-                        contract.yearsRemaining = 1
-                        contract.wage = max(500, Int(Double(contract.wage) * 1.05))
-                        if clubs[cIdx].isUserClub {
-                            renewedUserContracts.append(clubs[cIdx].players[pIdx].fullName)
-                        }
-                    }
                     clubs[cIdx].players[pIdx].contract = contract
                 }
             }
             clubs[cIdx].finances.currentWageBill = clubs[cIdx].totalWeeklyWageBill
+        }
+
+        // Expired contracts. A manager's own players who were not offered a new
+        // deal leave on a free; every other club renews the players it values
+        // and releases the rest into the free-agent market.
+        var departedUserPlayers: [String] = []
+        for cIdx in clubs.indices {
+            let managedByUser = clubs[cIdx].isUserClub && gameMode == .manageClub
+            let squadLevel = clubs[cIdx].squadAverageOverall
+            let expired = clubs[cIdx].players.filter { ($0.contract?.yearsRemaining ?? 1) <= 0 }
+            for player in expired {
+                // Good veterans get one-year deals, as at real clubs.
+                let valued = (Double(player.overall) >= squadLevel - 4 && player.age <= 31)
+                    || (Double(player.overall) >= squadLevel - 1 && player.age <= 35)
+                let squadNeedsHim = clubs[cIdx].players.count <= 18
+                if !managedByUser && (valued || squadNeedsHim),
+                   let pIdx = clubs[cIdx].players.firstIndex(where: { $0.id == player.id }) {
+                    let market = Player.calculateWage(overall: player.overall, age: player.age, tier: clubs[cIdx].leagueTier)
+                    let wage = max(player.wage, market)
+                    clubs[cIdx].players[pIdx].contract = Contract(
+                        wage: wage,
+                        yearsRemaining: player.age >= 30 ? 1 : Int.random(in: 2...4),
+                        signingDate: preseasonDate
+                    )
+                    if clubs[cIdx].isUserClub { renewedUserContracts.append(player.fullName) }
+                } else if var released = clubs[cIdx].removePlayer(withId: player.id) {
+                    released.contract = nil
+                    freeAgents.append(released)
+                    if clubs[cIdx].isUserClub { departedUserPlayers.append(player.fullName) }
+                }
+            }
+            clubs[cIdx].finances.currentWageBill = clubs[cIdx].totalWeeklyWageBill
+        }
+
+        if !departedUserPlayers.isEmpty {
+            let names = departedUserPlayers.prefix(5).joined(separator: ", ")
+            let remainder = departedUserPlayers.count > 5 ? " and \(departedUserPlayers.count - 5) more" : ""
+            addNews(
+                headline: departedUserPlayers.count == 1 ? "Player Leaves on a Free" : "Players Leave on Free Transfers",
+                body: "\(names)\(remainder) left the club when \(departedUserPlayers.count == 1 ? "his contract" : "their contracts") expired.",
+                category: .contractExpiry,
+                sender: "Club Secretary"
+            )
         }
 
         if !renewedUserContracts.isEmpty {
@@ -2059,7 +4044,7 @@ public final class GameState: Codable {
             let remainder = renewedUserContracts.count > 3 ? " and \(renewedUserContracts.count - 3) more" : ""
             addNews(
                 headline: "Contracts Extended",
-                body: "\(names)\(remainder) have signed one-year extensions to remain at the club. Open a player profile to negotiate a longer deal.",
+                body: "\(names)\(remainder) \(renewedUserContracts.count == 1 ? "has" : "have") agreed new contracts with the club.",
                 category: .contractExpiry,
                 sender: "Club Secretary"
             )
@@ -2094,9 +4079,18 @@ public final class GameState: Codable {
             }
         }
 
+        processRetirementsAndSquadRenewal()
+        settleAIClubFinances()
+
         // Refresh the board's transfer kitty and repair any stale lineups.
         for cIdx in 0..<clubs.count {
             clubs[cIdx].finances.rolloverForNewSeason(reputation: clubs[cIdx].reputation)
+            if !clubs[cIdx].isUserClub {
+                // Cash-rich boards let the wage bill run hotter, as real clubs do.
+                let cashRich = clubs[cIdx].finances.balance > OwnerBusiness.annualRevenue(clubs[cIdx].finances)
+                applyWageInflation(clubIdx: cIdx, targetShare: cashRich ? 0.68 : 0.58)
+            }
+            clubs[cIdx].ensureWageHeadroom()
             clubs[cIdx].ensureTacticalIntegrity()
         }
         
@@ -2148,14 +4142,219 @@ public final class GameState: Codable {
             }
         }
 
+        // Retirements and departures must not leave anyone without a keeper.
+        ensureGoalkeepersEverywhere()
+
         addNews(
             headline: "Welcome to Season \(nextYear)!",
             body: "The new league season is officially underway. Training camps are open.",
             category: .general
         )
+        ownerSeasonStartMarket()
     }
     
+    /// Veterans retire each summer and every club is topped back up to a
+    /// playable squad with young players, so the world does not slowly fill
+    /// with 45-year-olds or collapse into squads that cannot field a team.
+    /// Summer housekeeping for AI club finances. Clubs deep in debt sell
+    /// their most valuable players to survive; clubs sitting on more than a
+    /// year's turnover in cash see a third of the excess leave the club
+    /// (owners' dividends, debt service and infrastructure), as real clubs
+    /// do not hoard billions.
+    private func settleAIClubFinances() {
+        let userManages = gameMode == .manageClub
+        for idx in clubs.indices where !clubs[idx].isUserClub {
+            let turnover = OwnerBusiness.annualRevenue(clubs[idx].finances)
+            let surplus = clubs[idx].finances.balance - turnover
+            if surplus > 0 { clubs[idx].finances.balance -= surplus / 3 }
+
+            var sales = 0
+            while clubs[idx].finances.balance < -(turnover / 10), sales < 2, clubs[idx].players.count > 18 {
+                guard let star = clubs[idx].players.filter({ !$0.isOnLoan }).max(by: { $0.value < $1.value }) else { break }
+                let fee = max(10_000, star.value * 85 / 100)
+                let wage = max(star.wage, 1)
+                let buyers = clubs.indices.filter { b in
+                    b != idx && !(clubs[b].isUserClub && userManages) && !clubs[b].isUserClub
+                        && clubs[b].players.count < 27
+                        && clubs[b].finances.transferBudget >= fee
+                        && clubs[b].finances.balance >= fee
+                        && clubs[b].totalWeeklyWageBill + wage <= clubs[b].finances.wageBudget
+                        && rivalry(between: clubs[b].id, and: clubs[idx].id) == nil
+                }
+                guard let buyerIdx = buyers.sorted(by: { clubs[$0].reputation > clubs[$1].reputation }).prefix(5).randomElement(),
+                      completeSigning(player: star, buyerIdx: buyerIdx, sellerIdx: idx, fee: fee, wage: wage, years: 3) else { break }
+                sales += 1
+                if isNewsworthy(clubs[idx].leagueTier) {
+                    addNews(
+                        headline: "\(clubs[idx].name) Forced to Sell \(star.fullName)",
+                        body: "Debt-ridden \(clubs[idx].name) have sold \(star.fullName) to \(clubs[buyerIdx].name) for \(Player.formatCurrency(fee)) to balance the books.",
+                        category: .transfer,
+                        sender: "Transfer Desk"
+                    )
+                }
+            }
+            clubs[idx].ensureTacticalIntegrity()
+        }
+    }
+
+    private func processRetirementsAndSquadRenewal() {
+        let minimumSquad = 18
+        var userRetirements: [String] = []
+        var userGraduates: [String] = []
+
+        for cIdx in clubs.indices {
+            let retiring = clubs[cIdx].players.filter { Double.random(in: 0..<1) < $0.retirementChance }
+            for player in retiring {
+                // Keep at least a skeleton squad even if many veterans would go.
+                guard clubs[cIdx].players.count > 14 else { break }
+                clubs[cIdx].removePlayer(withId: player.id)
+                if clubs[cIdx].isUserClub {
+                    userRetirements.append("\(player.fullName) (\(player.age))")
+                }
+            }
+
+            // Owner-mode and AI clubs are topped up automatically. A manager's
+            // own squad is only topped up to the bare minimum needed to field a
+            // team; recruitment is otherwise their job.
+            let isManagedByUser = clubs[cIdx].isUserClub && gameMode == .manageClub
+
+            if !isManagedByUser {
+                // AI clubs renew from their own academy each summer...
+                let ready = clubs[cIdx].academyProspects
+                    .filter { $0.age >= 17 }
+                    .sorted { ($0.overall + $0.potential) > ($1.overall + $1.potential) }
+                    .prefix(2)
+                for prospect in ready {
+                    guard clubs[cIdx].promoteProspect(withId: prospect.id) != nil,
+                          let pIdx = clubs[cIdx].players.firstIndex(where: { $0.id == prospect.id }) else { continue }
+                    if clubs[cIdx].players[pIdx].contract == nil {
+                        let wage = Player.calculateWage(overall: prospect.overall, age: prospect.age, tier: clubs[cIdx].leagueTier)
+                        clubs[cIdx].players[pIdx].contract = Contract(wage: wage, yearsRemaining: 3, signingDate: season.currentDate)
+                    }
+                    if clubs[cIdx].isUserClub { userGraduates.append(prospect.fullName) }
+                }
+
+                // ...and release surplus players, oldest and weakest first, so
+                // squads turn over instead of ageing indefinitely.
+                let maximumSquad = 26
+                if clubs[cIdx].players.count > maximumSquad {
+                    let surplus = clubs[cIdx].players.count - maximumSquad
+                    let releaseOrder = clubs[cIdx].players.sorted { lhs, rhs in
+                        // Lower score = released first: weak, older players go.
+                        let l = lhs.overall - max(0, lhs.age - 30)
+                        let r = rhs.overall - max(0, rhs.age - 30)
+                        return l < r
+                    }
+                    for player in releaseOrder.prefix(surplus) {
+                        if var released = clubs[cIdx].removePlayer(withId: player.id) {
+                            released.contract = nil
+                            freeAgents.append(released)
+                        }
+                    }
+                }
+            }
+            // AI squads are kept at a realistic size (about 22), not the bare
+            // minimum; otherwise squads shrink every summer as veterans retire.
+            let target = isManagedByUser ? 16 : (clubs[cIdx].isUserClub ? minimumSquad : 22)
+            while clubs[cIdx].players.count < target {
+                let regen = makeYouthRegen(for: clubs[cIdx])
+                clubs[cIdx].addPlayer(regen)
+                if clubs[cIdx].isUserClub { userGraduates.append(regen.fullName) }
+            }
+            clubs[cIdx].finances.currentWageBill = clubs[cIdx].totalWeeklyWageBill
+        }
+
+        // Free agents age and retire too; otherwise the pool never turns over.
+        for idx in freeAgents.indices {
+            freeAgents[idx].age += 1
+            freeAgents[idx].applySeasonalDevelopment(appearances: 0)
+        }
+        freeAgents.removeAll { Double.random(in: 0..<1) < $0.retirementChance }
+        // Keep the market a browsable size: unattached players nobody wants
+        // eventually drop out of the game.
+        let freeAgentCap = 400
+        if freeAgents.count > freeAgentCap {
+            freeAgents.sort { ($0.overall + max(0, $0.potential - $0.overall) / 2) > ($1.overall + max(0, $1.potential - $1.overall) / 2) }
+            freeAgents = Array(freeAgents.prefix(freeAgentCap))
+        }
+        if freeAgents.count < 120 {
+            seedFreeAgents(count: 150 - freeAgents.count, force: true)
+        }
+
+        if !userRetirements.isEmpty {
+            let names = userRetirements.prefix(4).joined(separator: ", ")
+            let remainder = userRetirements.count > 4 ? " and \(userRetirements.count - 4) more" : ""
+            addNews(
+                headline: userRetirements.count == 1 ? "A Club Servant Retires" : "Retirements Announced",
+                body: "\(names)\(remainder) \(userRetirements.count == 1 ? "has" : "have") retired from professional football. Thank you for the memories.",
+                category: .general,
+                sender: "Club Secretary"
+            )
+        }
+        if !userGraduates.isEmpty {
+            addNews(
+                headline: "Youngsters Promoted to the First Team",
+                body: "\(userGraduates.joined(separator: ", ")) \(userGraduates.count == 1 ? "has" : "have") been promoted from the youth ranks to keep the squad at a playable size.",
+                category: .board,
+                sender: "Head of Youth Development"
+            )
+        }
+    }
+
+    /// A young player generated to replace a retiree, pitched a little below
+    /// the club's current squad level with room to grow.
+    private func makeYouthRegen(for club: Club) -> Player {
+        // Fill whichever area of the pitch is thinnest.
+        let categoryCounts = Dictionary(grouping: club.players, by: { $0.primaryPosition.category })
+            .mapValues { $0.count }
+        let ideals: [(PositionCategory, Int, [Position])] = [
+            (.goalkeeper, 2, [.GK]),
+            (.defender, 6, [.CB, .CB, .LB, .RB]),
+            (.midfielder, 6, [.CM, .CM, .CDM, .CAM, .LM, .RM]),
+            (.forward, 4, [.ST, .ST, .LW, .RW])
+        ]
+        var position: Position = .CM
+        var biggestShortfall = Int.min
+        for (category, ideal, options) in ideals {
+            let shortfall = ideal - (categoryCounts[category] ?? 0)
+            if shortfall > biggestShortfall {
+                biggestShortfall = shortfall
+                position = options.randomElement() ?? .CM
+            }
+        }
+
+        let squadLevel = Int(club.squadAverageOverall.rounded())
+        // Regens should mature around the squad's level, not above it: a
+        // potential 6-16 above an entry rating 6 below the squad pushed the
+        // whole world's ratings up every season.
+        let overall = max(35, min(80, squadLevel - 10 + Int.random(in: -4...2)))
+        let age = Int.random(in: 17...20)
+        // Roughly one academy graduate in twenty-five is a genuine wonderkid
+        // with a ceiling far above his first-team level; without them the
+        // world ran short of new stars as the current generation aged.
+        let wonderkid = Double.random(in: 0..<1) < 0.04
+        let potential = min(wonderkid ? 95 : 92, overall + (wonderkid ? Int.random(in: 15...24) : Int.random(in: 3...12)))
+        let identity = NamePools.randomIdentity(for: club.leagueTier.country)
+        let wage = Player.calculateWage(overall: overall, age: age, tier: club.leagueTier)
+        return Player(
+            firstName: identity.first,
+            lastName: identity.last,
+            nationality: identity.nationality,
+            age: age,
+            height: position == .GK ? Int.random(in: 185...196) : Int.random(in: 170...190),
+            weight: position == .GK ? Int.random(in: 78...90) : Int.random(in: 64...84),
+            preferredFoot: Double.random(in: 0...1) < 0.25 ? .left : .right,
+            positions: [position],
+            attributes: DataLoader.generateAttributes(overall: overall, position: position),
+            overall: overall,
+            potential: potential,
+            contract: Contract(wage: wage, yearsRemaining: 3, signingDate: season.currentDate)
+        )
+    }
+
     public func processEndOfSeason() {
+        // Prize money, promotions and awards must only ever be settled once.
+        guard season.currentPhase != .endOfSeason else { return }
         season.currentPhase = .endOfSeason
         
         // Determine final tables per tier before any movement occurs.
@@ -2163,6 +4362,12 @@ public final class GameState: Codable {
         for league in leagues {
             finalTables[league.tier] = standings(for: league)
         }
+        // Merit money is paid at the rates of the division the club played
+        // in, so record broadcast income before anyone changes division.
+        var broadcastIncomeThisSeason: [UUID: Int] = [:]
+        for club in clubs { broadcastIncomeThisSeason[club.id] = club.finances.tvIncome }
+        // The record books: champions, world awards and the Hall of Fame.
+        recordSeasonHistory(finalTables: finalTables)
 
         // Snapshot the user's campaign before promotions and relegations change
         // their leagueTier. `recordManagerSeason` needs the club/tier they
@@ -2176,6 +4381,7 @@ public final class GameState: Codable {
             if position == 0 {
                 honours.append("\(userClub.leagueTier.displayName) Champions")
             }
+            honours.append(contentsOf: userCupWins)
             userSeasonSnapshot = (
                 club: userClub,
                 position: position + 1,
@@ -2184,6 +4390,16 @@ public final class GameState: Codable {
             )
         }
         
+        // The board's target is judged against the division the club played in.
+        let userSeasonTarget = userSeasonSnapshot.flatMap { boardTarget(for: $0.club) }
+        lastSeasonReview = buildSeasonReview(finalTables: finalTables, target: userSeasonTarget)
+        if gameMode == .createClub {
+            reviewAdministration()
+            if let review = lastSeasonReview {
+                reviewManagerPoaching(position: review.position, leagueSize: review.leagueSize)
+            }
+        }
+
         // Accumulate the club movements to apply after computing all tables.
         var promotions: [LeagueTier: [UUID]] = [:]
         var relegations: [LeagueTier: [UUID]] = [:]
@@ -2274,26 +4490,58 @@ public final class GameState: Codable {
             }
         }
 
-        // Distribute merit prize money based on final standings.
-        for (tier, table) in finalTables {
-            let topPrize: Int
-            switch tier.level {
-            case 1: topPrize = 28_000_000
-            case 2: topPrize = 10_000_000
-            case 3: topPrize = 3_500_000
-            default: topPrize = 1_500_000
+        // Club stature evolves with results. Only moves that actually happened
+        // count (countries without lower divisions relegate nobody).
+        let moved = Set(clubs.map { $0.id }.filter { id in
+            finalTables.contains { tier, table in table.contains { $0.clubId == id } && club(withId: id)?.leagueTier != tier }
+        })
+        let promotedIds = Set((promotions.values.flatMap { $0 } + playOffPromotions.values.flatMap { $0 }).filter { moved.contains($0) })
+        let relegatedIds = Set(relegations.values.flatMap { $0 }.filter { moved.contains($0) })
+        evolveClubReputations(finalTables: finalTables, promoted: promotedIds, relegated: relegatedIds)
+        checkSeasonAchievements(finalTables: finalTables, promoted: userClubId.map { promotedIds.contains($0) } ?? false)
+
+        // The owner's tenure record.
+        if gameMode == .createClub, let review = lastSeasonReview, let uid = userClubId {
+            var honours: [String] = []
+            if review.position == 1 { honours.append("\(review.leagueName) Champions") }
+            honours.append(contentsOf: userCupWins)
+            for competition in europeanCompetitions where competition.championClubId == uid {
+                honours.append("\(competition.competition.displayName) Winners")
             }
+            if promotedIds.contains(uid) { honours.append("Promoted") }
+            if relegatedIds.contains(uid) { honours.append("Relegated") }
+            owner.seasonHistory.append(ManagerSeasonRecord(
+                seasonYear: review.season,
+                clubName: review.clubName,
+                leagueName: review.leagueName,
+                played: review.won + review.drawn + review.lost,
+                won: review.won,
+                drawn: review.drawn,
+                lost: review.lost,
+                finalPosition: review.position,
+                honours: honours
+            ))
+        }
+
+        // Distribute merit prize money based on final standings.
+        // Merit money is a share of each club's own broadcast income (which
+        // already reflects its country and division): champions earn half as
+        // much again, the bottom club a tenth. Flat Premier League-sized sums
+        // used to pay Scottish and French clubs fortunes.
+        for (tier, table) in finalTables {
             let n = max(1, table.count)
             for (idx, standing) in table.enumerated() {
                 let ratio = Double(n - idx) / Double(n)
-                let prize = max(100_000, Int(Double(topPrize) * (0.15 + 0.85 * ratio)))
+                guard let clubTv = broadcastIncomeThisSeason[standing.clubId] else { continue }
+                let prize = max(50_000, Int(Double(clubTv) * (0.1 + 0.4 * ratio)))
                 if let cIdx = clubs.firstIndex(where: { $0.id == standing.clubId }) {
                     clubs[cIdx].finances.balance += prize
                     clubs[cIdx].finances.transferBudget += prize / 2
                     if standing.clubId == userClubId {
+                        seasonLedger?.prizeMoney += prize
                         addNews(
                             headline: "Prize Money: \(Player.formatCurrency(prize)) Awarded",
-                            body: "\(clubs[cIdx].name) banked \(Player.formatCurrency(prize)) for finishing in \(idx + 1)\(standingRankSuffix(idx + 1)) place in \(tier.displayName).",
+                            body: "\(clubs[cIdx].name) banked \(Player.formatCurrency(prize)) for finishing in \(idx + 1)\(standingRankSuffix(idx + 1)) place in the \(tier.displayName).",
                             category: .board,
                             sender: "League Committee"
                         )
@@ -2320,8 +4568,15 @@ public final class GameState: Codable {
             )
         }
         
+        announceSeasonAwards(finalTables: finalTables)
+        decideEuropeanQualification(finalTables: finalTables)
+        runManagerialMerryGoRound(finalTables: finalTables)
+
         // Record the user's season into their managerial career history using the
         // pre-movement snapshot captured above.
+        if let snapshot = userSeasonSnapshot, let target = userSeasonTarget {
+            deliverBoardVerdict(club: snapshot.club, position: snapshot.position, target: target)
+        }
         if let snapshot = userSeasonSnapshot {
             recordManagerSeason(
                 club: snapshot.club,
@@ -2341,6 +4596,263 @@ public final class GameState: Codable {
         )
     }
     
+    /// Awards next season's European places from the final tables: league
+    /// positions by country allocation, plus each domestic cup winner's
+    /// Europa League place (passed down the table if the winner already
+    /// qualified through the league). Countries are taken in allocation
+    /// order, so the strongest leagues fill the competitions first.
+    private func decideEuropeanQualification(finalTables: [LeagueTier: [LeagueStanding]]) {
+        var ucl: [UUID] = [], uel: [UUID] = [], uecl: [UUID] = []
+        let countries = LeagueCountry.allCases
+            .filter { $0.competesInEurope }
+            .sorted { $0.europeanAllocation.championsLeague > $1.europeanAllocation.championsLeague }
+        for country in countries {
+            guard let tier = LeagueTier.pyramid(for: country).first,
+                  let table = finalTables[tier] else { continue }
+            let order = table.map { $0.clubId }
+            let allocation = country.europeanAllocation
+            var cursor = 0
+            func take(_ count: Int) -> [UUID] {
+                let slice = Array(order.dropFirst(cursor).prefix(count))
+                cursor += slice.count
+                return slice
+            }
+            ucl += take(allocation.championsLeague)
+            var europa = take(allocation.europaLeague)
+            if let cupWinner = domesticCups.first(where: { $0.country == country })?.championClubId,
+               order.contains(cupWinner), !ucl.contains(cupWinner), !europa.contains(cupWinner),
+               !Array(order.prefix(cursor)).contains(cupWinner) {
+                europa.append(cupWinner)
+            } else {
+                europa += take(1)
+            }
+            uel += europa
+            uecl += take(allocation.conferenceLeague).filter { !europa.contains($0) }
+        }
+        europeanQualifiers = [
+            EuropeanCompetition.championsLeague.rawValue: ucl,
+            EuropeanCompetition.europaLeague.rawValue: uel,
+            EuropeanCompetition.conferenceLeague.rawValue: uecl,
+        ]
+
+        if let uid = userClubId {
+            let qualified: String?
+            if ucl.contains(uid) { qualified = EuropeanCompetition.championsLeague.displayName }
+            else if uel.contains(uid) { qualified = EuropeanCompetition.europaLeague.displayName }
+            else if uecl.contains(uid) { qualified = EuropeanCompetition.conferenceLeague.displayName }
+            else { qualified = nil }
+            if let qualified {
+                lastSeasonReview?.europe = qualified
+                addNews(
+                    headline: "We're in the \(qualified)!",
+                    body: "Our finishing position has earned a place in next season's \(qualified). European nights are coming.",
+                    category: .award,
+                    sender: "The Board"
+                )
+            }
+        }
+    }
+
+    /// Whether events in a division are covered in the user's news feed: the
+    /// user's own division, their country's top flight and Europe's big five.
+    /// Covering all 39 leagues buried everything else in the inbox.
+    private func isNewsworthy(_ tier: LeagueTier) -> Bool {
+        if let userTier = userClub?.leagueTier {
+            if tier == userTier { return true }
+            if tier.isTopFlight && tier.country == userTier.country { return true }
+        }
+        let bigFive: Set<LeagueCountry> = [.england, .spain, .italy, .germany, .france]
+        return tier.isTopFlight && bigFive.contains(tier.country)
+    }
+
+    /// AI boards act on a disappointing season: clubs finishing in the drop
+    /// zone, or far below where their reputation says they should, often
+    /// change manager. Changes in the top flights and the user's division
+    /// make the news, and vacancies are offered to an unemployed user.
+    private func runManagerialMerryGoRound(finalTables: [LeagueTier: [LeagueStanding]]) {
+        var vacancies: [UUID] = []
+        for (tier, table) in finalTables {
+            let n = table.count
+            guard n >= 4 else { continue }
+            // Expected finishing order by reputation.
+            let expectedOrder = table.map { $0.clubId }.sorted {
+                (club(withId: $0)?.reputation ?? 0) > (club(withId: $1)?.reputation ?? 0)
+            }
+            for (index, standing) in table.enumerated() {
+                guard let cIdx = clubs.firstIndex(where: { $0.id == standing.clubId }),
+                      !clubs[cIdx].isUserClub else { continue }
+                let position = index + 1
+                let expected = (expectedOrder.firstIndex(of: standing.clubId) ?? index) + 1
+                let inDropZone = position > n - max(2, tier.relegationCount)
+                let underperformed = position - expected >= max(5, n / 3)
+                let chance = inDropZone ? 0.55 : (underperformed ? 0.45 : 0.04)
+                guard Double.random(in: 0..<1) < chance else { continue }
+
+                let outgoing = clubs[cIdx].manager
+                let identity = NamePools.randomIdentity(for: tier.country)
+                let incoming = "\(identity.first) \(identity.last)"
+                clubs[cIdx].manager = incoming
+                vacancies.append(clubs[cIdx].id)
+                if isNewsworthy(tier) {
+                    addNews(
+                        headline: "\(clubs[cIdx].name) Part Ways With \(outgoing)",
+                        body: "After finishing \(position)\(standingRankSuffix(position)) in the \(tier.displayName), \(clubs[cIdx].name) have appointed \(incoming) as their new manager.",
+                        category: .general,
+                        sender: "Football News"
+                    )
+                }
+            }
+        }
+        // An unemployed manager hears about some of the openings.
+        if gameMode == .manageClub, userClubId == nil, !vacancies.isEmpty {
+            generateJobOffers(maxCount: 4, excludeUserClub: false)
+        }
+    }
+
+    /// Reputations move with performance: finishing above the place a club's
+    /// stature predicts raises it, falling short lowers it, and promotion,
+    /// relegation, trophies and European football add their own weight. A
+    /// gentle pull back toward the division's norm stops runaway values.
+    /// Attendance follows reputation.
+    private func evolveClubReputations(finalTables: [LeagueTier: [LeagueStanding]],
+                                       promoted: Set<UUID>, relegated: Set<UUID>) {
+        let europeans = Set(europeanCompetitions.flatMap { $0.participantClubIds })
+        let trophyWinners = Set(domesticCups.compactMap { $0.championClubId }
+                                + europeanCompetitions.compactMap { $0.championClubId })
+        for (_, table) in finalTables {
+            let n = table.count
+            guard n > 1 else { continue }
+            let ids = table.map { $0.clubId }
+            let byReputation = ids.sorted { (club(withId: $0)?.reputation ?? 0) > (club(withId: $1)?.reputation ?? 0) }
+            let divisionAverage = Double(ids.compactMap { club(withId: $0)?.reputation }.reduce(0, +)) / Double(n)
+            for (index, id) in ids.enumerated() {
+                guard let cIdx = clubs.firstIndex(where: { $0.id == id }) else { continue }
+                let position = index + 1
+                let expected = (byReputation.firstIndex(of: id) ?? index) + 1
+                var delta = Double(expected - position) / max(2.0, Double(n) / 6.0)
+                delta = max(-3, min(3, delta))
+                if index == 0 { delta += 2 }                 // champions
+                if promoted.contains(id) { delta += 4 }
+                if relegated.contains(id) { delta -= 4 }
+                if trophyWinners.contains(id) { delta += 2 }
+                if europeans.contains(id) { delta += 1 }
+                // Mean reversion toward the division's typical stature.
+                delta += (divisionAverage - Double(clubs[cIdx].reputation)) * 0.03
+                let newRep = max(15, min(99, clubs[cIdx].reputation + Int(delta.rounded())))
+                if clubs[cIdx].isUserClub && newRep != clubs[cIdx].reputation {
+                    addNews(
+                        headline: newRep > clubs[cIdx].reputation ? "Club Profile Rising" : "Club Profile Slipping",
+                        body: "\(clubs[cIdx].name)'s reputation moves from \(clubs[cIdx].reputation) to \(newRep) after this season.",
+                        category: .board,
+                        sender: "Football Analysts"
+                    )
+                }
+                clubs[cIdx].reputation = newRep
+                let rep = Double(max(20, min(95, newRep)))
+                clubs[cIdx].finances.averageAttendancePct = min(0.98, 0.55 + (rep - 20) / 120.0)
+            }
+        }
+    }
+
+    /// AI clubs spend what they earn: wages drift up (at most 15% a year)
+    /// toward about 58% of turnover, the real-world norm. Without this, AI
+    /// wage bills stayed near 40% of income and clubs banked ever-growing
+    /// surpluses.
+    private func applyWageInflation(clubIdx cIdx: Int, maximumRise: Double = 1.15, targetShare: Double = 0.58) {
+        let turnover = OwnerBusiness.annualRevenue(clubs[cIdx].finances)
+        let targetWeekly = Double(turnover) * targetShare / 52.0
+        let currentPlayerBill = Double(clubs[cIdx].totalPlayerWageBill)
+        guard currentPlayerBill > 0, currentPlayerBill < targetWeekly else { return }
+        let factor = min(maximumRise, targetWeekly / currentPlayerBill)
+        for p in clubs[cIdx].players.indices {
+            if var contract = clubs[cIdx].players[p].contract {
+                contract.wage = Int(Double(contract.wage) * factor)
+                clubs[cIdx].players[p].contract = contract
+            }
+        }
+        clubs[cIdx].finances.currentWageBill = clubs[cIdx].totalWeeklyWageBill
+    }
+
+    /// Summarises the user's season for the review card (both modes).
+    private func buildSeasonReview(finalTables: [LeagueTier: [LeagueStanding]],
+                                   target: (goal: String, position: Int)?) -> SeasonReview? {
+        guard let club = userClub,
+              let competition = season.fixtures.first(where: { $0.involves(clubId: club.id) && !$0.isCupTie })?.competition,
+              let league = leagues.first(where: { $0.name == competition }),
+              let table = finalTables[league.tier],
+              let index = table.firstIndex(where: { $0.clubId == club.id }) else { return nil }
+        let standing = table[index]
+        let position = index + 1
+
+        var cupRun: String?
+        if let cup = domesticCups.first(where: { $0.country == league.tier.country }) {
+            if cup.championClubId == club.id {
+                cupRun = "\(cup.name) winners"
+            } else if let lastTie = season.fixtures.filter({ $0.competition == cup.name && $0.involves(clubId: club.id) }).last,
+                      let round = lastTie.cupRound {
+                cupRun = "\(cup.name): out in the \(round.lowercased())"
+            } else {
+                cupRun = "\(cup.name): bye to a later round"
+            }
+        }
+
+        let topScorer = club.players.max { $0.seasonStats.goals < $1.seasonStats.goals }
+        let best = club.players.filter { $0.seasonStats.appearances >= 10 }
+            .max { $0.seasonStats.averageRating < $1.seasonStats.averageRating }
+
+        return SeasonReview(
+            season: season.year,
+            clubName: club.name,
+            leagueName: league.name,
+            position: position,
+            leagueSize: table.count,
+            points: standing.points,
+            won: standing.won,
+            drawn: standing.drawn,
+            lost: standing.lost,
+            goalsFor: standing.goalsFor,
+            goalsAgainst: standing.goalsAgainst,
+            targetGoal: target?.goal,
+            targetMet: target.map { position <= $0.position },
+            cupRun: cupRun,
+            topScorer: topScorer.flatMap { $0.seasonStats.goals > 0 ? "\($0.fullName) (\($0.seasonStats.goals))" : nil },
+            playerOfSeason: best.map { "\($0.fullName) (\(String(format: "%.2f", $0.seasonStats.averageRating)))" }
+        )
+    }
+
+    /// Golden Boot and Player of the Season for every top flight, plus the
+    /// user's own division. Announced in the news feed.
+    private func announceSeasonAwards(finalTables: [LeagueTier: [LeagueStanding]]) {
+        for league in leagues where isNewsworthy(league.tier) {
+            // Use the final table: promotions and relegations have already
+            // changed the league's membership by the time awards are announced.
+            let memberIds = finalTables[league.tier]?.map { $0.clubId } ?? league.clubIds
+            let members = memberIds.compactMap { club(withId: $0) }
+            let squad = members.flatMap { club in club.players.map { (player: $0, club: club) } }
+            guard !squad.isEmpty else { continue }
+
+            if let scorer = squad.max(by: { $0.player.seasonStats.goals < $1.player.seasonStats.goals }),
+               scorer.player.seasonStats.goals > 0 {
+                addNews(
+                    headline: "\(league.name) Golden Boot: \(scorer.player.fullName)",
+                    body: "\(scorer.player.fullName) of \(scorer.club.name) finishes as the \(league.name)'s top scorer with \(scorer.player.seasonStats.goals) goals.",
+                    category: .award,
+                    sender: league.name
+                )
+            }
+            let regulars = squad.filter { $0.player.seasonStats.appearances >= 15 }
+            if let best = regulars.max(by: { $0.player.seasonStats.averageRating < $1.player.seasonStats.averageRating }) {
+                let stats = best.player.seasonStats
+                addNews(
+                    headline: "\(league.name) Player of the Season: \(best.player.fullName)",
+                    body: "\(best.club.name)'s \(best.player.fullName) is named Player of the Season after averaging \(String(format: "%.2f", stats.averageRating)) across \(stats.appearances) games, with \(stats.goals) goals and \(stats.assists) assists.",
+                    category: .award,
+                    sender: league.name
+                )
+            }
+        }
+    }
+
     // MARK: - Season End Helpers
     
     /// Returns a club's display name, falling back to a placeholder when unknown.
@@ -2442,10 +4954,27 @@ public final class GameState: Codable {
     /// manager profile intact.
     public func goUnemployed() {
         guard gameMode == .manageClub else { return }
+        abandonLiveTransferTalks()
+        if let previousIdx = clubs.firstIndex(where: { $0.isUserClub }) {
+            clubs[previousIdx].manager = "Caretaker Manager"
+        }
         userClubId = nil
+        activeMatchFixtureId = nil
         for idx in 0..<clubs.count {
             clubs[idx].isUserClub = false
         }
+    }
+
+    /// Ends every live negotiation tied to the user's current club. Called when
+    /// the manager leaves, so a bid made for the old club cannot complete for
+    /// (or charge) the new one, and old inbox actions stop being actionable.
+    private func abandonLiveTransferTalks() {
+        for idx in pendingTransferOffers.indices where pendingTransferOffers[idx].isLive {
+            pendingTransferOffers[idx].status = .withdrawn
+            pendingTransferOffers[idx].weeksUntilResponse = 0
+            markOfferMailRead(offerId: pendingTransferOffers[idx].id)
+        }
+        negotiationTargetPlayerId = nil
     }
 
     /// Builds a pool of realistic job offers for the user based on their current
@@ -2459,10 +4988,20 @@ public final class GameState: Codable {
         let userRep = manager.reputation
         let userClubIdLocal = userClubId
 
-        let candidates = clubs.filter { club in
+        var candidates = clubs.filter { club in
             if excludeUserClub, let uid = userClubIdLocal, club.id == uid { return false }
             // Only clubs at or below the manager's reach (allow some stretch upward).
             return club.reputation <= userRep + 15
+        }
+        // A manager whose reputation has collapsed can always find work at the
+        // smallest clubs; without this, a second sacking could leave the user
+        // with no offers at all, permanently stuck in unemployment.
+        if candidates.count < requestedCount * 3 {
+            let fallback = clubs
+                .filter { club in !(excludeUserClub && club.id == userClubIdLocal) && !candidates.contains(where: { $0.id == club.id }) }
+                .sorted { $0.reputation < $1.reputation }
+                .prefix(requestedCount * 3 - candidates.count)
+            candidates.append(contentsOf: fallback)
         }
 
         // Weight selection toward the best-fitting roles without randomising the
@@ -2519,11 +5058,16 @@ public final class GameState: Codable {
             return nil
         }
 
+        abandonLiveTransferTalks()
+        if let previousIdx = clubs.firstIndex(where: { $0.isUserClub }), previousIdx != idx {
+            clubs[previousIdx].manager = "Caretaker Manager"
+        }
         for otherIdx in 0..<clubs.count {
             clubs[otherIdx].isUserClub = (otherIdx == idx)
         }
         clubs[idx].ensureTacticalIntegrity()
         userClubId = clubId
+        hasStartedCareer = true
         jobOffers.removeAll()
 
         // A new job starts with a clean slate: the previous board's patience,
@@ -2596,6 +5140,35 @@ public final class GameState: Codable {
         let target = min(100, max(5, club.reputation / 2 + tierBonus - positionPenalty))
         manager.reputation = (manager.reputation * 2 + target) / 3
         manager.age += 1
+
+        // Experience sharpens a manager: every season adds a little, and a
+        // strong season (top third of the table, or silverware) adds more.
+        // Coaching ability feeds straight into match performance.
+        let tableSize = max(1, finalTableSize(for: club))
+        let strongSeason = position <= max(1, tableSize / 3) || !honours.isEmpty
+        let gains = strongSeason ? 6 : 2
+        for _ in 0..<gains {
+            switch Int.random(in: 0..<4) {
+            case 0: manager.tactical = min(99, manager.tactical + 1)
+            case 1: manager.attacking = min(99, manager.attacking + 1)
+            case 2: manager.defending = min(99, manager.defending + 1)
+            default: manager.youthDevelopment = min(99, manager.youthDevelopment + 1)
+            }
+        }
+        if strongSeason {
+            addNews(
+                headline: "Your Coaching Reputation Grows",
+                body: "A strong season has sharpened your coaching. Your overall coaching rating is now \(manager.overallCoaching).",
+                category: .award,
+                sender: "League Managers Association"
+            )
+        }
+    }
+
+    /// Clubs in the division the club finished the season in.
+    private func finalTableSize(for club: Club) -> Int {
+        let competition = season.fixtures.first { $0.involves(clubId: club.id) && !$0.isCupTie }?.competition
+        return leagues.first { $0.name == competition }?.clubIds.count ?? 20
     }
 
     public func addNews(headline: String, body: String, category: NewsCategory, sender: String = "Club News Desk", transferOfferId: UUID? = nil) {
@@ -2655,16 +5228,81 @@ public final class GameState: Codable {
         )
     }
 
-    /// Board's minimum season expectation derived from the club's tier and reputation.
+    /// Board's minimum season expectation, in words.
     private func boardExpectation(for club: Club) -> String {
-        if club.leagueTier.isTopFlight {
-            if club.reputation >= 75 { return "title challenge" }
-            if club.reputation >= 55 { return "top-half finish and a European push" }
-            return "comfortable mid-table safety"
+        boardTarget(for: club)?.goal.lowercased() ?? "solid season"
+    }
+
+    /// The board's target for the user's club: where its reputation ranks in
+    /// its division decides the ambition, with a little slack.
+    public func boardTarget(for club: Club) -> (goal: String, position: Int)? {
+        guard let league = currentLeague ?? leagues.first(where: { $0.tier == club.leagueTier }) else { return nil }
+        let members = league.clubIds.compactMap { self.club(withId: $0) }
+        let n = members.count
+        guard n > 1 else { return nil }
+        let rank = (members.sorted { $0.reputation > $1.reputation }.firstIndex { $0.id == club.id } ?? n / 2) + 1
+        let tier = league.tier
+        // Single-division countries have nobody to relegate to.
+        let hasLowerDivision = tier.lowerTier.map { lower in leagues.contains { $0.tier == lower } } ?? false
+        let survivalGoal = hasLowerDivision
+            ? ("Avoid relegation", max(1, n - max(tier.relegationCount, 2)))
+            : ("Finish clear of the bottom two", max(1, n - 2))
+        if tier.isTopFlight {
+            let europe = max(1, tier.country.europeanAllocation.championsLeague + tier.country.europeanAllocation.europaLeague)
+            if rank == 1 { return ("Win the league", 1) }
+            if rank <= 3 { return ("Challenge for the title", 3) }
+            if rank <= europe + 1 { return ("Qualify for Europe", europe + 1) }
+            if rank <= n / 2 { return ("Finish in the top half", n / 2) }
+            return survivalGoal
         }
-        if club.reputation >= 55 { return "promotion challenge" }
-        if club.reputation >= 40 { return "top-half finish" }
-        return "battle against relegation"
+        if rank <= 2 { return ("Win promotion", max(1, tier.autoPromotionCount)) }
+        if rank <= 6 { return ("Reach the play-offs", tier.autoPromotionCount + 4) }
+        if rank <= n / 2 { return ("Finish in the top half", n / 2) }
+        return survivalGoal
+    }
+
+    /// End-of-season verdict on the board's target: rewards for beating it,
+    /// and a summer sacking for missing it badly with confidence already low.
+    private func deliverBoardVerdict(club: Club, position: Int, target: (goal: String, position: Int)) {
+        guard gameMode == .manageClub, let clubIdx = clubs.firstIndex(where: { $0.id == club.id }) else { return }
+        if position <= target.position {
+            let bonus = max(100_000, clubs[clubIdx].finances.transferBudget / 5)
+            clubs[clubIdx].finances.transferBudget += bonus
+            jobSecurity.boardConfidence = min(100, jobSecurity.boardConfidence + 15)
+            manager.reputation = min(100, manager.reputation + 3)
+            addNews(
+                headline: "Board Target Achieved",
+                body: "The board asked you to \(target.goal.lowercased()) and you delivered with a \(position)\(standingRankSuffix(position))-place finish. They have added \(Player.formatCurrency(bonus)) to the transfer budget.",
+                category: .board,
+                sender: "The Board"
+            )
+        } else if position > target.position + 4 {
+            jobSecurity.boardConfidence = max(0, jobSecurity.boardConfidence - 20)
+            if jobSecurity.boardConfidence < 30 {
+                let sackedFrom = clubs[clubIdx]
+                abandonLiveTransferTalks()
+                clubs[clubIdx].isUserClub = false
+                clubs[clubIdx].manager = "Caretaker Manager"
+                userClubId = nil
+                manager.reputation = max(5, manager.reputation - 6)
+                jobSecurity = JobSecurity()
+                addNews(
+                    headline: "Sacked by \(sackedFrom.name)",
+                    body: "The board asked you to \(target.goal.lowercased()). A \(position)\(standingRankSuffix(position))-place finish was not good enough and they have decided to make a change.",
+                    category: .board,
+                    sender: "The Board — \(sackedFrom.name)"
+                )
+                generateJobOffers(maxCount: 4, excludeUserClub: false)
+                jobOffers.removeAll { $0.clubId == sackedFrom.id }
+            } else {
+                addNews(
+                    headline: "Board Disappointed",
+                    body: "The target was to \(target.goal.lowercased()); we finished \(position)\(standingRankSuffix(position)). The board expect a significant improvement next season.",
+                    category: .board,
+                    sender: "The Board"
+                )
+            }
+        }
     }
     
     // MARK: - Codable Implementation
@@ -2697,6 +5335,30 @@ public final class GameState: Codable {
         case nationalTeams
         case internationalTournaments
         case managedNationalTeamId
+        case hasStartedCareer
+        case domesticCups
+        case rivalries
+        case europeanQualifiers
+        case lastSeasonReview
+        case history
+        case shortlist
+        case matchOnlyLineupBackup
+        case pendingWinBonusRequest
+        case winBonusAskedSeason
+        case winBonusPercent
+        case pendingRecordMoment
+        case clubRecords
+        case dismissedTips
+        case achievements
+        case pendingOwnerDecision
+        case answeredPressFixtureIds
+        case seasonLedger
+        case pointsDeductions
+        case pendingManagerRequest
+        case pendingTakeover
+        case pendingSponsorOffers
+        case sponsorAgencyCooldown
+        case awaitingClubPurchase
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -2728,6 +5390,30 @@ public final class GameState: Codable {
         try container.encode(nationalTeams, forKey: .nationalTeams)
         try container.encode(internationalTournaments, forKey: .internationalTournaments)
         try container.encodeIfPresent(managedNationalTeamId, forKey: .managedNationalTeamId)
+        try container.encode(hasStartedCareer, forKey: .hasStartedCareer)
+        try container.encode(domesticCups, forKey: .domesticCups)
+        try container.encode(rivalries, forKey: .rivalries)
+        try container.encode(europeanQualifiers, forKey: .europeanQualifiers)
+        try container.encodeIfPresent(lastSeasonReview, forKey: .lastSeasonReview)
+        try container.encode(history, forKey: .history)
+        try container.encode(shortlist, forKey: .shortlist)
+        try container.encodeIfPresent(matchOnlyLineupBackup, forKey: .matchOnlyLineupBackup)
+        try container.encode(pendingWinBonusRequest, forKey: .pendingWinBonusRequest)
+        try container.encode(winBonusAskedSeason, forKey: .winBonusAskedSeason)
+        try container.encode(winBonusPercent, forKey: .winBonusPercent)
+        try container.encodeIfPresent(pendingRecordMoment, forKey: .pendingRecordMoment)
+        try container.encode(clubRecords, forKey: .clubRecords)
+        try container.encode(dismissedTips, forKey: .dismissedTips)
+        try container.encode(achievements, forKey: .achievements)
+        try container.encodeIfPresent(pendingOwnerDecision, forKey: .pendingOwnerDecision)
+        try container.encode(answeredPressFixtureIds, forKey: .answeredPressFixtureIds)
+        try container.encodeIfPresent(seasonLedger, forKey: .seasonLedger)
+        try container.encode(pointsDeductions, forKey: .pointsDeductions)
+        try container.encodeIfPresent(pendingManagerRequest, forKey: .pendingManagerRequest)
+        try container.encodeIfPresent(pendingTakeover, forKey: .pendingTakeover)
+        try container.encode(pendingSponsorOffers, forKey: .pendingSponsorOffers)
+        try container.encode(sponsorAgencyCooldown, forKey: .sponsorAgencyCooldown)
+        try container.encode(awaitingClubPurchase, forKey: .awaitingClubPurchase)
     }
     
     public required init(from decoder: Decoder) throws {
@@ -2759,5 +5445,60 @@ public final class GameState: Codable {
         self.nationalTeams = try container.decodeIfPresent([NationalTeam].self, forKey: .nationalTeams) ?? []
         self.internationalTournaments = try container.decodeIfPresent([InternationalTournament.State].self, forKey: .internationalTournaments) ?? []
         self.managedNationalTeamId = try container.decodeIfPresent(String.self, forKey: .managedNationalTeamId)
+        // Saves from before cups existed simply have none until next season.
+        self.domesticCups = try container.decodeIfPresent([DomesticCupState].self, forKey: .domesticCups) ?? []
+        // Older saves have none; `seedRivalriesIfNeeded()` fills them in on load.
+        self.rivalries = try container.decodeIfPresent([Rivalry].self, forKey: .rivalries) ?? []
+        self.europeanQualifiers = try container.decodeIfPresent([String: [UUID]].self, forKey: .europeanQualifiers) ?? [:]
+        self.lastSeasonReview = try container.decodeIfPresent(SeasonReview.self, forKey: .lastSeasonReview)
+        self.history = try container.decodeIfPresent(WorldHistory.self, forKey: .history) ?? WorldHistory()
+        self.shortlist = try container.decodeIfPresent([UUID].self, forKey: .shortlist) ?? []
+        self.matchOnlyLineupBackup = try container.decodeIfPresent(Tactics.self, forKey: .matchOnlyLineupBackup)
+        self.pendingWinBonusRequest = try container.decodeIfPresent(Bool.self, forKey: .pendingWinBonusRequest) ?? false
+        self.winBonusAskedSeason = try container.decodeIfPresent(String.self, forKey: .winBonusAskedSeason) ?? ""
+        self.winBonusPercent = try container.decodeIfPresent(Int.self, forKey: .winBonusPercent) ?? 0
+        self.pendingRecordMoment = try container.decodeIfPresent(ClubRecordMoment.self, forKey: .pendingRecordMoment)
+        self.clubRecords = try container.decodeIfPresent(ClubRecords.self, forKey: .clubRecords) ?? ClubRecords()
+        self.dismissedTips = try container.decodeIfPresent([String].self, forKey: .dismissedTips) ?? []
+        self.achievements = try container.decodeIfPresent([String: String].self, forKey: .achievements) ?? [:]
+        self.pendingOwnerDecision = try container.decodeIfPresent(OwnerDecision.self, forKey: .pendingOwnerDecision)
+        self.answeredPressFixtureIds = try container.decodeIfPresent([UUID].self, forKey: .answeredPressFixtureIds) ?? []
+        self.seasonLedger = try container.decodeIfPresent(FinanceLedger.self, forKey: .seasonLedger)
+        self.pointsDeductions = try container.decodeIfPresent([UUID: Int].self, forKey: .pointsDeductions) ?? [:]
+        self.pendingManagerRequest = try container.decodeIfPresent(ManagerRequest.self, forKey: .pendingManagerRequest)
+        self.pendingTakeover = try container.decodeIfPresent(TakeoverOffer.self, forKey: .pendingTakeover)
+        self.pendingSponsorOffers = try container.decodeIfPresent([SponsorOffer].self, forKey: .pendingSponsorOffers) ?? []
+        self.sponsorAgencyCooldown = try container.decodeIfPresent(Int.self, forKey: .sponsorAgencyCooldown) ?? 0
+        self.awaitingClubPurchase = try container.decodeIfPresent(Bool.self, forKey: .awaitingClubPurchase) ?? false
+        // Saves written before this flag existed: any save with a user club, or
+        // a manager career (possibly between jobs), is a real career.
+        // (Re-decoded into locals: reading `self` properties is not allowed until
+        // every stored property is initialised.)
+        if let storedFlag = try container.decodeIfPresent(Bool.self, forKey: .hasStartedCareer) {
+            self.hasStartedCareer = storedFlag
+        } else {
+            let decodedMode = try container.decode(GameMode.self, forKey: .gameMode)
+            let decodedUserClubId = try container.decodeIfPresent(UUID.self, forKey: .userClubId)
+            let decodedManager = try container.decodeIfPresent(ManagerProfile.self, forKey: .manager)
+            let decodedOffers = try container.decodeIfPresent([JobOffer].self, forKey: .jobOffers) ?? []
+            let hasManagerHistory = !(decodedManager?.careerHistory.isEmpty ?? true)
+            self.hasStartedCareer = decodedUserClubId != nil
+                || (decodedMode == .manageClub && (hasManagerHistory || !decodedOffers.isEmpty))
+        }
+        // Older saves gave every club the same five named staff.
+        for idx in self.clubs.indices { self.clubs[idx].replaceLegacyStaff() }
+    }
+}
+
+extension String {
+    /// FNV-1a hash that is stable across launches (Swift's `hashValue` is
+    /// randomised per process), for deterministic per-club choices.
+    var hashValueStable: Int {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100000001b3
+        }
+        return Int(truncatingIfNeeded: hash & 0x7fffffffffffffff)
     }
 }

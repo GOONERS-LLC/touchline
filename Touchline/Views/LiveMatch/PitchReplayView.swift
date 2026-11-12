@@ -192,326 +192,532 @@ public struct PitchReplayView: View {
 
 public struct LiveMatchView: View {
     @Environment(GameState.self) private var gameState
-
+    
     @State private var minute = 0
     @State private var isPlaying = false
     @State private var didSimulate = false
     @State private var ticker: Timer?
-    /// Lines waiting to be read by VoiceOver. While this is non-empty and
-    /// "Wait for VoiceOver" is on, the clock holds so nothing is skipped.
-    @State private var speechQueue: [String] = []
-    @State private var isSpeaking = false
-    @State private var speechWatchdog: DispatchWorkItem?
+    @State private var goalFlash: MatchEvent?
+    @State private var pane: Pane = .pitch
 
+    enum Pane: String, CaseIterable { case pitch = "Pitch", commentary = "Commentary", stats = "Stats", lineups = "Lineups" }
+    
     private var fixture: Fixture? { gameState.activeMatchFixture }
-    private var result: MatchResult? { fixture?.result }
-    private var detail: CommentaryDetail { Preferences.commentaryDetail }
+    /// The full result once the match is over; the first half while it is
+    /// stopped at the break.
+    private var result: MatchResult? {
+        if let played = fixture?.result { return played }
+        if let session = gameState.liveMatch, session.fixtureId == fixture?.id { return session.firstHalf }
+        return nil
+    }
+    private var secondHalfPending: Bool { fixture?.isPlayed == false }
+    @State private var atHalfTime = false
+    @State private var editingLineup = false
+    @State private var editingTactics = false
 
+    /// The last minute the replay runs to. The engine plays stoppage time (and
+    /// extra time in knockouts), so capping the replay at 90' used to hide late
+    /// goals from the live scoreboard and VoiceOver announcements.
+    private var finalMinute: Int {
+        if secondHalfPending { return 45 }
+        return max(90, result?.events.map { $0.minute }.max() ?? 90)
+    }
+    
     public var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             if let fixture = fixture,
                let home = gameState.club(withId: fixture.homeClubId),
                let away = gameState.club(withId: fixture.awayClubId) {
-
+                
                 scoreboard(home: home, away: away)
 
-                PitchReplayView(
-                    fixture: fixture,
-                    homeClub: home,
-                    awayClub: away,
-                    minute: minute
-                )
-                .frame(maxHeight: 220)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .padding(.horizontal, 16)
-                .accessibilityHidden(true)
+                GFTabs(selection: $pane, compact: true)
+                    .padding(.horizontal)
 
-                timelineFeed(home: home, away: away)
+                Group {
+                    switch pane {
+                    case .pitch:
+                        PitchReplayView(
+                            fixture: fixture,
+                            homeClub: home,
+                            awayClub: away,
+                            minute: minute
+                        )
+                        .padding(.horizontal, 12)
+                        timelineFeed(home: home, away: away)
+                    case .commentary:
+                        commentaryCards(home: home, away: away)
+                    case .stats:
+                        liveStats(home: home, away: away)
+                    case .lineups:
+                        lineups(home: home, away: away)
+                    }
+                }
+                .frame(maxHeight: .infinity, alignment: .top)
+                .overlay {
+                    if let goal = goalFlash {
+                        goalBanner(goal, club: goal.isHomeTeam ? home : away)
+                            .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    }
+                }
+                .overlay {
+                    if atHalfTime { halfTimePanel(home: home, away: away) }
+                }
 
                 controls(fixture: fixture)
             } else {
                 ContentUnavailableView("No Active Match", systemImage: "sportscourt")
             }
         }
-        .padding(.vertical, 8)
-        .background(Color.ink.ignoresSafeArea())
-        .navigationTitle("Live Match")
+        .padding(.vertical)
+        .stadiumBackground()
+        .navigationTitle(gameState.gameMode == .createClub ? "Watching" : "Live Match")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
         .onAppear(perform: prepare)
-        .onDisappear {
-            stopTicker()
-            CrowdAtmosphere.shared.stopMatch()
+        .onDisappear { stopTicker() }
+        .sheet(isPresented: $editingLineup) {
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label("You have \(gameState.liveSubsRemaining) substitution\(gameState.liveSubsRemaining == 1 ? "" : "s") left. Bring players on from the bench by swapping them with a starter; starters can also swap positions. Players already taken off cannot return.",
+                              systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        LineupEditorView()
+                    }
+                    .padding()
+                }
+                .stadiumBackground()
+                .navigationTitle("Half-Time Changes")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { editingLineup = false } } }
+            }
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.announcementDidFinishNotification)) { _ in
-            speakNext()
+        .sheet(isPresented: $editingTactics) {
+            NavigationStack {
+                TacticsView()
+                    .stadiumBackground()
+                    .navigationTitle("Tactics")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { editingTactics = false } } }
+            }
         }
     }
 
-    // MARK: - Subviews
+    /// The break: the score, and the chance to change things.
+    private func halfTimePanel(home: Club, away: Club) -> some View {
+        let manages = gameState.gameMode == .manageClub
+        return VStack(spacing: 14) {
+            Text("HALF-TIME").font(.gfDisplay(22))
+            Text("\(home.shortName) \(currentHomeGoals) - \(currentAwayGoals) \(away.shortName)").font(.gfDisplay(22))
+            if manages {
+                Text("Substitutions left: \(gameState.liveSubsRemaining)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Button("Lineup") { editingLineup = true }
+                        .buttonStyle(.gfOutline)
+                        .accessibilityHint("Make substitutions and change positions")
+                    Button("Tactics") { editingTactics = true }
+                        .buttonStyle(.gfOutline)
+                }
+            }
+            Button("Start Second Half") { startSecondHalf() }
+                .buttonStyle(.gfPrimary)
+                .padding(.horizontal, 20)
+        }
+        .padding(22)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.gfNight.opacity(0.96)))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.white.opacity(0.5), lineWidth: 1.5))
+        .padding(.horizontal, 20)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isModal)
+    }
 
+    /// Plays the second half with whatever was changed at the break.
+    private func startSecondHalf() {
+        guard let fixture else { return }
+        atHalfTime = false
+        gameState.simulateFixture(id: fixture.id)
+        startTicker()
+    }
+    
+    // MARK: - Subviews
+    
     private func scoreboard(home: Club, away: Club) -> some View {
         VStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Circle().fill(isPlaying ? Color.lossRed : Color.drawGray).frame(width: 8, height: 8)
-                Text(isPlaying ? "LIVE" : (minute >= 90 ? "FULL TIME" : minute == 0 ? "PRE-MATCH" : "PAUSED"))
-                    .font(.caption2).fontWeight(.heavy).tracking(1.2)
-                Text("· \(fixture?.competition ?? "Match")")
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            }
+            Text(fixture.flatMap { f in f.cupRound.map { "\(f.competition) • \($0)" } } ?? fixture?.competition ?? "Match")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.85))
             HStack {
                 VStack(spacing: 4) {
-                    CrestView(club: home, size: 40)
-                    Text(home.name).font(.caption).fontWeight(.semibold).lineLimit(2).multilineTextAlignment(.center)
+                    CrestView(club: home, size: 34)
+                    Text(home.name.uppercased()).font(.gfLabel(14)).lineLimit(1).minimumScaleFactor(0.6)
                 }
                 .frame(maxWidth: .infinity)
                 VStack(spacing: 2) {
                     Text(scoreText)
-                        .font(.system(size: 38, weight: .black, design: .rounded))
+                        .font(.gfDisplay(32))
                         .monospacedDigit()
                         .contentTransition(.numericText())
-                    Text("\(minute)'")
-                        .font(.subheadline)
-                        .fontWeight(.bold)
-                        .foregroundStyle(Color.highlight)
-                        .monospacedDigit()
+                        .animation(.snappy, value: scoreText)
+                    Text(minute >= finalMinute ? "FT" : minute == 45 && !isPlaying ? "HT" : "\(minute)'")
+                        .font(.caption.weight(.heavy).monospacedDigit())
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color.black.opacity(0.25), in: Capsule())
                 }
-                .frame(width: 120)
                 VStack(spacing: 4) {
-                    CrestView(club: away, size: 40)
-                    Text(away.name).font(.caption).fontWeight(.semibold).lineLimit(2).multilineTextAlignment(.center)
+                    CrestView(club: away, size: 34)
+                    Text(away.name.uppercased()).font(.gfLabel(14)).lineLimit(1).minimumScaleFactor(0.6)
                 }
                 .frame(maxWidth: .infinity)
             }
+            .foregroundStyle(.white)
+            if let attendance = result?.attendance, attendance > 0 {
+                Text("\(home.stadium) (\(attendance.formatted()) fans)")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            ProgressView(value: Double(minute), total: Double(finalMinute))
+                .tint(Color.gfMint)
         }
-        .padding(14)
-        .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.hairline, lineWidth: 1))
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 14)
+        .padding(.horizontal)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(home.name) \(currentHomeGoals), \(away.name) \(currentAwayGoals). Minute \(minute).")
-        .accessibilityAddTraits(.updatesFrequently)
+        .accessibilityLabel("\(home.name) \(currentHomeGoals), \(away.name) \(currentAwayGoals), minute \(minute)")
     }
 
+    private func goalBanner(_ goal: MatchEvent, club: Club) -> some View {
+        let scorer = goal.playerId.flatMap { gameState.player(withId: $0)?.player.fullName }
+        let assist = goal.assistPlayerId.flatMap { gameState.player(withId: $0)?.player.fullName }
+        return VStack(spacing: 6) {
+            Text("GOAL!")
+                .font(.system(size: 32, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
+            HStack(spacing: 6) {
+                CrestView(club: club, size: 22)
+                Text(scorer ?? club.name).font(.headline).foregroundStyle(.white)
+            }
+            if let assist {
+                Text("Assist: \(assist)").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
+            }
+        }
+        .padding(.horizontal, 26)
+        .padding(.vertical, 16)
+        .background(Color(hex: club.primaryColor).opacity(0.92), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .shadow(color: .black.opacity(0.35), radius: 12)
+    }
+    
     private func timelineFeed(home: Club, away: Club) -> some View {
-        let visible = (result?.events ?? []).filter { $0.minute <= minute && detail.includes($0.type) }
-        return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 8) {
-                if visible.isEmpty {
-                    Text(minute == 0 ? "The teams are in the tunnel. Kick-off is moments away." : "No incidents yet.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 12)
-                } else {
-                    ForEach(visible.reversed()) { ev in
-                        HStack(alignment: .top, spacing: 10) {
-                            Text("\(ev.minute)'")
-                                .font(.caption)
-                                .fontWeight(.bold)
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                                .frame(width: 30, alignment: .trailing)
-                            EventBadge(type: ev.type)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(ev.shortText)
-                                    .font(.subheadline)
-                                    .fontWeight(ev.type.isMajorEvent ? .bold : .semibold)
+        List {
+            let visible = (result?.events ?? []).filter { $0.minute <= minute }
+            if visible.isEmpty {
+                Text(minute == 0 ? "Kick-off imminent..." : "No key events yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(visible.reversed()) { ev in
+                    let isGoal = ev.type == .goal || ev.type == .penalty || ev.type == .ownGoal
+                    let club = ev.isHomeTeam ? home : away
+                    HStack(alignment: .top, spacing: 10) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color(hex: club.primaryColor))
+                            .frame(width: 4)
+                        Text("\(ev.minute)'")
+                            .font(.caption.weight(.heavy).monospacedDigit())
+                            .frame(width: 30, alignment: .leading)
+                        Image(systemName: ev.type.icon)
+                            .foregroundStyle(isGoal ? Color.winGreen : ev.type == .redCard || ev.type == .secondYellow ? .red : ev.type == .yellowCard ? .yellow : .secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(ev.shortText)
+                                .font(.subheadline.weight(isGoal ? .bold : .regular))
+                            if isGoal || ev.type == .chanceMissed || ev.type == .woodwork {
                                 Text(ev.detailText)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
+                                    .lineLimit(3)
                             }
                         }
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(ev.type.isMajorEvent ? Color.surfaceRaised : Color.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(ev.minute) minutes. \(ev.type.spokenName). \(ev.detailText)")
+                    }
+                    .listRowBackground(isGoal ? Color.winGreen.opacity(0.1) : Color.clear)
+                    .accessibleMatchEvent(ev)
+                }
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+    }
+    
+    private func controls(fixture: Fixture) -> some View {
+        HStack(spacing: 10) {
+            Menu {
+                ForEach(MatchSettings.Speed.allCases) { speed in
+                    Button(speed.displayName) {
+                        gameState.matchSettings.speed = speed
+                        if isPlaying { startTicker() }
+                    }
+                }
+            } label: {
+                Image(systemName: "gauge.with.dots.needle.67percent")
+                    .font(.title3.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .foregroundStyle(.white)
+                    .background(Capsule().fill(Color.gfNavy.opacity(0.7)))
+                    .overlay(Capsule().stroke(Color.white.opacity(0.75), lineWidth: 1.5))
+            }
+            .accessibilityLabel("Replay speed, \(gameState.matchSettings.speed.displayName)")
+
+            Button {
+                isPlaying ? stopTicker() : startTicker()
+            } label: {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.title3.weight(.bold))
+            }
+            .buttonStyle(.gfPrimary)
+            .disabled(minute >= finalMinute || atHalfTime)
+            .accessibilityLabel(isPlaying ? "Pause match" : "Play match")
+
+            Button {
+                finish(fixture: fixture)
+            } label: {
+                Image(systemName: "forward.end.fill")
+                    .font(.title3.weight(.bold))
+            }
+            .buttonStyle(.gfOutline)
+            .accessibilityLabel("Skip to full time")
+        }
+        .padding(.horizontal, 24)
+    }
+
+    /// Every event so far as a card: goals in the scorer's club colours,
+    /// cards and chances in white, the home side's minute on the right.
+    private func commentaryCards(home: Club, away: Club) -> some View {
+        let visible = (result?.events ?? []).filter { $0.minute <= minute }
+        return ScrollView {
+            LazyVStack(spacing: 8) {
+                if visible.isEmpty {
+                    Text(minute == 0 ? "Kick-off imminent..." : "No key events yet.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 20)
+                }
+                ForEach(visible.reversed()) { ev in
+                    let isGoal = ev.type == .goal || ev.type == .penalty || ev.type == .ownGoal
+                    let club = ev.isHomeTeam ? home : away
+                    let fill = isGoal ? Color(hex: club.primaryColor) : Color.white
+                    let text = isGoal ? Color.readable(on: club.primaryColor) : Color.black
+                    let marker = VStack(spacing: 2) {
+                        Image(systemName: ev.type.icon).font(.caption)
+                        Text("\(ev.minute)'").font(.caption2.weight(.heavy).monospacedDigit())
+                    }
+                    .foregroundStyle(Color.gfNight)
+                    .frame(width: 38)
+                    .frame(maxHeight: .infinity)
+                    .background(Color.white)
+                    HStack(spacing: 0) {
+                        if !ev.isHomeTeam { marker }
+                        VStack(alignment: ev.isHomeTeam ? .leading : .trailing, spacing: 3) {
+                            if isGoal {
+                                let scorer = ev.playerId.flatMap { gameState.player(withId: $0)?.player.displayName }
+                                Text("\((scorer ?? club.name).uppercased())!").font(.gfDisplay(18))
+                            }
+                            Text(ev.detailText)
+                                .font(.subheadline)
+                                .multilineTextAlignment(ev.isHomeTeam ? .leading : .trailing)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .foregroundStyle(text)
+                        .frame(maxWidth: .infinity, alignment: ev.isHomeTeam ? .leading : .trailing)
+                        .padding(12)
+                        if ev.isHomeTeam { marker }
+                    }
+                    .background(fill)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .accessibleMatchEvent(ev)
+                }
+            }
+            .padding(.horizontal)
+        }
+    }
+
+    /// Match stats so far. Totals are scaled to the minute reached, so the
+    /// replay does not give away what is still to come.
+    private func liveStats(home: Club, away: Club) -> some View {
+        let share = finalMinute > 0 ? Double(minute) / Double(finalMinute) : 1
+        func scaled(_ v: Int) -> Int { Int((Double(v) * share).rounded()) }
+        let goals = (result?.goalEvents ?? []).filter { $0.minute <= minute }
+        let h = result?.homeStats, a = result?.awayStats
+        let homeColor = Color(hex: home.primaryColor)
+        let awayColor = Color(hex: away.primaryColor == home.primaryColor ? away.secondaryColor : away.primaryColor)
+        return ScrollView {
+            VStack(spacing: 14) {
+                if let h, let a {
+                    DualStatBar(title: "Possession %", home: h.possession, away: a.possession,
+                                homeText: "\(Int(h.possession.rounded()))", awayText: "\(Int(a.possession.rounded()))",
+                                homeColor: homeColor, awayColor: awayColor)
+                    DualStatBar(title: "xG", home: h.xG * share, away: a.xG * share,
+                                homeText: String(format: "%.1f", h.xG * share), awayText: String(format: "%.1f", a.xG * share),
+                                homeColor: homeColor, awayColor: awayColor)
+                    let hg = goals.filter { $0.isHomeTeam }.count, ag = goals.count - goals.filter { $0.isHomeTeam }.count
+                    let hOn = max(hg, scaled(h.shotsOnTarget)), aOn = max(ag, scaled(a.shotsOnTarget))
+                    DualStatBar(title: "Shots on target", home: Double(hOn), away: Double(aOn),
+                                homeText: "\(hOn)", awayText: "\(aOn)", homeColor: homeColor, awayColor: awayColor)
+                    DualStatBar(title: "Shots", home: Double(max(hOn, scaled(h.shots))), away: Double(max(aOn, scaled(a.shots))),
+                                homeText: "\(max(hOn, scaled(h.shots)))", awayText: "\(max(aOn, scaled(a.shots)))",
+                                homeColor: homeColor, awayColor: awayColor)
+                    DualStatBar(title: "Corners", home: Double(scaled(h.corners)), away: Double(scaled(a.corners)),
+                                homeText: "\(scaled(h.corners))", awayText: "\(scaled(a.corners))", homeColor: homeColor, awayColor: awayColor)
+                    DualStatBar(title: "Fouls", home: Double(scaled(h.fouls)), away: Double(scaled(a.fouls)),
+                                homeText: "\(scaled(h.fouls))", awayText: "\(scaled(a.fouls))", homeColor: homeColor, awayColor: awayColor)
+                    let cards = (result?.events ?? []).filter { $0.minute <= minute }
+                    let hy = cards.filter { $0.isHomeTeam && $0.type == .yellowCard }.count
+                    let ay = cards.filter { !$0.isHomeTeam && $0.type == .yellowCard }.count
+                    DualStatBar(title: "Yellow cards", home: Double(hy), away: Double(ay),
+                                homeText: "\(hy)", awayText: "\(ay)", homeColor: homeColor, awayColor: awayColor)
+                }
+            }
+            .gfCard()
+            .padding(.horizontal)
+        }
+    }
+
+    /// Both starting elevens, with match ratings once the whistle has gone.
+    private func lineups(home: Club, away: Club) -> some View {
+        let done = minute >= finalMinute
+        func column(_ club: Club, alignment: HorizontalAlignment) -> some View {
+            VStack(alignment: alignment, spacing: 6) {
+                Text(club.tactics.formation.rawValue).font(.gfLabel(14)).foregroundStyle(.secondary)
+                ForEach(club.startingXIPlayers) { player in
+                    HStack(spacing: 6) {
+                        if alignment == .trailing { Spacer(minLength: 0) }
+                        Text(player.primaryPosition.abbreviation)
+                            .font(.gfLabel(11))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(Capsule().fill(player.primaryPosition.category.accentColor))
+                        Text(player.displayName).font(.caption.weight(.semibold)).lineLimit(1)
+                        if done, let rating = result?.playerRatings[player.id] {
+                            Text(String(format: "%.1f", rating))
+                                .font(.caption2.weight(.heavy).monospacedDigit())
+                                .padding(.horizontal, 4)
+                                .background(Capsule().fill(rating >= 7 ? Color.gfMint : Color.white.opacity(0.85)))
+                                .foregroundStyle(Color.gfNight)
+                        }
+                        if alignment == .leading { Spacer(minLength: 0) }
                     }
                 }
             }
-            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
+        }
+        return ScrollView {
+            HStack(alignment: .top, spacing: 12) {
+                column(home, alignment: .leading)
+                column(away, alignment: .trailing)
+            }
+            .gfCard()
+            .padding(.horizontal)
         }
     }
-
-    private func controls(fixture: Fixture) -> some View {
-        HStack(spacing: 10) {
-            Button {
-                Haptics.tap()
-                isPlaying ? pauseMatch() : startTicker()
-            } label: {
-                Label(isPlaying ? "Pause" : (minute == 0 ? "Kick Off" : "Resume"), systemImage: isPlaying ? "pause.fill" : "play.fill")
-                    .font(.headline)
-            }
-            .buttonStyle(SecondaryActionStyle())
-            .disabled(minute >= 90)
-            .accessibilityLabel(isPlaying ? "Pause match" : "Resume match")
-
-            Button {
-                Haptics.tap()
-                finish(fixture: fixture)
-            } label: {
-                Label(minute >= 90 ? "Full Time" : "Skip to End", systemImage: "flag.checkered")
-                    .font(.headline)
-            }
-            .buttonStyle(PrimaryActionStyle())
-            .accessibilityLabel(minute >= 90 ? "Go to full time" : "Skip to full time")
-        }
-        .padding(.horizontal, 16)
-    }
-
+    
     // MARK: - Logic
-
+    
     private var currentHomeGoals: Int {
         (result?.goalEvents ?? []).filter { $0.minute <= minute && $0.isHomeTeam }.count
     }
-
+    
     private var currentAwayGoals: Int {
         (result?.goalEvents ?? []).filter { $0.minute <= minute && !$0.isHomeTeam }.count
     }
-
+    
     private var scoreText: String {
         "\(currentHomeGoals) - \(currentAwayGoals)"
     }
-
-    private var holdsForVoiceOver: Bool {
-        UIAccessibility.isVoiceOverRunning && Preferences.waitForVoiceOver
-    }
-
+    
     private func prepare() {
+        // Never replay a finished match: if the active fixture has already
+        // been played and we are not mid-replay, pick today's match instead.
+        if !didSimulate, let current = fixture, current.isPlayed {
+            if !gameState.selectTodaysUserFixture() {
+                gameState.currentScreen = .dashboard
+                return
+            }
+        }
         guard let fixture = fixture else { return }
         // Simulate first (pre-decides the outcome), then replay it minute by minute.
         if !didSimulate {
-            if !fixture.isPlayed,
-               let idx = gameState.season.fixtures.firstIndex(where: { $0.id == fixture.id }) {
+            if !fixture.isPlayed {
                 gameState.applyTeamTalkIfNeeded()
-                gameState.simulateMatch(fixture: &gameState.season.fixtures[idx])
+                // Live: play to half-time and stop there for changes.
+                if !gameState.beginLiveMatch(fixtureId: fixture.id) {
+                    gameState.simulateFixture(id: fixture.id)
+                }
             }
             didSimulate = true
         }
         minute = 0
-        CrowdAtmosphere.shared.startMatch()
-        Haptics.matchEvent(.kickOff)
-        if let home = gameState.club(withId: fixture.homeClubId), let away = gameState.club(withId: fixture.awayClubId) {
-            enqueue("Kick-off at \(home.stadium). \(home.name) against \(away.name).")
-        }
         startTicker()
     }
-
+    
     private func startTicker() {
-        guard minute < 90 else { return }
+        guard minute < finalMinute else { return }
         isPlaying = true
-        CrowdAtmosphere.shared.resume()
-        scheduleTimer()
-    }
-
-    private func scheduleTimer() {
         ticker?.invalidate()
-        guard isPlaying, minute < 90 else { return }
-        // Hold the clock while VoiceOver still has commentary to read.
-        if holdsForVoiceOver && (isSpeaking || !speechQueue.isEmpty) { ticker = nil; return }
         let interval = gameState.matchSettings.speed.tickInterval
         ticker = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { timer in
             Task { @MainActor in
                 advanceMinute()
-                if minute >= 90 {
+                if minute >= finalMinute {
                     timer.invalidate()
                     isPlaying = false
-                    Haptics.matchEvent(.fullTime)
-                } else if gameState.matchSettings.stopAtHalfTime && minute == 45 {
-                    timer.invalidate()
-                    isPlaying = false
-                    enqueue("Half-time. The match is paused so you can make changes.")
-                } else if holdsForVoiceOver && (isSpeaking || !speechQueue.isEmpty) {
-                    timer.invalidate()
-                    ticker = nil
+                    if secondHalfPending {
+                        // An owner only watches: no half-time changes to make.
+                        if gameState.matchSettings.stopAtHalfTime && gameState.gameMode == .manageClub {
+                            withAnimation { atHalfTime = true }
+                            AccessibilityNotification.Announcement("Half-time. \(scoreText). You can make substitutions and change tactics, then start the second half.").post()
+                        } else {
+                            startSecondHalf()
+                        }
+                    }
                 }
             }
         }
     }
-
-    private func pauseMatch() {
-        stopTicker()
-        CrowdAtmosphere.shared.pause()
-    }
-
+    
     private func stopTicker() {
         ticker?.invalidate()
         ticker = nil
         isPlaying = false
     }
-
+    
     private func advanceMinute() {
         let previous = minute
-        minute = min(90, minute + 1)
-        CrowdAtmosphere.shared.tickMinute()
-
-        let newEvents = (result?.events ?? []).filter { $0.minute > previous && $0.minute <= minute }
+        minute = min(finalMinute, minute + 1)
+        
+        // Announce major events as their minute arrives.
+        let newEvents = (result?.events ?? []).filter {
+            $0.minute > previous && $0.minute <= minute && $0.type.isMajorEvent
+        }
         for ev in newEvents {
-            CrowdAtmosphere.shared.react(to: ev)
-            switch ev.type {
-            case .goal, .penalty, .ownGoal:
-                let userId = gameState.userClub?.id
-                let scoringForUser = (ev.type == .ownGoal) ? ev.clubId != userId : ev.clubId == userId
-                Haptics.goal(forUser: scoringForUser)
+            AccessibilityNotification.Announcement(ev.detailText).post()
+            if ev.type == .goal || ev.type == .penalty || ev.type == .ownGoal {
                 SoundManager.shared.play(.goal, enabled: gameState.soundEnabled)
-            default:
-                Haptics.matchEvent(ev.type)
-            }
-            guard detail.includes(ev.type), ev.type != .kickOff else { continue }
-            enqueue("\(ev.minute) minutes. \(ev.detailText)")
-            if Preferences.announceScore, [MatchEventType.goal, .penalty, .ownGoal].contains(ev.type),
-               let fixture, let home = gameState.club(withId: fixture.homeClubId), let away = gameState.club(withId: fixture.awayClubId) {
-                enqueue("The score is \(home.name) \(currentHomeGoals), \(away.name) \(currentAwayGoals).")
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { goalFlash = ev }
+                let shown = ev.id
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+                    if goalFlash?.id == shown { withAnimation(.easeOut) { goalFlash = nil } }
+                }
             }
         }
-
-        if Preferences.minuteUpdates, minute % 15 == 0, minute < 90, minute != 45,
-           let fixture, let home = gameState.club(withId: fixture.homeClubId), let away = gameState.club(withId: fixture.awayClubId) {
-            enqueue("\(minute) minutes played. \(home.name) \(currentHomeGoals), \(away.name) \(currentAwayGoals).")
-        }
-        CrowdAtmosphere.shared.maybeChant(homeLeading: currentHomeGoals > currentAwayGoals)
     }
-
-    // MARK: - VoiceOver pacing
-
-    private func enqueue(_ line: String) {
-        guard UIAccessibility.isVoiceOverRunning else { return }
-        speechQueue.append(line)
-        if !isSpeaking { speakNext() }
-    }
-
-    /// Reads the next queued line. Called again when VoiceOver reports the
-    /// previous announcement finished, with a watchdog in case it never does.
-    private func speakNext() {
-        speechWatchdog?.cancel()
-        guard !speechQueue.isEmpty else {
-            isSpeaking = false
-            if isPlaying && ticker == nil && minute < 90 { scheduleTimer() }
-            return
-        }
-        isSpeaking = true
-        let line = speechQueue.removeFirst()
-        var announcement = AttributedString(line)
-        announcement.accessibilitySpeechAnnouncementPriority = .high
-        AccessibilityNotification.Announcement(announcement).post()
-        let words = Double(line.split(separator: " ").count)
-        let watchdog = DispatchWorkItem { speakNext() }
-        speechWatchdog = watchdog
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(3, words * 0.45 + 1.5), execute: watchdog)
-    }
-
+    
     private func finish(fixture: Fixture) {
         stopTicker()
-        speechWatchdog?.cancel()
-        speechQueue.removeAll()
-        if let idx = gameState.season.fixtures.firstIndex(where: { $0.id == fixture.id }) {
-            if !gameState.season.fixtures[idx].isPlayed {
-                gameState.simulateMatch(fixture: &gameState.season.fixtures[idx])
-            }
-            minute = 90
+        if gameState.season.fixtures.contains(where: { $0.id == fixture.id }) {
+            gameState.simulateFixture(id: fixture.id)
+            minute = finalMinute
             gameState.finishMatchweekAfterUserMatch()
             gameState.currentScreen = .postMatch
         }

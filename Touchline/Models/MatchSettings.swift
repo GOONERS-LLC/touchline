@@ -12,7 +12,6 @@ public struct MatchSettings: Codable, Hashable {
 
     /// Playback speed of the live match replay.
     public enum Speed: String, Codable, CaseIterable, Identifiable, Hashable {
-        case verySlow = "Very Slow"
         case slow = "Slow"
         case normal = "Normal"
         case fast = "Fast"
@@ -23,8 +22,7 @@ public struct MatchSettings: Codable, Hashable {
         /// Seconds between displayed minutes during replay.
         public var tickInterval: Double {
             switch self {
-            case .verySlow: return 1.6
-            case .slow: return 0.8
+            case .slow: return 0.7
             case .normal: return 0.35
             case .fast: return 0.18
             case .veryFast: return 0.08
@@ -81,16 +79,46 @@ public struct MatchSettings: Codable, Hashable {
     public var autoSubTiming: AutoSubTiming
     /// How aggressively the assistant rotates players.
     public var autoSubAggression: AutoSubAggression
+    /// Before each match the assistant rests tired starters for fresh squad
+    /// players of similar quality (manager mode).
+    public var assistantRotatesTiredPlayers: Bool
+    /// Continue shows the days ticking by on an animated calendar rather than
+    /// jumping straight to the next match day.
+    public var animateCalendar: Bool
+    /// The animated calendar stops to show important new mail.
+    public var pauseCalendarForMail: Bool
 
     public init(
         speed: Speed = .normal,
         stopAtHalfTime: Bool = true,
         autoSubTiming: AutoSubTiming = .secondHalf,
-        autoSubAggression: AutoSubAggression = .balanced
+        autoSubAggression: AutoSubAggression = .balanced,
+        assistantRotatesTiredPlayers: Bool = false,
+        animateCalendar: Bool = true,
+        pauseCalendarForMail: Bool = true
     ) {
         self.speed = speed
         self.stopAtHalfTime = stopAtHalfTime
         self.autoSubTiming = autoSubTiming
         self.autoSubAggression = autoSubAggression
+        self.assistantRotatesTiredPlayers = assistantRotatesTiredPlayers
+        self.animateCalendar = animateCalendar
+        self.pauseCalendarForMail = pauseCalendarForMail
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case speed, stopAtHalfTime, autoSubTiming, autoSubAggression, assistantRotatesTiredPlayers, animateCalendar, pauseCalendarForMail
+    }
+
+    /// Tolerant decoding so settings saved by older versions still load.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        speed = try c.decodeIfPresent(Speed.self, forKey: .speed) ?? .normal
+        stopAtHalfTime = try c.decodeIfPresent(Bool.self, forKey: .stopAtHalfTime) ?? true
+        autoSubTiming = try c.decodeIfPresent(AutoSubTiming.self, forKey: .autoSubTiming) ?? .secondHalf
+        autoSubAggression = try c.decodeIfPresent(AutoSubAggression.self, forKey: .autoSubAggression) ?? .balanced
+        assistantRotatesTiredPlayers = try c.decodeIfPresent(Bool.self, forKey: .assistantRotatesTiredPlayers) ?? false
+        animateCalendar = try c.decodeIfPresent(Bool.self, forKey: .animateCalendar) ?? true
+        pauseCalendarForMail = try c.decodeIfPresent(Bool.self, forKey: .pauseCalendarForMail) ?? true
     }
 }

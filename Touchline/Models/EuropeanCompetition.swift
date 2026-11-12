@@ -300,17 +300,16 @@ public struct EuropeanCompetitionState: Codable, Identifiable, Hashable {
         }
 
         var firstGoals = 0, secondGoals = 0
-        var firstAway = 0, secondAway = 0
         for leg in legs {
             if leg.homeClubId == first {
-                firstGoals += leg.homeGoals; secondGoals += leg.awayGoals; secondAway += leg.awayGoals
+                firstGoals += leg.homeGoals; secondGoals += leg.awayGoals
             } else {
-                secondGoals += leg.homeGoals; firstGoals += leg.awayGoals; firstAway += leg.awayGoals
+                secondGoals += leg.homeGoals; firstGoals += leg.awayGoals
             }
         }
         if firstGoals != secondGoals { return firstGoals > secondGoals ? first : second }
-        if firstAway != secondAway { return firstAway > secondAway ? first : second }
-        // Level on aggregate (and away goals): decide the tie with a shootout.
+        // Level on aggregate: extra time and penalties. (UEFA abolished the
+        // away-goals rule in 2021.)
         return Double.random(in: 0...1) < 0.5 ? first : second
     }
 
@@ -434,5 +433,21 @@ public struct EuropeanCompetitionState: Codable, Identifiable, Hashable {
             winners.append(tieWinner(first: a, second: b, stage: stage))
         }
         return winners
+    }
+}
+
+/// UEFA-style money, in pounds: participation, per-win payments (a draw pays
+/// a third) and a winner's bonus.
+public struct EuropeanPrizes {
+    public let participation: Int
+    public let win: Int
+    public let championBonus: Int
+
+    public init(_ competition: EuropeanCompetition) {
+        switch competition {
+        case .championsLeague: participation = 16_000_000; win = 1_800_000; championBonus = 15_000_000
+        case .europaLeague: participation = 4_000_000; win = 400_000; championBonus = 6_000_000
+        case .conferenceLeague: participation = 2_600_000; win = 250_000; championBonus = 4_000_000
+        }
     }
 }

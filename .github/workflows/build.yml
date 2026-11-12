@@ -20,7 +20,7 @@ permissions:
 jobs:
   build:
     name: Build & Package Touchline
-    runs-on: macos-15
+    runs-on: macos-26
 
     steps:
       - name: Checkout Source Code
@@ -73,6 +73,7 @@ jobs:
           xcodebuild -version
           xcode-select -p
           ls -d /Applications/Xcode*.app 2>/dev/null || true
+          xcodebuild -showsdks | grep -i iphoneos || true
 
       - name: Install XcodeGen
         run: |
@@ -166,7 +167,9 @@ jobs:
     name: Publish GitHub Release
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    # Pushes to main publish automatically; a manual run publishes from any
+    # branch when an explicit version is given.
+    if: github.ref == 'refs/heads/main' || github.event.inputs.version != ''
 
     steps:
       - name: Checkout Source Code
@@ -211,6 +214,17 @@ jobs:
           TAG="v$VERSION"
           TITLE="Touchline $TAG"
           NOTES_FILE="$RUNNER_TEMP/notes.md"
+          if [ -f "release-notes/$TAG.md" ]; then
+            cp "release-notes/$TAG.md" "$NOTES_FILE"
+            {
+              echo ""
+              echo "### Install"
+              echo "1. Download \`Touchline.ipa\` below."
+              echo "2. Sideload with [Feather](https://github.com/khcrysalis/Feather) (unsigned IPA)."
+              echo ""
+              echo "Built from \`${GITHUB_SHA::7}\` on $(date -u +'%Y-%m-%d')."
+            } >> "$NOTES_FILE"
+          else
           {
             echo "Automated build from \`${GITHUB_SHA::7}\` on $(date -u +'%Y-%m-%d')."
             echo ""
@@ -221,12 +235,15 @@ jobs:
             echo "### Commit"
             echo "$(git log -1 --pretty=%s)"
           } > "$NOTES_FILE"
+          fi
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; uploading release assets."
             gh release upload "$TAG" "build-output/Touchline.ipa" "build-output/release-manifest.json" --clobber
           else
             gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --latest \
               --title "$TITLE" \
               --notes-file "$NOTES_FILE" \
               "build-output/Touchline.ipa" \

@@ -26,7 +26,7 @@ extension Color {
         case 8: // ARGB (32-bit)
             (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
         default:
-            (a, r, g, b) = (255, 47, 91, 234) // Fallback to brand cobalt
+            (a, r, g, b) = (255, 45, 139, 78) // Fallback to pitch green
         }
         
         self.init(
@@ -38,51 +38,37 @@ extension Color {
         )
     }
     
-    // MARK: - Theme Palette (Touchline "Floodlight")
-    //
-    // A night-match palette: deep navy stands, a cobalt brand colour that
-    // keeps white text above 4.5:1 contrast, and a warm amber highlight.
-
-    /// Brand colours
-    public static let brand = Color(hex: "2F5BEA")          // Cobalt
-    public static let brandDeep = Color(hex: "1D3BA8")
-    public static let highlight = Color(hex: "FFB020")      // Floodlight amber
-
-    /// Surfaces
-    public static let ink = Color(hex: "0A0F1E")            // App background
-    public static let surface = Color(hex: "121A2F")        // Cards
-    public static let surfaceRaised = Color(hex: "1A2440")  // Raised cards, chips
-    public static let hairline = Color(hex: "2B3760")       // Borders
-
-    /// Pitch (used by the formation board and match replay)
-    public static let pitchGreen = Color(hex: "1F7A63")
-    public static let pitchDarkGreen = Color(hex: "0F3D33")
-    public static let pitchLightGreen = Color(hex: "2E9C80")
-    public static let pitchGrassLight = Color(hex: "1B6B57")
-    public static let pitchGrassDark = Color(hex: "155947")
-
-    /// Legacy aliases kept so older views pick up the new palette
-    public static let darkBackground = ink
-    public static let darkSurface = surface
-    public static let cardBackground = surface
-    public static let cardSecondary = surfaceRaised
-    public static let cardBorder = hairline
-
+    // MARK: - Theme Palette
+    
+    /// Football pitch primary brand green (#2D8B4E)
+    public static let pitchGreen = Color(hex: "2D8B4E")
+    public static let pitchDarkGreen = Color(hex: "174C2B")
+    public static let pitchLightGreen = Color(hex: "3FA365")
+    public static let pitchGrassLight = Color(hex: "237542")
+    public static let pitchGrassDark = Color(hex: "1D6437")
+    
+    /// Dark theme backgrounds
+    public static let darkBackground = Color(hex: "0D1117")
+    public static let darkSurface = Color(hex: "161B22")
+    public static let cardBackground = Color(hex: "161B22")
+    public static let cardSecondary = Color(hex: "21262D")
+    public static let cardBorder = Color(hex: "30363D")
+    
     /// Accents & Status
-    public static let goldAccent = highlight
-    public static let silverAccent = Color(hex: "C7CEDD")
-    public static let bronzeAccent = Color(hex: "D9824B")
-
+    public static let goldAccent = Color(hex: "F1C40F")
+    public static let silverAccent = Color(hex: "BDC3C7")
+    public static let bronzeAccent = Color(hex: "E67E22")
+    
     /// Positional Colors
-    public static let gkColor = Color(hex: "FFB020")
-    public static let defColor = Color(hex: "4C8DFF")
-    public static let midColor = Color(hex: "2BD07F")
-    public static let fwdColor = Color(hex: "FF5A5F")
-
+    public static let gkColor = Color(hex: "F39C12")      // Warm Amber / Yellow
+    public static let defColor = Color(hex: "2980B9")     // Solid Blue
+    public static let midColor = Color(hex: "27AE60")     // Pitch Green
+    public static let fwdColor = Color(hex: "E74C3C")     // Striker Red
+    
     /// Result Colors
-    public static let winGreen = Color(hex: "2BD07F")
-    public static let drawGray = Color(hex: "8A94AD")
-    public static let lossRed = Color(hex: "FF5A5F")
+    public static let winGreen = Color(hex: "2ECC71")
+    public static let drawGray = Color(hex: "7F8C8D")
+    public static let lossRed = Color(hex: "E74C3C")
 }
 
 // MARK: - Position Category Color Extension
@@ -411,85 +397,18 @@ public struct FootballCardStyle: ViewModifier {
     public func body(content: Content) -> some View {
         content
             .padding()
-            .background(Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background(Color.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.hairline, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.cardBorder, lineWidth: 1)
             )
-    }
-}
-
-/// Large primary call-to-action used for Continue, Play Match and similar.
-public struct PrimaryActionStyle: ButtonStyle {
-    public var tint: Color = .brand
-    public init(tint: Color = .brand) { self.tint = tint }
-    public func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.vertical, 16)
-            .padding(.horizontal, 18)
-            .frame(maxWidth: .infinity)
-            .foregroundStyle(.white)
-            .background(
-                LinearGradient(colors: [tint, tint.opacity(0.78)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-            )
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-            .onChange(of: configuration.isPressed) { _, pressed in if pressed { Haptics.tap() } }
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-    }
-}
-
-/// Quiet secondary action that sits under a primary button.
-public struct SecondaryActionStyle: ButtonStyle {
-    public init() {}
-    public func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.vertical, 14)
-            .padding(.horizontal, 18)
-            .frame(maxWidth: .infinity)
-            .foregroundStyle(Color.primary)
-            .background(Color.surfaceRaised)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.hairline, lineWidth: 1)
-            )
-            .opacity(configuration.isPressed ? 0.8 : 1)
-            .onChange(of: configuration.isPressed) { _, pressed in if pressed { Haptics.selection() } }
-    }
-}
-
-/// Small uppercase section label used above cards.
-public struct SectionEyebrow: View {
-    let text: String
-    public init(_ text: String) { self.text = text }
-    public var body: some View {
-        Text(text)
-            .font(.caption)
-            .fontWeight(.heavy)
-            .tracking(1.2)
-            .textCase(.uppercase)
-            .foregroundStyle(Color.highlight)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .shadow(color: Color.black.opacity(0.35), radius: 5, x: 0, y: 3)
     }
 }
 
 extension View {
     public func footballCardStyle() -> some View {
         modifier(FootballCardStyle())
-    }
-
-    /// Applies the Touchline look to an entire screen hierarchy.
-    public func touchlineChrome() -> some View {
-        self
-            .tint(Color.brand)
-            .preferredColorScheme(.dark)
-            .scrollContentBackground(.hidden)
-            .background(Color.ink.ignoresSafeArea())
     }
 }

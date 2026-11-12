@@ -15,75 +15,115 @@ import SwiftUI
 /// Coordinates run from the user's own goal (y = 1.0, bottom) to the opponent goal
 /// (y = 0.0, top), i.e. an attacking-first orientation.
 enum FormationLayout {
-    /// Lateral preference: 0 is the left touchline, 1 the right, 0.5 central.
-    private static func lateral(_ p: Position) -> CGFloat {
-        switch p {
-        case .LB, .LWB, .LM, .LW: return 0
-        case .RB, .RWB, .RM, .RW: return 1
-        default: return 0.5
-        }
-    }
 
-    /// Small vertical nudges inside a line so holding players sit a touch
-    /// deeper and playmakers a touch higher, without breaking the line.
-    private static func nudge(_ p: Position) -> CGFloat {
-        switch p {
-        case .CDM: return 0.035
-        case .CAM, .CF: return -0.03
-        case .LW, .RW: return -0.015
-        case .LWB, .RWB: return -0.02
-        default: return 0
-        }
-    }
+    /// A horizontal role column used to separate players sharing a line.
+    private enum Lane {
+        case gk, leftCenter, center, rightCenter, left, right, leftInner, rightInner
 
-    /// Defensive weight used to place the deepest central player in the middle of a line.
-    private static func depthRank(_ p: Position) -> Int {
-        switch p {
-        case .CB: return 0
-        case .CDM: return 1
-        case .CM: return 2
-        case .CAM: return 3
-        case .CF: return 4
-        case .ST: return 5
-        default: return 2
-        }
-    }
-
-    /// Returns 11 slot coordinates (0...1, own goal at the bottom), ordered to
-    /// match `formation.defaultPositions`. Players are grouped into the
-    /// formation's real lines (4-3-3 draws as four, three, three), wide players
-    /// sit on the flanks and central players spread evenly between them.
-    static func resolvedSlots(for formation: FormationPreset) -> [CGPoint] {
-        let positions = formation.defaultPositions
-        var points = Array(repeating: CGPoint(x: 0.5, y: 0.9), count: positions.count)
-        guard !positions.isEmpty else { return points }
-        points[0] = CGPoint(x: 0.5, y: 0.915)
-
-        let lines = formation.lines
-        let top: CGFloat = 0.13, bottom: CGFloat = 0.74
-        var cursor = 1
-        for (lineIndex, count) in lines.enumerated() {
-            let indices = Array(cursor..<min(positions.count, cursor + count))
-            cursor += count
-            let y = lines.count == 1 ? (top + bottom) / 2
-                : bottom - (bottom - top) * CGFloat(lineIndex) / CGFloat(lines.count - 1)
-
-            // Order: left flank, centrals (deepest in the middle), right flank.
-            let left = indices.filter { lateral(positions[$0]) == 0 }
-            let right = indices.filter { lateral(positions[$0]) == 1 }
-            var central = indices.filter { lateral(positions[$0]) == 0.5 }
-                .sorted { depthRank(positions[$0]) > depthRank(positions[$1]) }
-            if central.count >= 3 {
-                // Put the most defensive central player in the middle.
-                let deepest = central.removeLast()
-                central.insert(deepest, at: central.count / 2)
+        var x: CGFloat {
+            switch self {
+            case .gk: return 0.50
+            case .leftCenter: return 0.36
+            case .center: return 0.50
+            case .rightCenter: return 0.64
+            case .leftInner: return 0.28
+            case .rightInner: return 0.72
+            case .left: return 0.14
+            case .right: return 0.86
             }
-            let ordered = left + central + right
-            let n = ordered.count
-            let margin: CGFloat = n >= 5 ? 0.09 : n == 4 ? 0.13 : n == 3 ? 0.22 : 0.33
-            for (i, idx) in ordered.enumerated() {
-                let x = n == 1 ? 0.5 : margin + (1 - 2 * margin) * CGFloat(i) / CGFloat(n - 1)
-                points[idx] = CGPoint(x: x, y: y + nudge(positions[idx]))
+        }
+    }
+
+    private struct Slot {
+        let lane: Lane
+        let depth: CGFloat   // 0 (own goal line) ... 1 (near halfway/attack)
+    }
+
+    /// Returns up to 11 slot coordinates, ordered to match `formation.defaultPositions`.
+    static func slots(for formation: FormationPreset) -> [CGPoint] {
+        let positions = formation.defaultPositions
+        let raw: [Slot] = positions.map { slot(for: $0) }
+        // Rows run from the goalkeeper (bottom) to the strikers (top), with
+        // enough height between them that a token, its name and its rating
+        // never overlap the row in front.
+        return raw.map { CGPoint(x: $0.lane.x, y: 0.88 - $0.depth) }
+    }
+
+    /// Maps a position in a formation to a lane + depth. Depth is derived from the
+    /// position's category so lines stay visually separated.
+    private static func slot(for position: Position) -> Slot {
+        switch position {
+        case .GK:
+            return Slot(lane: .gk, depth: 0.0)
+
+        case .CB:
+            return Slot(lane: .center, depth: 0.17)
+        case .LB:
+            return Slot(lane: .left, depth: 0.19)
+        case .RB:
+            return Slot(lane: .right, depth: 0.19)
+        case .LWB:
+            return Slot(lane: .left, depth: 0.30)
+        case .RWB:
+            return Slot(lane: .right, depth: 0.30)
+
+        case .CDM:
+            return Slot(lane: .center, depth: 0.32)
+        case .CM:
+            return Slot(lane: .center, depth: 0.44)
+        case .LM:
+            return Slot(lane: .left, depth: 0.44)
+        case .RM:
+            return Slot(lane: .right, depth: 0.44)
+        case .CAM:
+            return Slot(lane: .center, depth: 0.56)
+
+        case .LW:
+            return Slot(lane: .left, depth: 0.64)
+        case .RW:
+            return Slot(lane: .right, depth: 0.64)
+        case .CF:
+            return Slot(lane: .center, depth: 0.64)
+        case .ST:
+            return Slot(lane: .center, depth: 0.76)
+        }
+    }
+
+    /// The formation as lines of slot indices, attack first and goalkeeper
+    /// last, each line ordered left to right. Slots at nearly the same
+    /// depth (a full-back and a centre-back) share a line.
+    static func rows(for formation: FormationPreset) -> [[Int]] {
+        let points = resolvedSlots(for: formation)
+        let order = points.indices.sorted { points[$0].y < points[$1].y }
+        var rows: [[Int]] = []
+        var lastY: CGFloat = -1
+        for i in order {
+            if rows.isEmpty || points[i].y - lastY > 0.06 {
+                rows.append([i])
+                lastY = points[i].y
+            } else {
+                rows[rows.count - 1].append(i)
+            }
+        }
+        return rows.map { $0.sorted { points[$0].x < points[$1].x } }
+    }
+
+    /// Spreads players who share a lane and a row evenly and symmetrically
+    /// around that lane (two centre-backs sit either side of centre rather
+    /// than both drifting to the right).
+    static func resolvedSlots(for formation: FormationPreset) -> [CGPoint] {
+        var points = slots(for: formation)
+        var groups: [String: [Int]] = [:]
+        for i in points.indices {
+            let key = "\(Int((points[i].y * 100).rounded()))|\(Int((points[i].x * 100).rounded()))"
+            groups[key, default: []].append(i)
+        }
+        for members in groups.values where members.count > 1 {
+            let n = CGFloat(members.count)
+            let spacing: CGFloat = n >= 3 ? 0.18 : 0.22
+            for (k, i) in members.enumerated() {
+                let offset = (CGFloat(k) - (n - 1) / 2) * spacing
+                points[i].x = min(0.9, max(0.1, points[i].x + offset))
             }
         }
         return points
@@ -96,68 +136,64 @@ public struct FormationPitchView: View {
     public let formation: FormationPreset
     public let players: [Player]
     public let selectedPlayerId: UUID?
-    /// Match ratings to show on each token (post-match Ratings tab).
-    public var ratings: [UUID: Double]? = nil
-    /// The spoken hint for tapping a token.
-    public var tapHint: String = "Double tap to select this player for substitution"
     public let onSelect: (Player) -> Void
 
     public init(
         formation: FormationPreset,
         players: [Player],
         selectedPlayerId: UUID?,
-        ratings: [UUID: Double]? = nil,
-        tapHint: String = "Double tap to select this player for substitution",
         onSelect: @escaping (Player) -> Void
     ) {
         self.formation = formation
         self.players = players
         self.selectedPlayerId = selectedPlayerId
-        self.ratings = ratings
-        self.tapHint = tapHint
         self.onSelect = onSelect
     }
 
     public var body: some View {
-        GeometryReader { geo in
-            let size = geo.size
-            let slots = FormationLayout.resolvedSlots(for: formation)
-
-            ZStack {
-                Canvas { context, canvasSize in
-                    drawPitch(in: &context, size: canvasSize)
-                }
-                .frame(width: size.width, height: size.height)
-
-                ForEach(Array(players.enumerated()), id: \.element.id) { index, player in
-                    if index < slots.count {
-                        let point = slots[index]
-                        let slotPosition = index < formation.defaultPositions.count ? formation.defaultPositions[index] : player.primaryPosition
-                        let rating = ratings?[player.id]
-                        PlayerTokenView(
-                            player: player,
-                            isSelected: player.id == selectedPlayerId,
-                            slotPosition: slotPosition,
-                            rating: rating
-                        )
-                        .position(x: point.x * size.width, y: point.y * size.height)
-                        .onTapGesture { Haptics.selection(); onSelect(player) }
-                        .accessibilityLabel(rating.map { "\(player.fullName), \(slotPosition.displayName), match rating \(String(format: "%.1f", $0))" }
-                                            ?? "\(player.fullName), playing \(slotPosition.displayName), overall \(player.overall)")
-                        .accessibilityAddTraits(player.id == selectedPlayerId ? [.isSelected, .isButton] : .isButton)
-                        .accessibilityHint(tapHint)
+        let rows = FormationLayout.rows(for: formation)
+        let positions = formation.defaultPositions
+        // Lines of cards, strikers at the top and the goalkeeper at the
+        // bottom. Plain stacks (no coordinates), so VoiceOver moves through
+        // the side in the same order it appears: top to bottom, left to right.
+        return VStack(spacing: 12) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 6) {
+                    ForEach(row, id: \.self) { index in
+                        if index < players.count {
+                            let player = players[index]
+                            PlayerPitchCard(
+                                player: player,
+                                slot: index < positions.count ? positions[index] : player.primaryPosition,
+                                isSelected: player.id == selectedPlayerId,
+                                width: 84
+                            )
+                            .onTapGesture { onSelect(player) }
+                            .accessibilityAddTraits(player.id == selectedPlayerId ? [.isSelected, .isButton] : .isButton)
+                            .accessibilityHint("Double tap to select, then double tap another player to swap")
+                            .accessibilityAction { onSelect(player) }
+                        }
                     }
                 }
+                .frame(maxWidth: .infinity)
             }
         }
-        .aspectRatio(68.0 / 105.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.hairline, lineWidth: 1)
+        .padding(.vertical, 18)
+        .padding(.horizontal, 8)
+        .background(
+            Canvas { context, canvasSize in
+                drawPitch(in: &context, size: canvasSize)
+            }
+            .accessibilityHidden(true)
         )
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.25), lineWidth: 1.5)
+        )
+        .transaction { $0.animation = nil }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(formation.displayName) formation")
+        .accessibilityLabel("Starting eleven, \(formation.rawValue)")
     }
 
     private func drawPitch(in context: inout GraphicsContext, size: CGSize) {
@@ -167,7 +203,7 @@ public struct FormationPitchView: View {
         let stripeCount = 8
         for i in 0..<stripeCount {
             let rect = CGRect(x: 0, y: h * CGFloat(i) / CGFloat(stripeCount), width: w, height: h / CGFloat(stripeCount))
-            let color = i % 2 == 0 ? Color.pitchGrassLight : Color.pitchGrassDark
+            let color = i % 2 == 0 ? Color(hex: "3E8F63") : Color(hex: "367F58")
             context.fill(Path(rect), with: .color(color))
         }
 
@@ -202,28 +238,158 @@ public struct FormationPitchView: View {
         let bottomGoal = CGRect(x: field.midX - goalW / 2, y: field.maxY - goalH, width: goalW, height: goalH)
         context.stroke(Path(topGoal), with: .color(lineColor), lineWidth: lineWidth)
         context.stroke(Path(bottomGoal), with: .color(lineColor), lineWidth: lineWidth)
+    }
+}
 
-        // Centre spot, penalty spots and the arcs on the edge of each box.
-        let spot = max(2.5, w * 0.008)
-        for c in [CGPoint(x: field.midX, y: field.midY),
-                  CGPoint(x: field.midX, y: field.minY + boxH * 0.72),
-                  CGPoint(x: field.midX, y: field.maxY - boxH * 0.72)] {
-            context.fill(Path(ellipseIn: CGRect(x: c.x - spot, y: c.y - spot, width: spot * 2, height: spot * 2)), with: .color(lineColor))
+// MARK: - Player card
+
+/// A lineup card: the position being played, rating, a form arrow, the
+/// name and a fitness bar. Pure text and colour, so VoiceOver reads it
+/// as one clear sentence.
+public struct PlayerPitchCard: View {
+    public let player: Player
+    public var slot: Position?
+    public var isSelected: Bool = false
+    public var width: CGFloat = 72
+    /// Settings → show the match rating (fitness, form, morale) instead of the base rating.
+    @AppStorage("gfShowMatchRating") private var showMatchRating = false
+
+    public init(player: Player, slot: Position? = nil, isSelected: Bool = false, width: CGFloat = 72) {
+        self.player = player
+        self.slot = slot
+        self.isSelected = isSelected
+        self.width = width
+    }
+
+    private var position: Position { slot ?? player.primaryPosition }
+    private var outOfPosition: Bool { !player.positions.contains(position) }
+
+    /// Recent form from the last few match ratings: rising, steady or falling.
+    private var trend: (icon: String, color: Color, words: String) {
+        let recent = player.form.suffix(3)
+        guard !recent.isEmpty else {
+            switch player.morale {
+            case .delighted, .happy: return ("arrow.up.right", Color(hex: "7FD99A"), "morale high")
+            case .unhappy, .furious: return ("arrow.down.right", Color(hex: "F2727F"), "morale low")
+            default: return ("arrow.right", Color(hex: "F7A731"), "morale steady")
+            }
         }
-        let arcR = field.width * 0.12
-        var topArc = Path()
-        topArc.addArc(center: CGPoint(x: field.midX, y: field.minY + boxH * 0.72), radius: arcR,
-                      startAngle: .degrees(35), endAngle: .degrees(145), clockwise: false)
-        var bottomArc = Path()
-        bottomArc.addArc(center: CGPoint(x: field.midX, y: field.maxY - boxH * 0.72), radius: arcR,
-                         startAngle: .degrees(215), endAngle: .degrees(325), clockwise: false)
-        context.stroke(topArc, with: .color(lineColor), lineWidth: lineWidth)
-        context.stroke(bottomArc, with: .color(lineColor), lineWidth: lineWidth)
+        let avg = recent.reduce(0, +) / Double(recent.count)
+        if avg >= 7.2 { return ("arrow.up", Color(hex: "7FD99A"), "in great form") }
+        if avg >= 6.7 { return ("arrow.up.right", Color(hex: "7FD99A"), "in good form") }
+        if avg >= 6.2 { return ("arrow.right", Color(hex: "F7A731"), "in steady form") }
+        if avg >= 5.8 { return ("arrow.down.right", Color(hex: "F2727F"), "in poor form") }
+        return ("arrow.down", Color(hex: "F2727F"), "badly out of form")
+    }
 
-        // Soft floodlight vignette.
-        context.fill(Path(CGRect(origin: .zero, size: size)),
-                     with: .radialGradient(Gradient(colors: [.clear, Color.black.opacity(0.35)]),
-                                           center: CGPoint(x: w / 2, y: h / 2), startRadius: w * 0.3, endRadius: h * 0.75))
+    private var fitnessColor: Color {
+        player.matchFitness >= 85 ? Color(hex: "7FD99A") : player.matchFitness >= 70 ? .orange : Color(hex: "F2727F")
+    }
+
+    public var body: some View {
+        let t = trend
+        let stats = player.seasonStats
+        VStack(spacing: 4) {
+            HStack(spacing: 2) {
+                Text(position.abbreviation)
+                    .font(.system(size: 12, weight: .black).width(.condensed))
+                    .foregroundStyle(Color(hex: "13294B"))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(chipColor))
+                Spacer(minLength: 0)
+                Text("\(shownRating)")
+                    .font(.system(size: 13, weight: .black).width(.condensed).monospacedDigit())
+                    .foregroundStyle(ratingColor)
+            }
+            HStack(spacing: 4) {
+                Image(systemName: t.icon)
+                    .font(.system(size: 11, weight: .black))
+                    .foregroundStyle(t.color)
+                if player.isInjured || player.isSuspended {
+                    Image(systemName: player.isInjured ? "cross.case.fill" : "rectangle.portrait.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.red)
+                }
+            }
+            HStack(spacing: 5) {
+                if stats.goals > 0 {
+                    Label("\(stats.goals)", systemImage: "soccerball")
+                }
+                if stats.assists > 0 {
+                    Label("\(stats.assists)", systemImage: "shoe.fill")
+                }
+            }
+            .labelStyle(TightLabelStyle())
+            .font(.system(size: 10, weight: .heavy).width(.condensed))
+            .foregroundStyle(.white)
+            .frame(height: 12)
+            Text(player.lastName.uppercased())
+                .font(.system(size: 12, weight: .black).width(.condensed))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.18))
+                    Capsule().fill(fitnessColor)
+                        .frame(width: geo.size.width * max(0, min(1, player.matchFitness / 100)))
+                }
+            }
+            .frame(height: 4)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 7)
+        .frame(minWidth: 58, maxWidth: width)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(LinearGradient(colors: [Color(hex: "1B3A5C"), Color(hex: "14304E")], startPoint: .top, endPoint: .bottom))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(isSelected ? Color.white : Color.white.opacity(0.18), lineWidth: isSelected ? 3 : 1)
+        )
+        .shadow(color: .black.opacity(0.3), radius: 3, y: 2)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spoken)
+    }
+
+    /// Chip colour by role: keepers green, defenders yellow, midfielders
+    /// orange, forwards red. Orange-red warns of a player out of position.
+    private var chipColor: Color {
+        if outOfPosition { return Color(hex: "FF8A3D") }
+        switch position.category {
+        case .goalkeeper: return Color(hex: "86D69A")
+        case .defender: return Color(hex: "F2D15C")
+        case .midfielder: return Color(hex: "F4B45F")
+        case .forward: return Color(hex: "F27C7C")
+        }
+    }
+
+    private var shownRating: Int { showMatchRating ? player.matchRating : player.overall }
+
+    private var ratingColor: Color {
+        guard showMatchRating else { return .white }
+        if player.matchRating > player.overall { return Color(hex: "7FD99A") }
+        if player.matchRating < player.overall { return Color(hex: "F2727F") }
+        return .white
+    }
+
+    private var ratingWords: String {
+        showMatchRating ? "match rating \(player.matchRating), base \(player.overall)" : "rated \(player.overall)"
+    }
+
+    /// "Left back: Andy Robertson, rated 84, in good form, fitness 92 percent."
+    var spoken: String {
+        var parts = ["\(position.displayName): \(player.fullName)", ratingWords, trend.words,
+                     "fitness \(Int(player.matchFitness)) percent"]
+        if outOfPosition { parts.append("playing out of position, usually \(player.primaryPosition.displayName)") }
+        if player.seasonStats.goals > 0 { parts.append("\(player.seasonStats.goals) goals") }
+        if player.seasonStats.assists > 0 { parts.append("\(player.seasonStats.assists) assists") }
+        if player.isInjured { parts.append("injured") }
+        if player.isSuspended { parts.append("suspended") }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -232,67 +398,56 @@ public struct FormationPitchView: View {
 public struct PlayerTokenView: View {
     public let player: Player
     public let isSelected: Bool
-    public var slotPosition: Position? = nil
-    public var rating: Double? = nil
 
-    public init(player: Player, isSelected: Bool, slotPosition: Position? = nil, rating: Double? = nil) {
+    public init(player: Player, isSelected: Bool) {
         self.player = player
         self.isSelected = isSelected
-        self.slotPosition = slotPosition
-        self.rating = rating
-    }
-
-    private var role: Position { slotPosition ?? player.primaryPosition }
-
-    private var ratingColor: Color {
-        guard let rating else { return Color.surfaceRaised }
-        if rating >= 8.0 { return Color(hex: "1E9E62") }
-        if rating >= 7.0 { return Color(hex: "2F5BEA") }
-        if rating >= 6.0 { return Color(hex: "B7791F") }
-        return Color(hex: "C53030")
     }
 
     public var body: some View {
-        VStack(spacing: 3) {
-            ZStack(alignment: .topTrailing) {
-                ZStack {
+        VStack(spacing: 2) {
+            ZStack {
+                Circle()
+                    .fill(Color.black.opacity(0.35))
+                    .frame(width: 38, height: 38)
+                FaceView(player: player, size: 34)
+                    .clipShape(Circle())
+                    .frame(width: 34, height: 34)
+                Circle()
+                    .stroke(player.primaryPosition.category.accentColor, lineWidth: 2.5)
+                    .frame(width: 38, height: 38)
+                if isSelected {
                     Circle()
-                        .fill(LinearGradient(colors: [role.category.accentColor, role.category.accentColor.opacity(0.7)],
-                                             startPoint: .top, endPoint: .bottom))
-                        .frame(width: 36, height: 36)
-                        .shadow(color: .black.opacity(0.45), radius: 3, y: 2)
-                    Circle()
-                        .stroke(isSelected ? Color.white : Color.white.opacity(0.35), lineWidth: isSelected ? 3 : 1)
-                        .frame(width: 36, height: 36)
-                    Text(role.abbreviation)
-                        .font(.system(size: 11, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .minimumScaleFactor(0.6)
+                        .stroke(Color.white, lineWidth: 3)
+                        .frame(width: 46, height: 46)
+                        .shadow(color: .white.opacity(0.6), radius: 4)
                 }
-                if let rating {
-                    Text(String(format: "%.1f", rating))
-                        .font(.system(size: 9, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(ratingColor)
-                        .clipShape(Capsule())
-                        .offset(x: 12, y: -6)
+                if player.isInjured || player.isSuspended {
+                    Image(systemName: player.isInjured ? "cross.circle.fill" : "exclamationmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white, .red)
+                        .offset(x: 16, y: -15)
                 }
             }
-            Text(player.lastName.isEmpty ? player.displayName : player.lastName)
-                .font(.system(size: 10, weight: .semibold))
+            Text(player.displayName)
+                .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.ink.opacity(0.75))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Color.black.opacity(0.6))
                 .clipShape(Capsule())
                 .lineLimit(1)
+                .truncationMode(.tail)
                 .frame(maxWidth: 78)
-            if rating == nil {
+            HStack(spacing: 3) {
+                Text(player.primaryPosition.abbreviation)
+                    .font(.system(size: 8, weight: .heavy))
+                    .foregroundStyle(.white.opacity(0.85))
                 Text("\(player.overall)")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Color.highlight)
+                    .font(.system(size: 9, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 3)
+                    .background(RatingBadge.color(for: player.overall), in: RoundedRectangle(cornerRadius: 3))
             }
         }
         .contentShape(Rectangle())
@@ -323,3 +478,49 @@ public struct PlayerTokenView: View {
         .padding()
 }
 #endif
+
+
+/// One player as a full-width button: used for VoiceOver lineups.
+struct AccessibleLineupRow: View {
+    let player: Player
+    var slot: Position?
+    var isSelected: Bool = false
+    var hint: String = "Double tap to select. Then double tap another player to swap them."
+    let action: () -> Void
+
+    var body: some View {
+        let card = PlayerPitchCard(player: player, slot: slot, isSelected: isSelected)
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Text((slot ?? player.primaryPosition).abbreviation)
+                    .font(.gfLabel(13))
+                    .foregroundStyle(.black)
+                    .frame(width: 42)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill((slot ?? player.primaryPosition).category.accentColor))
+                Text(player.fullName).font(.body.weight(.semibold)).lineLimit(1)
+                Spacer()
+                Text("\(player.overall)").font(.gfLabel(15).monospacedDigit())
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(isSelected ? Color.white.opacity(0.25) : Color.gfSurface))
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(card.spoken)
+        .accessibilityHint(hint)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+
+/// An icon-and-number label with almost no gap: "1⚽".
+struct TightLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 1) {
+            configuration.title
+            configuration.icon
+        }
+    }
+}

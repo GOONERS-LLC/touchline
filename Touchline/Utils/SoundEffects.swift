@@ -127,7 +127,15 @@ public final class SoundManager {
             player.currentTime = 0
             player.play()
         }
-        // Haptics are handled by `Haptics`, which respects the Haptics setting.
+        // Haptics as a complement (not a replacement).
+        switch effect {
+        case .goal, .win:
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        case .loss:
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+        case .whistle, .click, .draw:
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
     }
 
     public func playWin(enabled: Bool) { play(.win, enabled: enabled) }

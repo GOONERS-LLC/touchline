@@ -26,11 +26,6 @@ public struct MatchResult: Codable, Identifiable, Hashable {
     public var awayStats: MatchStats
     public var playerRatings: [UUID: Double]  // Player UUID -> Match Rating (1.0 to 10.0)
     public var manOfTheMatch: UUID?
-    /// Starting elevens and shapes, recorded so the Ratings tab can draw the match lineups.
-    public var homeLineup: [UUID]? = nil
-    public var awayLineup: [UUID]? = nil
-    public var homeFormation: FormationPreset? = nil
-    public var awayFormation: FormationPreset? = nil
     
     public init(
         id: UUID = UUID(),
@@ -64,6 +59,53 @@ public struct MatchResult: Codable, Identifiable, Hashable {
         self.manOfTheMatch = manOfTheMatch
     }
     
+    // MARK: - Compact Coding
+
+    // Archived results (most of the world's fixtures) have no events, ratings
+    // or stats. Leaving those keys out instead of writing empty arrays and
+    // zeroed stat blocks keeps saves small; decoding treats missing keys as
+    // empty, so older saves still load.
+    private enum CodingKeys: String, CodingKey {
+        case id, homeClubId, awayClubId, homeGoals, awayGoals, events, matchWeek
+        case competition, date, attendance, homeStats, awayStats, playerRatings, manOfTheMatch
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        homeClubId = try c.decode(UUID.self, forKey: .homeClubId)
+        awayClubId = try c.decode(UUID.self, forKey: .awayClubId)
+        homeGoals = try c.decode(Int.self, forKey: .homeGoals)
+        awayGoals = try c.decode(Int.self, forKey: .awayGoals)
+        events = try c.decodeIfPresent([MatchEvent].self, forKey: .events) ?? []
+        matchWeek = try c.decodeIfPresent(Int.self, forKey: .matchWeek) ?? 0
+        competition = try c.decodeIfPresent(String.self, forKey: .competition) ?? ""
+        date = try c.decodeIfPresent(String.self, forKey: .date) ?? ""
+        attendance = try c.decodeIfPresent(Int.self, forKey: .attendance) ?? 0
+        homeStats = try c.decodeIfPresent(MatchStats.self, forKey: .homeStats) ?? .empty
+        awayStats = try c.decodeIfPresent(MatchStats.self, forKey: .awayStats) ?? .empty
+        playerRatings = try c.decodeIfPresent([UUID: Double].self, forKey: .playerRatings) ?? [:]
+        manOfTheMatch = try c.decodeIfPresent(UUID.self, forKey: .manOfTheMatch)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(homeClubId, forKey: .homeClubId)
+        try c.encode(awayClubId, forKey: .awayClubId)
+        try c.encode(homeGoals, forKey: .homeGoals)
+        try c.encode(awayGoals, forKey: .awayGoals)
+        if !events.isEmpty { try c.encode(events, forKey: .events) }
+        try c.encode(matchWeek, forKey: .matchWeek)
+        try c.encode(competition, forKey: .competition)
+        try c.encode(date, forKey: .date)
+        if attendance != 0 { try c.encode(attendance, forKey: .attendance) }
+        if homeStats != .empty { try c.encode(homeStats, forKey: .homeStats) }
+        if awayStats != .empty { try c.encode(awayStats, forKey: .awayStats) }
+        if !playerRatings.isEmpty { try c.encode(playerRatings, forKey: .playerRatings) }
+        try c.encodeIfPresent(manOfTheMatch, forKey: .manOfTheMatch)
+    }
+
     // MARK: - Computed Properties
     
     public var scoreText: String {
@@ -97,6 +139,40 @@ public struct MatchResult: Codable, Identifiable, Hashable {
         return "-"
     }
     
+    /// A slimmed copy for matches the user did not play in. Keeps the score,
+    /// stats, man of the match and key events (goals, cards, injuries), but drops
+    /// minute-by-minute commentary and per-player ratings.
+    ///
+    /// Every world fixture's full result used to be stored three times (on the
+    /// fixture and on both clubs), adding ~7 MB to the save each week and
+    /// pushing a single season's save past 300 MB.
+    public func compactedForArchive() -> MatchResult {
+        // Only the score is ever read for matches the user did not play
+        // (tables, cup brackets, "elsewhere" results). Keeping events and team
+        // stats for ~12,000 fixtures added ~40 MB to every save and most of
+        // the memory used while encoding it.
+        var copy = self
+        copy.events = []
+        copy.playerRatings = [:]
+        copy.homeStats = .empty
+        copy.awayStats = .empty
+        return copy
+    }
+
+    /// Score and stats only. Used for the per-club results history of clubs the
+    /// user does not control, which nothing in the game reads event-by-event.
+    public func scoreOnly() -> MatchResult {
+        var copy = self
+        copy.events = []
+        copy.playerRatings = [:]
+        return copy
+    }
+
+    /// Whether this result is already in archived form.
+    public var isCompacted: Bool {
+        playerRatings.isEmpty && events.isEmpty
+    }
+
     /// List of goal events recorded during this fixture.
     public var goalEvents: [MatchEvent] {
         return events.filter { $0.type == .goal || $0.type == .ownGoal || $0.type == .penalty }
@@ -189,4 +265,27 @@ public struct MatchStats: Codable, Hashable {
     public static var empty: MatchStats {
         return MatchStats()
     }
+}
+
+// MARK: - Season Review
+
+/// The user's completed season, summarised for the end-of-season card.
+public struct SeasonReview: Codable, Hashable {
+    public var season: String
+    public var clubName: String
+    public var leagueName: String
+    public var position: Int
+    public var leagueSize: Int
+    public var points: Int
+    public var won: Int
+    public var drawn: Int
+    public var lost: Int
+    public var goalsFor: Int
+    public var goalsAgainst: Int
+    public var targetGoal: String?
+    public var targetMet: Bool?
+    public var cupRun: String?
+    public var topScorer: String?
+    public var playerOfSeason: String?
+    public var europe: String?
 }

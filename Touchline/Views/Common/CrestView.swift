@@ -156,37 +156,38 @@ public struct CrestIdentity {
 /// Renders a procedurally generated club badge from colours and short name.
 public struct CrestView: View {
     public let shortName: String
-    /// Full club name read by VoiceOver. Abbreviations are never spoken.
-    public var spokenName: String?
     public let primaryColor: Color
     public let secondaryColor: Color
     public var size: CGFloat
+    /// Drives the crest's shape and pattern. Club crests seed from the full
+    /// name: short codes are only unique within a league, so "BAR" would
+    /// otherwise give Barcelona and Bari the same badge.
+    private let seedKey: String
     
     private var identity: CrestIdentity {
-        CrestIdentity(seedKey: shortName)
+        CrestIdentity(seedKey: seedKey)
     }
     
     public init(
         shortName: String,
         primaryColor: Color,
         secondaryColor: Color,
-        size: CGFloat = 48,
-        spokenName: String? = nil
+        size: CGFloat = 48
     ) {
         self.shortName = shortName
-        self.spokenName = spokenName
         self.primaryColor = primaryColor
         self.secondaryColor = secondaryColor
         self.size = size
+        self.seedKey = shortName
     }
     
     /// Convenience initialiser building the crest directly from a `Club`.
     public init(club: Club, size: CGFloat = 48) {
         self.shortName = club.shortName
-        self.spokenName = club.name
         self.primaryColor = Color(hex: club.primaryColor)
         self.secondaryColor = Color(hex: club.secondaryColor)
         self.size = size
+        self.seedKey = club.name
     }
     
     public var body: some View {

@@ -493,14 +493,6 @@ public enum FormationPreset: String, Codable, CaseIterable, Identifiable, Hashab
     case f3412 = "3-4-1-2"
     case f4321wide = "4-3-3 (Attack)"
     case f4312 = "4-3-1-2"
-    case f4132 = "4-1-3-2"
-    case f424 = "4-2-4"
-    case f433f9 = "4-3-3 (False Nine)"
-    case f541 = "5-4-1"
-    case f4213 = "4-2-1-3"
-    case f3511 = "3-5-1-1"
-    case f4141w = "4-1-4-1 (Wide)"
-    case f343d = "3-4-3 (Diamond)"
     
     public var id: String { rawValue }
     
@@ -545,61 +537,6 @@ public enum FormationPreset: String, Codable, CaseIterable, Identifiable, Hashab
             return [.GK, .LB, .CB, .CB, .RB, .CM, .CM, .CAM, .LW, .ST, .RW]
         case .f4312:
             return [.GK, .LB, .CB, .CB, .RB, .CM, .CM, .CM, .CAM, .ST, .ST]
-        case .f4132:
-            return [.GK, .LB, .CB, .CB, .RB, .CDM, .LM, .CM, .RM, .ST, .ST]
-        case .f424:
-            return [.GK, .LB, .CB, .CB, .RB, .CM, .CM, .LW, .ST, .ST, .RW]
-        case .f433f9:
-            return [.GK, .LB, .CB, .CB, .RB, .CM, .CDM, .CM, .LW, .CF, .RW]
-        case .f541:
-            return [.GK, .LWB, .CB, .CB, .CB, .RWB, .LM, .CM, .CM, .RM, .ST]
-        case .f4213:
-            return [.GK, .LB, .CB, .CB, .RB, .CDM, .CDM, .CAM, .LW, .ST, .RW]
-        case .f3511:
-            return [.GK, .CB, .CB, .CB, .LWB, .CM, .CDM, .CM, .RWB, .CAM, .ST]
-        case .f4141w:
-            return [.GK, .LB, .CB, .CB, .RB, .CDM, .LW, .CM, .CM, .RW, .ST]
-        case .f343d:
-            return [.GK, .CB, .CB, .CB, .CDM, .LM, .RM, .CAM, .LW, .ST, .RW]
-        }
-    }
-
-    /// The formation's lines from defence to attack, e.g. 4-3-3 is [4, 3, 3].
-    /// Drawn boards use these lines so the shape always reads as its name.
-    public var lines: [Int] {
-        let digits = rawValue.prefix { $0 != " " }.split(separator: "-").compactMap { Int($0) }
-        return digits.reduce(0, +) == 10 ? digits : [defenderCount, midfielderCount, forwardCount]
-    }
-
-    /// A short description of how the shape plays, read by VoiceOver and shown in pickers.
-    public var styleNote: String {
-        switch self {
-        case .f442: return "Two banks of four with a front pair. Balanced and easy to organise."
-        case .f433: return "A holding midfielder behind two runners, with wingers either side of the striker."
-        case .f4231: return "Two holding midfielders shield the back four while three creators support a lone striker."
-        case .f352: return "Three centre-backs free the wing-backs to bomb forward beside a busy midfield."
-        case .f532: return "Five at the back for solidity, with two strikers to counter."
-        case .f4141: return "One anchor behind a line of four midfielders. Compact and hard to play through."
-        case .f343: return "Three at the back and a front three. High risk, high reward."
-        case .f4321: return "The Christmas tree. Two attacking midfielders tuck in behind the striker."
-        case .f3421: return "Three centre-backs, wide midfielders and two number tens behind a striker."
-        case .f41212: return "The narrow diamond. Dominates the middle of the pitch."
-        case .f451: return "Five across midfield to frustrate stronger sides."
-        case .f4411: return "A second striker drops between the lines behind the main forward."
-        case .f3142: return "An anchor screens three centre-backs while wing-backs provide the width."
-        case .f4222: return "The magic box. Two holders, two playmakers and two strikers."
-        case .f5221: return "Five defenders with two creators supporting a lone striker."
-        case .f3412: return "A playmaker sits behind two strikers with three at the back."
-        case .f4321wide: return "Two central midfielders and a playmaker feed an attacking front three."
-        case .f4312: return "A flat midfield three with a playmaker behind two strikers."
-        case .f4132: return "An anchor behind a midfield three, with two strikers up top."
-        case .f424: return "All-out attack with two wingers and two strikers."
-        case .f433f9: return "The striker drops deep as a false nine to pull defenders out of shape."
-        case .f541: return "Park the bus. Five defenders and four midfielders behind one striker."
-        case .f4213: return "Two holders and a playmaker behind an attacking front three."
-        case .f3511: return "Wing-backs give width to a five-man midfield with a playmaker behind the striker."
-        case .f4141w: return "An anchor with wingers instead of wide midfielders for extra pace."
-        case .f343d: return "Three at the back with a midfield diamond feeding a front three."
         }
     }
     
@@ -662,9 +599,6 @@ public enum MatchEventType: String, Codable, CaseIterable, Identifiable, Hashabl
     case extraTimeStart
     case penaltyShootout
     case commentary
-    case foul
-    case offside
-    case shotBlocked
     
     public var id: String { rawValue }
     
@@ -690,54 +624,9 @@ public enum MatchEventType: String, Codable, CaseIterable, Identifiable, Hashabl
         case .halfTime, .fullTime: return "flag.checkered"
         case .extraTimeStart, .penaltyShootout: return "bolt"
         case .commentary: return "text.bubble"
-        case .foul: return "figure.fall"
-        case .offside: return "flag.fill"
-        case .shotBlocked: return "shield.fill"
         }
     }
     
-    /// Events shown on the Match Facts timeline: goals mixed in with cards,
-    /// injuries and substitutions, in the order they happened.
-    public var isTimelineEvent: Bool {
-        switch self {
-        case .goal, .ownGoal, .penalty, .penaltyMissed, .yellowCard, .redCard, .secondYellow, .injury, .substitution:
-            return true
-        default:
-            return false
-        }
-    }
-
-    /// Spoken name used by VoiceOver and the Match Facts timeline.
-    public var spokenName: String {
-        switch self {
-        case .kickOff: return "Kick-off"
-        case .goal: return "Goal"
-        case .ownGoal: return "Own goal"
-        case .chance: return "Chance"
-        case .chanceMissed: return "Shot off target"
-        case .shotOnTarget: return "Save"
-        case .yellowCard: return "Yellow card"
-        case .redCard: return "Red card"
-        case .secondYellow: return "Second yellow, red card"
-        case .substitution: return "Substitution"
-        case .injury: return "Injury"
-        case .penalty: return "Penalty scored"
-        case .penaltyMissed: return "Penalty missed"
-        case .freeKick: return "Free kick"
-        case .corner: return "Corner"
-        case .woodwork: return "Hit the woodwork"
-        case .varDecision: return "Video review"
-        case .halfTime: return "Half-time"
-        case .fullTime: return "Full-time"
-        case .extraTimeStart: return "Extra time"
-        case .penaltyShootout: return "Penalty shoot-out"
-        case .commentary: return "Commentary"
-        case .foul: return "Foul"
-        case .offside: return "Offside"
-        case .shotBlocked: return "Shot blocked"
-        }
-    }
-
     /// Determines whether the event should trigger user attention or commentary highlights.
     public var isMajorEvent: Bool {
         switch self {
@@ -916,8 +805,16 @@ public enum LeagueTier: Int, Codable, CaseIterable, Identifiable, Comparable, Ha
     }
 
     public var autoPromotionCount: Int {
-        guard level < 4 else { return level == 4 ? 3 : 0 }
-        return level == 1 ? 0 : 2
+        switch level {
+        case 1: return 0
+        // A second tier promotes exactly as many clubs as the top flight
+        // relegates (automatic places plus one play-off winner), so division
+        // sizes stay constant in every country: three up in England, Spain,
+        // Italy, Germany and France; two in Scotland.
+        case 2: return max(0, country.topFlightRelegationCount - playoffPromotionCount)
+        case 3: return 2
+        default: return 3
+        }
     }
 
     public var playoffPromotionCount: Int {
@@ -1203,6 +1100,31 @@ public enum LeagueCountry: String, Codable, CaseIterable, Identifiable, Hashable
         }
     }
 
+    /// Whether this country's clubs enter UEFA competitions. Non-European
+    /// leagues never do, and Russian clubs are suspended from UEFA events.
+    public var competesInEurope: Bool {
+        switch self {
+        case .argentina, .australia, .brazil, .japan, .southKorea, .mexico,
+             .saudiArabia, .unitedStates, .russia:
+            return false
+        default:
+            return true
+        }
+    }
+
+    /// League places that lead to each UEFA competition (Champions League,
+    /// Europa League, Conference League), by finishing position. The domestic
+    /// cup winner also earns a Europa League place.
+    public var europeanAllocation: (championsLeague: Int, europaLeague: Int, conferenceLeague: Int) {
+        guard competesInEurope else { return (0, 0, 0) }
+        switch self {
+        case .england, .spain, .italy, .germany: return (4, 1, 1)
+        case .france: return (3, 1, 1)
+        case .portugal, .netherlands: return (2, 1, 1)
+        default: return (1, 1, 1)
+        }
+    }
+
     /// European qualification slots granted by this country's top flight.
     public var europeanSlots: Int {
         switch self {
@@ -1433,6 +1355,7 @@ public enum AppScreen: Hashable, Codable {
     case youthAcademy
     case international
     case news
+    case history
     case playerDetail(UUID)
     
     private enum CodingKeys: String, CodingKey {
@@ -1499,6 +1422,8 @@ public enum AppScreen: Hashable, Codable {
             try container.encode("international", forKey: .screenType)
         case .news:
             try container.encode("news", forKey: .screenType)
+        case .history:
+            try container.encode("history", forKey: .screenType)
         case .playerDetail(let uuid):
             try container.encode("playerDetail", forKey: .screenType)
             try container.encode(uuid, forKey: .playerId)
@@ -1537,6 +1462,7 @@ public enum AppScreen: Hashable, Codable {
         case "youthAcademy": self = .youthAcademy
         case "international": self = .international
         case "news": self = .news
+        case "history": self = .history
         case "playerDetail":
             let uuid = try container.decode(UUID.self, forKey: .playerId)
             self = .playerDetail(uuid)
@@ -1544,4 +1470,9 @@ public enum AppScreen: Hashable, Codable {
             self = .mainMenu
         }
     }
+}
+
+extension Position {
+    /// Goalkeeper first, strikers last: the order a team sheet is read in.
+    public var sortIndex: Int { Position.allCases.firstIndex(of: self) ?? 0 }
 }

@@ -16,90 +16,52 @@ struct TouchlineApp: App {
     @Environment(\.scenePhase) private var scenePhase
     
     init() {
-        Self.configureAppearance()
-        Preferences.registerDefaults()
-        CrowdAtmosphere.shared.prepare()
-        // Attempt to load existing autosave or bootstrap initial data
-        if let savedState = try? SaveManager.shared.loadAutoSave() {
+        // Native segmented controls match the capsule tabs: navy track,
+        // white selected segment, condensed capitals.
+        let seg = UISegmentedControl.appearance()
+        seg.selectedSegmentTintColor = .white
+        seg.backgroundColor = UIColor(red: 0.075, green: 0.16, blue: 0.29, alpha: 0.92)
+        let font = UIFont.systemFont(ofSize: 12, weight: .heavy)
+        seg.setTitleTextAttributes([.foregroundColor: UIColor.white, .font: font], for: .normal)
+        seg.setTitleTextAttributes([.foregroundColor: UIColor(red: 0.04, green: 0.11, blue: 0.2, alpha: 1), .font: font], for: .selected)
+        // Attempt to load an existing autosave, otherwise bootstrap a new world.
+        do {
+            let savedState = try SaveManager.shared.loadAutoSave()
             // Always land on the main menu when the app opens, so the user
             // deliberately chooses "Continue Career" rather than being dropped
             // mid-screen. The career state itself is preserved.
             savedState.currentScreen = .mainMenu
+            savedState.isMatchInProgress = false
+            savedState.compactArchivedResults()
+            savedState.seedRivalriesIfNeeded()
+            savedState.ensureGoalkeepersEverywhere()
             _gameState = State(initialValue: savedState)
-        } else {
-            let (clubs, leagues) = DataLoader.loadAllData()
-            
-            // Build initial season fixtures across all leagues
-            var allFixtures: [Fixture] = []
-            for league in leagues {
-                let fixtures = FixtureGenerator.generateDoubleRoundRobin(
-                    clubIds: league.clubIds,
-                    competitionName: league.name,
-                    startDateString: "2026-08-08"
-                )
-                allFixtures.append(contentsOf: fixtures)
-            }
-            
-            let initialSeason = Season(
-                year: "2026-27",
-                currentWeek: 1,
-                currentPhase: .preseason,
-                fixtures: allFixtures,
-                currentDate: "2026-08-01"
-            )
-            
-            let state = GameState(
-                gameMode: .createClub,
-                clubs: clubs,
-                leagues: leagues,
-                season: initialSeason,
-                currentScreen: .mainMenu,
-                europeanCompetitions: EuropeanCompetitionBuilder.build(from: clubs),
-                nationalTeams: DataLoader.loadNationalTeams()
-            )
-            state.seedFreeAgents()
-            state.seedAcademies()
-            state.seedInternationalTournaments()
-            
-            _gameState = State(initialValue: state)
+        } catch SaveManagerError.fileNotFound(_) {
+            _gameState = State(initialValue: GameState.makeFreshWorld())
+        } catch {
+            // The autosave exists but could not be read (for example it was
+            // written by an incompatible build). Move it aside instead of letting
+            // the next background autosave silently overwrite the career.
+            SaveManager.shared.quarantineUnreadableSave(.autoSave)
+            _gameState = State(initialValue: GameState.makeFreshWorld())
         }
     }
     
-    /// UIKit chrome (navigation and tab bars) matched to the Floodlight palette.
-    private static func configureAppearance() {
-        let ink = UIColor(red: 10/255, green: 15/255, blue: 30/255, alpha: 1)
-        let surface = UIColor(red: 18/255, green: 26/255, blue: 47/255, alpha: 1)
-        let amber = UIColor(red: 1, green: 176/255, blue: 32/255, alpha: 1)
-
-        let nav = UINavigationBarAppearance()
-        nav.configureWithOpaqueBackground()
-        nav.backgroundColor = ink
-        nav.shadowColor = .clear
-        nav.titleTextAttributes = [.foregroundColor: UIColor.white]
-        nav.largeTitleTextAttributes = [.foregroundColor: UIColor.white]
-        UINavigationBar.appearance().standardAppearance = nav
-        UINavigationBar.appearance().scrollEdgeAppearance = nav
-        UINavigationBar.appearance().compactAppearance = nav
-
-        let tab = UITabBarAppearance()
-        tab.configureWithOpaqueBackground()
-        tab.backgroundColor = surface
-        tab.stackedLayoutAppearance.selected.iconColor = amber
-        tab.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: amber]
-        UITabBar.appearance().standardAppearance = tab
-        UITabBar.appearance().scrollEdgeAppearance = tab
-    }
-
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(gameState)
         }
-        .onChange(of: scenePhase) { oldPhase, newPhase in
-            if newPhase == .background || newPhase == .inactive {
-                // Auto-save on backgrounding
-                try? SaveManager.shared.autoSave(gameState: gameState)
-            }
+        .onChange(of: scenePhase) { _, newPhase in
+            // Save once when the app is backgrounded. `.inactive` also fires for
+            // transient interruptions (Control Centre, notifications), and
+            // encoding the whole world twice in a row there caused visible hitches.
+            guard newPhase == .background else { return }
+            // A freshly bootstrapped world is not a career; never let it
+            // overwrite a real autosave.
+            guard gameState.hasStartedCareer else { return }
+            // Synchronous: the write must finish before iOS suspends the app.
+            try? SaveManager.shared.autoSaveNow(gameState: gameState)
         }
     }
 }
