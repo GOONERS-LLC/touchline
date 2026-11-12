@@ -59,7 +59,7 @@ public struct Commentary {
         goalType: GoalType? = nil
     ) -> (short: String, detail: String) {
         let type = goalType ?? pickGoalType(scorer: scorer, hasAssist: assister != nil)
-        let shortText = "GOAL! \(scorer.displayName) (\(club.shortName)) \(minute)' [\(homeGoals)-\(awayGoals)]"
+        let shortText = "GOAL! \(scorer.displayName) (\(club.name)) \(minute)' [\(homeGoals)-\(awayGoals)]"
         let keeper = opponent.startingXIPlayers.first { $0.primaryPosition == .GK }?.lastName ?? "the keeper"
         let body = GoalLines.body(type: type, scorer: scorer, assister: assister, keeper: keeper,
                                   club: club, opponent: opponent, minute: minute)
@@ -126,7 +126,7 @@ public struct Commentary {
         minute: Int,
         isHome: Bool
     ) -> (short: String, detail: String) {
-        let shortText = "CHANCE! \(shooter.displayName) (\(club.shortName)) \(minute)'"
+        let shortText = "CHANCE! \(shooter.displayName) (\(club.name)) \(minute)'"
         
         let templates = [
             "\(shooter.fullName) carves out a yard of space just outside the box and lets fly with a ferocious drive that whistles inches over the crossbar!",
@@ -141,7 +141,7 @@ public struct Commentary {
             "\(shooter.fullName) twists and turns his marker inside out before firing toward the near post, hitting the side netting! Half the stadium thought that was in!"
         ]
         
-        let detailText = templates.randomElement()!
+        let detailText = (templates + moreChances(shooter: shooter, club: club)).randomElement()!
         return (shortText, detailText)
     }
     
@@ -154,7 +154,7 @@ public struct Commentary {
         minute: Int,
         isHome: Bool
     ) -> (short: String, detail: String) {
-        let shortText = "SENSATIONAL SAVE! \(keeper.displayName) \(minute)'"
+        let shortText = saveHeadline(keeper: keeper, minute: minute)
         
         let templates = [
             "WHAT A REFLEX STOP! \(shooter.fullName) looked certain to score with a bullet header from point-blank range, but \(keeper.fullName) flung out a strong hand to tip it over the bar!",
@@ -167,7 +167,7 @@ public struct Commentary {
             "A crucial intervention by \(keeper.fullName)! Sticking out an outstretched boot, he deflects what looked like a guaranteed goal behind for a corner."
         ]
         
-        return (shortText, templates.randomElement()!)
+        return (shortText, (templates + moreSaves(keeper: keeper, shooter: shooter, keeperClub: keeperClub)).randomElement()!)
     }
     
     // MARK: - Misses & Woodwork
@@ -186,7 +186,7 @@ public struct Commentary {
                 "HOW HAS THAT STAYED OUT?! \(shooter.fullName)'s header loops over the keeper, cannons against the crossbar, bounces on the goal line, and is hooked clear!",
                 "WOODWORK AGAIN! \(shooter.fullName) drills a low drive that rebounds off the base of the upright with the goalkeeper beaten."
             ]
-            return (shortText, woodworkTemplates.randomElement()!)
+            return (shortText, (woodworkTemplates + moreWoodwork(shooter: shooter)).randomElement()!)
         }
         
         let shortText = "CHANCE MISSED! \(shooter.displayName) \(minute)'"
@@ -200,7 +200,7 @@ public struct Commentary {
             "\(shooter.fullName) blazes over! With the defense retreating, the striker opted for power over placement and cleared the crossbar by ten yards.",
             "A glorious delivery went begging as \(shooter.fullName) completely mistimed his jump, brushing the ball with his shoulder instead of making solid contact."
         ]
-        return (shortText, missTemplates.randomElement()!)
+        return (shortText, (missTemplates + moreMisses(shooter: shooter, club: club)).randomElement()!)
     }
     
     // MARK: - Disciplinary Cards
@@ -218,14 +218,14 @@ public struct Commentary {
             
             let redTemplates = [
                 "HE'S OFF! A reckless, two-footed lunge with studs showing leaves the referee with absolutely no choice. The referee reaches straight into his back pocket and produces a red card for \(player.fullName)! \(club.name) are down to 10 men!",
-                "DISASTER FOR \(club.shortName)! A professional foul as the last defender! \(player.fullName) tugged back the advancing attacker who was clean through on goal. Clear denial of an obvious goalscoring opportunity. Off he goes!",
+                "DISASTER FOR \(club.name)! A professional foul as the last defender! \(player.fullName) tugged back the advancing attacker who was clean through on goal. Clear denial of an obvious goalscoring opportunity. Off he goes!",
                 "DRAMA! Tempers boil over off the ball! An altercation breaks out and the referee spots \(player.fullName) raising his hands aggressively. The red card is brandished immediately amidst furious protests!",
                 "SECOND YELLOW! \(player.fullName) mistimes a cynical trip to halt a promising counter-attack. The referee blows his whistle, issues a second caution, followed immediately by the red! Walking down the tunnel in disbelief."
             ]
             return (shortText, redTemplates.randomElement()!)
         }
         
-        let shortText = "YELLOW CARD — \(player.displayName) (\(club.shortName)) \(minuteStr)"
+        let shortText = "YELLOW CARD — \(player.displayName) (\(club.name)) \(minuteStr)"
         let yellowTemplates = [
             "Late challenge by \(player.fullName). He arrived a fraction of a second after the ball was released and wiped out his opponent. A deserved caution.",
             "Tactical foul. \(player.fullName) deliberately pulls back the attacker's shirt to break up a dangerous break. The referee reaches into his pocket without hesitation.",
@@ -234,7 +234,7 @@ public struct Commentary {
             "A heavy sliding tackle on the wet pitch. \(player.fullName) got a piece of the ball, but followed through with too much force. The referee brandishes yellow.",
             "Time wasting caution. The referee penalizes \(player.fullName) for delaying the restart of play by kicking the ball away."
         ]
-        return (shortText, yellowTemplates.randomElement()!)
+        return (shortText, (yellowTemplates + moreYellows(player: player)).randomElement()!)
     }
     
     // MARK: - Injuries & Substitutions
@@ -245,8 +245,8 @@ public struct Commentary {
         minute: Int,
         injuryType: InjuryType
     ) -> (short: String, detail: String) {
-        let shortText = "INJURY — \(player.displayName) (\(club.shortName)) \(minute)'"
-        let detailText = "Play stops as \(player.fullName) goes down clutching his leg in obvious pain. The physios rush onto the pitch with the medical kit. After a brief assessment, he is signaled off the pitch with what looks like a \(injuryType.displayName.lowercased())."
+        let shortText = "INJURY — \(player.displayName) (\(club.name)) \(minute)'"
+        let detailText = injuryDetail(player: player, club: club, injuryName: injuryType.displayName.lowercased())
         return (shortText, detailText)
     }
     
@@ -256,7 +256,7 @@ public struct Commentary {
         club: Club,
         minute: Int
     ) -> (short: String, detail: String) {
-        let shortText = "SUB — \(club.shortName): \(playerIn.displayName) ON, \(playerOut.displayName) OFF \(minute)'"
+        let shortText = "SUB — \(club.name): \(playerIn.displayName) ON, \(playerOut.displayName) OFF \(minute)'"
         let detailText = "Tactical change for \(club.name). \(playerOut.fullName) makes way after a tireless shift, receiving applause from the traveling supporters as \(playerIn.fullName) trots on with fresh instructions from the touchline."
         return (shortText, detailText)
     }
@@ -280,7 +280,7 @@ public struct Commentary {
                 "Both teams feeling each other out in the opening exchanges. The tempo is brisk as they battle for dominance in the midfield.",
                 "\(homeClub.name) look to establish an early rhythm with sharp, short passing along the back line.",
                 "Loud and vocal support from both sets of fans as the teams settle into their tactical formations.",
-                "High pressing from \(homeClub.name) early on, forcing \(awayClub.shortName) into rushed clearances."
+                "High pressing from \(homeClub.name) early on, forcing \(awayClub.name) into rushed clearances."
             ]
         } else if isLate {
             if diff == 0 {
@@ -347,7 +347,7 @@ public struct Commentary {
                 "The away supporters are bouncing in unison, outsinging the entire stadium!",
                 "The scorer runs the length of the touchline to the away end. They will remember this trip.",
                 "A finger to the lips towards the home crowd. Not everyone in the stands appreciates that.",
-                "In the corner of the ground, a small pocket of \(club.shortName) fans goes absolutely berserk.",
+                "In the corner of the ground, a small pocket of \(club.name) fans goes absolutely berserk.",
                 "Home fans head for their pies early. The away end can't stop singing."
             ]
             return reactions.randomElement()!
@@ -362,7 +362,7 @@ public struct Commentary {
         homeGoals: Int,
         awayGoals: Int
     ) -> (short: String, detail: String) {
-        let shortText = "Half-Time: \(home.shortName) \(homeGoals) - \(awayGoals) \(away.shortName)"
+        let shortText = "Half-Time: \(home.name) \(homeGoals) - \(awayGoals) \(away.name)"
         let detailText: String
         
         if homeGoals == awayGoals && homeGoals == 0 {
@@ -385,7 +385,7 @@ public struct Commentary {
         awayGoals: Int,
         motm: Player?
     ) -> (short: String, detail: String) {
-        let shortText = "FULL-TIME: \(home.shortName) \(homeGoals) - \(awayGoals) \(away.shortName)"
+        let shortText = "FULL-TIME: \(home.name) \(homeGoals) - \(awayGoals) \(away.name)"
         let motmText = motm != nil ? "\n\nMan of the Match: \(motm!.fullName) (\(motm!.primaryPosition.abbreviation))" : ""
         let detailText: String
         

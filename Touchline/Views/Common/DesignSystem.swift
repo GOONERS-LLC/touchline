@@ -2,8 +2,9 @@
 //  DesignSystem.swift
 //  Touchline
 //
-//  Shared building blocks for a consistent look: cards, section headers,
-//  rating badges, two-sided stat bars, pills and club-coloured banners.
+//  Touchline's "Floodlight" design language: deep ink surfaces, cobalt
+//  actions, amber highlights, rounded type in sentence case. Every shared
+//  component (cards, tabs, buttons, tiles, banners) is defined here.
 //
 
 import SwiftUI
@@ -19,19 +20,18 @@ struct GFCard: ViewModifier {
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(stadium ? Color.gfSurface : Color(UIColor.secondarySystemGroupedBackground))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(stadium ? Color.gfStroke : Color.primary.opacity(0.06), lineWidth: 1)
             )
-            .shadow(color: Color.black.opacity(0.06), radius: 8, y: 3)
     }
 }
 
 extension View {
-    func gfCard(padding: CGFloat = 12) -> some View { modifier(GFCard(padding: min(padding, 12))) }
+    func gfCard(padding: CGFloat = 14) -> some View { modifier(GFCard(padding: min(max(padding, 14), 16))) }
 }
 
 // MARK: - Section header
@@ -46,10 +46,12 @@ struct GFSectionHeader<Trailing: View>: View {
             if let icon {
                 Image(systemName: icon)
                     .font(.subheadline.weight(.bold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Color.highlight)
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(Color.highlight.opacity(0.14)))
             }
             Text(title)
-                .font(.headline)
+                .font(.system(.headline, design: .rounded))
             Spacer()
             trailing()
         }
@@ -72,11 +74,11 @@ struct RatingBadge: View {
 
     static func color(for rating: Int) -> Color {
         switch rating {
-        case 85...: return Color(hex: "D4AF37")
-        case 78..<85: return Color(hex: "2ECC71")
-        case 70..<78: return Color(hex: "3498DB")
-        case 60..<70: return Color(hex: "95A5A6")
-        default: return Color(hex: "B87333")
+        case 85...: return Color(hex: "E09A10")
+        case 78..<85: return Color(hex: "1E9E62")
+        case 70..<78: return Color(hex: "2F5BEA")
+        case 60..<70: return Color(hex: "5B6785")
+        default: return Color(hex: "8A5A3C")
         }
     }
 
@@ -87,8 +89,7 @@ struct RatingBadge: View {
             .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background(
-                RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-                    .fill(RatingBadge.color(for: rating).gradient)
+                Circle().fill(RatingBadge.color(for: rating).gradient)
             )
             .accessibilityLabel("Rated \(rating)")
     }
@@ -123,8 +124,8 @@ struct DualStatBar: View {
     let away: Double
     var homeText: String
     var awayText: String
-    var homeColor: Color = .accentColor
-    var awayColor: Color = .orange
+    var homeColor: Color = .brand
+    var awayColor: Color = .highlight
 
     var body: some View {
         let total = max(home + away, 0.0001)
@@ -190,24 +191,25 @@ extension EnvironmentValues {
 }
 
 extension Color {
-    /// Deep navy night sky.
-    static let gfNight = Color(hex: "0B1B33")
-    /// Slightly lighter navy for surfaces.
-    static let gfNavy = Color(hex: "13294B")
-    /// Card surface on the stadium background.
-    static let gfSurface = Color(hex: "16305A").opacity(0.78)
-    /// Hairline on navy surfaces.
-    static let gfStroke = Color.white.opacity(0.10)
-    /// The positive money / "good" green used on value pills.
-    static let gfMint = Color(hex: "7FD99A")
-    /// Negative value pill.
-    static let gfCoral = Color(hex: "F2727F")
-    /// Owner-mode event banner.
-    static let gfBanner = Color(hex: "F7A731")
+    /// Ink: the app background.
+    static let gfNight = Color(hex: "0A0F1E")
+    /// Raised ink for tracks and panels.
+    static let gfNavy = Color(hex: "141C33")
+    /// Card surface.
+    static let gfSurface = Color(hex: "151E38").opacity(0.94)
+    /// Hairline on ink surfaces.
+    static let gfStroke = Color(hex: "2B3760")
+    /// Positive values.
+    static let gfMint = Color(hex: "2BD07F")
+    /// Negative values.
+    static let gfCoral = Color(hex: "FF5A5F")
+    /// Event-card title band (cobalt).
+    static let gfBanner = Color(hex: "2F5BEA")
 }
 
-/// A floodlit stadium at night: navy sky, two light glows, dark stands and
-/// a striped pitch at the bottom. Drawn entirely in SwiftUI.
+/// Touchline's backdrop: deep ink, a cobalt floodlight glow from the top
+/// corner, faint pitch markings and an amber touchline along the bottom.
+/// Drawn entirely in SwiftUI.
 struct StadiumBackground: View {
     @Environment(\.stadiumTheme) private var stadium
 
@@ -216,31 +218,28 @@ struct StadiumBackground: View {
             GeometryReader { geo in
                 let w = geo.size.width, h = geo.size.height
                 ZStack {
-                    LinearGradient(colors: [Color(hex: "0A1830"), Color(hex: "102A50"), Color(hex: "0E2546")],
-                                   startPoint: .top, endPoint: .bottom)
-                    // Floodlights.
-                    ForEach([0.0, 1.0], id: \.self) { side in
-                        RadialGradient(colors: [Color.white.opacity(0.22), Color(hex: "6FA8FF").opacity(0.10), .clear],
-                                       center: .center, startRadius: 2, endRadius: w * 0.45)
-                            .frame(width: w * 0.9, height: w * 0.9)
-                            .position(x: side == 0 ? -w * 0.02 : w * 1.02, y: h * 0.42)
+                    Color(hex: "0A0F1E")
+                    RadialGradient(colors: [Color(hex: "2F5BEA").opacity(0.38), Color(hex: "2F5BEA").opacity(0.08), .clear],
+                                   center: .topTrailing, startRadius: 10, endRadius: max(w, h) * 0.75)
+                    RadialGradient(colors: [Color(hex: "FFB020").opacity(0.10), .clear],
+                                   center: .bottomLeading, startRadius: 10, endRadius: w * 0.9)
+                    // Faint centre circle and halfway line.
+                    Canvas { context, size in
+                        let line = Color.white.opacity(0.035)
+                        var halfway = Path()
+                        halfway.move(to: CGPoint(x: 0, y: size.height * 0.55))
+                        halfway.addLine(to: CGPoint(x: size.width, y: size.height * 0.55))
+                        context.stroke(halfway, with: .color(line), lineWidth: 2)
+                        let r = size.width * 0.32
+                        context.stroke(Path(ellipseIn: CGRect(x: size.width / 2 - r, y: size.height * 0.55 - r, width: r * 2, height: r * 2)),
+                                       with: .color(line), lineWidth: 2)
                     }
-                    // Stands.
+                    // The touchline.
                     Rectangle()
-                        .fill(LinearGradient(colors: [Color(hex: "0C1F3D").opacity(0), Color(hex: "081428").opacity(0.85)],
-                                             startPoint: .top, endPoint: .bottom))
-                        .frame(height: h * 0.16)
-                        .position(x: w / 2, y: h * 0.58)
-                    // Pitch.
-                    VStack(spacing: 0) {
-                        ForEach(0..<6, id: \.self) { i in
-                            Rectangle().fill(i.isMultiple(of: 2) ? Color(hex: "1E6B3A") : Color(hex: "1A5F33"))
-                        }
-                    }
-                    .frame(height: h * 0.34)
-                    .overlay(LinearGradient(colors: [Color(hex: "0E2546").opacity(0.9), Color.black.opacity(0.15), Color.black.opacity(0.55)],
-                                            startPoint: .top, endPoint: .bottom))
-                    .position(x: w / 2, y: h - h * 0.17)
+                        .fill(LinearGradient(colors: [Color(hex: "FFB020").opacity(0), Color(hex: "FFB020").opacity(0.55), Color(hex: "FFB020").opacity(0)],
+                                             startPoint: .leading, endPoint: .trailing))
+                        .frame(height: 2)
+                        .position(x: w / 2, y: h - 1)
                 }
             }
             .ignoresSafeArea()
@@ -265,11 +264,11 @@ extension View {
 extension Font {
     /// Heavy condensed capitals for titles, like a stadium scoreboard.
     static func gfDisplay(_ size: CGFloat) -> Font {
-        .system(size: size, weight: .black).width(.condensed)
+        .system(size: size, weight: .bold, design: .rounded)
     }
     /// Small bold condensed labels for tabs, chips and buttons.
     static func gfLabel(_ size: CGFloat = 13) -> Font {
-        .system(size: size, weight: .heavy).width(.condensed)
+        .system(size: size, weight: .semibold, design: .rounded)
     }
 }
 
@@ -279,8 +278,8 @@ struct GFScreenTitle: View {
     var subtitle: String? = nil
     var body: some View {
         VStack(spacing: 4) {
-            Text(title.uppercased())
-                .font(.gfDisplay(19))
+            Text(title)
+                .font(.gfDisplay(21))
                 .multilineTextAlignment(.center)
             if let subtitle {
                 Text(subtitle)
@@ -304,30 +303,34 @@ struct GFTabs<Value: Hashable>: View {
     var compact: Bool = false
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 4) {
             ForEach(Array(options.enumerated()), id: \.offset) { _, option in
                 let selected = option.value == selection
                 Button {
+                    Haptics.selection()
                     withAnimation(.snappy(duration: 0.22)) { selection = option.value }
                 } label: {
-                    Text(option.title.uppercased())
-                        .font(.gfLabel(compact ? 11 : 12))
+                    Text(option.title)
+                        .font(.gfLabel(compact ? 12 : 14))
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, compact ? 5 : 7)
-                        .foregroundStyle(selected ? Color.gfNight : Color.white)
-                        .background(selected ? Capsule().fill(Color.white) : Capsule().fill(Color.clear))
-                        .contentShape(Capsule())
+                        .padding(.vertical, compact ? 7 : 10)
+                        .foregroundStyle(selected ? Color.white : Color.white.opacity(0.65))
+                        .background(
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .fill(selected ? Color.brand : Color.clear)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(option.title)
                 .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
             }
         }
-        .padding(2)
-        .background(Capsule().fill(Color.gfNavy.opacity(0.92)))
-        .overlay(Capsule().stroke(Color.gfStroke, lineWidth: 1))
+        .padding(4)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.gfNavy))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.gfStroke, lineWidth: 1))
     }
 }
 
@@ -346,26 +349,32 @@ struct GFCapsuleButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.gfLabel(15))
-            .textCase(.uppercase)
+            .font(.system(size: 16, weight: .semibold, design: .rounded))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             .padding(.horizontal, 16)
-            .padding(.vertical, 9)
+            .padding(.vertical, 13)
             .frame(maxWidth: .infinity)
             .foregroundStyle(foreground)
-            .background(Capsule().fill(fill))
-            .overlay(Capsule().stroke(stroke, lineWidth: kind == .primary ? 2 : 1))
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(kind == .primary
+                          ? AnyShapeStyle(LinearGradient(colors: [Color(hex: "3A68F5"), Color(hex: "2447C9")], startPoint: .top, endPoint: .bottom))
+                          : AnyShapeStyle(fill))
+            )
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(stroke, lineWidth: 1))
+            .shadow(color: kind == .primary ? Color(hex: "2F5BEA").opacity(0.35) : .clear, radius: 10, y: 4)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .opacity(configuration.isPressed ? 0.85 : 1)
+            .opacity(configuration.isPressed ? 0.88 : 1)
+            .onChange(of: configuration.isPressed) { _, pressed in if pressed { Haptics.tap() } }
     }
 
     private var fill: Color {
         switch kind {
-        case .primary: return Color(hex: "3D7A5C")
-        case .solid: return .white
-        case .outline: return Color.gfNavy.opacity(0.6)
-        case .danger: return Color.gfCoral.opacity(0.25)
+        case .primary: return Color(hex: "2F5BEA")
+        case .solid: return Color(hex: "FFB020")
+        case .outline: return Color.gfNavy
+        case .danger: return Color.gfCoral.opacity(0.16)
         }
     }
     private var foreground: Color {
@@ -378,10 +387,10 @@ struct GFCapsuleButtonStyle: ButtonStyle {
     }
     private var stroke: Color {
         switch kind {
-        case .primary: return Color.white.opacity(0.85)
+        case .primary: return Color.white.opacity(0.14)
         case .solid: return .clear
-        case .outline: return Color.white.opacity(0.75)
-        case .danger: return Color.gfCoral
+        case .outline: return Color.gfStroke
+        case .danger: return Color.gfCoral.opacity(0.6)
         }
     }
 }
@@ -405,9 +414,9 @@ struct GFValuePill: View {
 
     var body: some View {
         VStack(spacing: 3) {
-            Text(title.uppercased())
+            Text(title)
                 .font(.gfLabel(11))
-                .foregroundStyle(.white)
+                .foregroundStyle(.white.opacity(0.75))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Text(value)
@@ -417,7 +426,7 @@ struct GFValuePill: View {
                 .foregroundStyle(Color.gfNight)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(tone == .good ? Color.gfMint : (tone == .bad ? Color.gfCoral : Color.white)))
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(tone == .good ? Color.gfMint : (tone == .bad ? Color.gfCoral : Color.white)))
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
@@ -433,28 +442,31 @@ struct GFTile: View {
     var badge: Int = 0
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.body.weight(.semibold))
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Color(hex: "FFB020"))
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(Color(hex: "FFB020").opacity(0.14)))
                 .overlay(alignment: .topTrailing) {
                     if badge > 0 {
                         Text("\(min(badge, 99))")
                             .font(.caption2.weight(.heavy))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.red))
-                            .offset(x: 12, y: -8)
+                            .background(Capsule().fill(Color.gfCoral))
+                            .offset(x: 8, y: -4)
                     }
                 }
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
         .foregroundStyle(.white)
-        .frame(maxWidth: .infinity, minHeight: 50)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.gfSurface))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.gfStroke, lineWidth: 1))
+        .frame(maxWidth: .infinity, minHeight: 74)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.gfSurface))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.gfStroke, lineWidth: 1))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(badge > 0 ? "\(title), \(badge) new" : title)
         .accessibilityAddTraits(.isButton)
@@ -496,10 +508,10 @@ struct GFEventCard<Content: View>: View {
                 .padding(.vertical, 8)
                 .background(Color.white.opacity(0.08))
             }
-            Text(title.uppercased())
+            Text(title)
                 .font(.gfDisplay(16))
                 .multilineTextAlignment(.center)
-                .foregroundStyle(Color(hex: "1B1B1B"))
+                .foregroundStyle(Color.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
                 .padding(.horizontal, 10)
@@ -521,7 +533,7 @@ struct GFEventCard<Content: View>: View {
 struct GFAdvisorBubble: View {
     var faceSeed: UInt64?
     let text: String
-    var tone: Color = Color(hex: "3E8E41")
+    var tone: Color = Color(hex: "1D3BA8")
 
     var body: some View {
         HStack(spacing: 12) {
@@ -557,9 +569,9 @@ struct GFChoiceRow: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 7)
         .padding(.horizontal, 8)
-        .foregroundStyle(selected ? Color.white : Color.primary)
+        .foregroundStyle(Color.white)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(selected ? Color(hex: "3D7A5C") : Color(UIColor.systemBackground).opacity(0.92)))
+            .fill(selected ? Color(hex: "2F5BEA") : Color.gfNavy))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(selected ? Color.white : Color.clear, lineWidth: 2))
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
@@ -573,14 +585,14 @@ struct GFGroupBoxStyle: GroupBoxStyle {
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             configuration.label
-                .font(.gfLabel(13))
-                .textCase(.uppercase)
+                .font(.gfLabel(14))
+                .foregroundStyle(Color.highlight)
             configuration.content
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
             .fill(stadium ? Color.gfSurface : Color(UIColor.secondarySystemGroupedBackground)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.gfStroke, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.gfStroke, lineWidth: 1))
     }
 }

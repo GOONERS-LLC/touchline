@@ -163,7 +163,9 @@ public struct CrestView: View {
     /// name: short codes are only unique within a league, so "BAR" would
     /// otherwise give Barcelona and Bari the same badge.
     private let seedKey: String
-    
+    /// Full club name for VoiceOver; abbreviations are never spoken.
+    private var spokenName: String? = nil
+
     private var identity: CrestIdentity {
         CrestIdentity(seedKey: seedKey)
     }
@@ -188,6 +190,7 @@ public struct CrestView: View {
         self.secondaryColor = Color(hex: club.secondaryColor)
         self.size = size
         self.seedKey = club.name
+        self.spokenName = club.name
     }
     
     public var body: some View {
@@ -228,7 +231,7 @@ public struct CrestView: View {
                 .accessibilityHidden(true)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(shortName) crest")
+        .accessibilityLabel(spokenName.map { "\($0) crest" } ?? "Club crest")
     }
     
     private var monogram: String {

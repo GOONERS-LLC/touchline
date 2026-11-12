@@ -199,6 +199,11 @@ public struct LiveMatchView: View {
     @State private var ticker: Timer?
     @State private var goalFlash: MatchEvent?
     @State private var pane: Pane = .pitch
+    /// Lines waiting for VoiceOver. While non-empty (and "Wait for VoiceOver"
+    /// is on) the match clock holds, so no commentary is talked over.
+    @State private var speechQueue: [String] = []
+    @State private var isSpeaking = false
+    @State private var speechWatchdog: DispatchWorkItem?
 
     enum Pane: String, CaseIterable { case pitch = "Pitch", commentary = "Commentary", stats = "Stats", lineups = "Lineups" }
     
@@ -274,7 +279,14 @@ public struct LiveMatchView: View {
         .navigationTitle(gameState.gameMode == .createClub ? "Watching" : "Live Match")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear(perform: prepare)
-        .onDisappear { stopTicker() }
+        .onDisappear {
+            stopTicker()
+            speechWatchdog?.cancel()
+            CrowdAtmosphere.shared.stopMatch()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.announcementDidFinishNotification)) { _ in
+            speakNext()
+        }
         .sheet(isPresented: $editingLineup) {
             NavigationStack {
                 ScrollView {
@@ -309,7 +321,7 @@ public struct LiveMatchView: View {
         let manages = gameState.gameMode == .manageClub
         return VStack(spacing: 14) {
             Text("HALF-TIME").font(.gfDisplay(22))
-            Text("\(home.shortName) \(currentHomeGoals) - \(currentAwayGoals) \(away.shortName)").font(.gfDisplay(22))
+            Text("\(home.name) \(currentHomeGoals) - \(currentAwayGoals) \(away.name)").font(.gfDisplay(22))
             if manages {
                 Text("Substitutions left: \(gameState.liveSubsRemaining)")
                     .font(.subheadline)
@@ -658,13 +670,30 @@ public struct LiveMatchView: View {
             didSimulate = true
         }
         minute = 0
+        CrowdAtmosphere.shared.startMatch()
+        Haptics.matchEvent(.kickOff)
+        if let home = gameState.club(withId: fixture.homeClubId), let away = gameState.club(withId: fixture.awayClubId) {
+            enqueue("Kick-off at \(home.stadium). \(home.name) against \(away.name).")
+        }
         startTicker()
     }
     
+    private var holdsForVoiceOver: Bool {
+        UIAccessibility.isVoiceOverRunning && Preferences.waitForVoiceOver
+    }
+
     private func startTicker() {
         guard minute < finalMinute else { return }
         isPlaying = true
+        CrowdAtmosphere.shared.resume()
+        scheduleTimer()
+    }
+
+    private func scheduleTimer() {
         ticker?.invalidate()
+        ticker = nil
+        guard isPlaying, minute < finalMinute else { return }
+        if holdsForVoiceOver && (isSpeaking || !speechQueue.isEmpty) { return }
         let interval = gameState.matchSettings.speed.tickInterval
         ticker = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { timer in
             Task { @MainActor in
@@ -676,11 +705,18 @@ public struct LiveMatchView: View {
                         // An owner only watches: no half-time changes to make.
                         if gameState.matchSettings.stopAtHalfTime && gameState.gameMode == .manageClub {
                             withAnimation { atHalfTime = true }
-                            AccessibilityNotification.Announcement("Half-time. \(scoreText). You can make substitutions and change tactics, then start the second half.").post()
+                            enqueue("Half-time. \(scoreText). You can make substitutions and change tactics, then start the second half.")
+                            Haptics.matchEvent(.halfTime)
                         } else {
                             startSecondHalf()
                         }
+                    } else {
+                        Haptics.matchEvent(.fullTime)
                     }
+                } else if holdsForVoiceOver && (isSpeaking || !speechQueue.isEmpty) {
+                    // Hold the clock until VoiceOver has read the latest lines.
+                    timer.invalidate()
+                    ticker = nil
                 }
             }
         }
@@ -696,13 +732,23 @@ public struct LiveMatchView: View {
         let previous = minute
         minute = min(finalMinute, minute + 1)
         
-        // Announce major events as their minute arrives.
-        let newEvents = (result?.events ?? []).filter {
-            $0.minute > previous && $0.minute <= minute && $0.type.isMajorEvent
-        }
+        CrowdAtmosphere.shared.tickMinute()
+        let detail = Preferences.commentaryDetail
+        let newEvents = (result?.events ?? []).filter { $0.minute > previous && $0.minute <= minute }
         for ev in newEvents {
-            AccessibilityNotification.Announcement(ev.detailText).post()
-            if ev.type == .goal || ev.type == .penalty || ev.type == .ownGoal {
+            CrowdAtmosphere.shared.react(to: ev)
+            let isGoal = ev.type == .goal || ev.type == .penalty || ev.type == .ownGoal
+            if isGoal {
+                let userId = gameState.userClubId
+                Haptics.goal(forUser: ev.type == .ownGoal ? ev.clubId != userId : ev.clubId == userId)
+            } else {
+                Haptics.matchEvent(ev.type)
+            }
+            if detail.includes(ev.type), ev.type != .kickOff {
+                enqueue("\(ev.minute) minutes. \(ev.detailText)")
+                if isGoal, Preferences.announceScore { enqueue("The score is \(scoreText).") }
+            }
+            if isGoal {
                 SoundManager.shared.play(.goal, enabled: gameState.soundEnabled)
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { goalFlash = ev }
                 let shown = ev.id
@@ -711,9 +757,47 @@ public struct LiveMatchView: View {
                 }
             }
         }
+        quarterHourUpdate()
+        CrowdAtmosphere.shared.maybeChant(homeLeading: currentHomeGoals > currentAwayGoals)
     }
     
+    private func quarterHourUpdate() {
+        guard Preferences.minuteUpdates, minute % 15 == 0, minute > 0, minute < 90, minute != 45 else { return }
+        enqueue("\(minute) minutes played. \(scoreText).")
+    }
+
+    // MARK: - VoiceOver pacing
+
+    private func enqueue(_ line: String) {
+        guard UIAccessibility.isVoiceOverRunning else { return }
+        speechQueue.append(line)
+        if !isSpeaking { speakNext() }
+    }
+
+    /// Reads the next queued line; called again when VoiceOver reports the
+    /// last one finished, with a watchdog in case that never arrives.
+    private func speakNext() {
+        speechWatchdog?.cancel()
+        guard !speechQueue.isEmpty else {
+            isSpeaking = false
+            if isPlaying && ticker == nil && minute < finalMinute { scheduleTimer() }
+            return
+        }
+        isSpeaking = true
+        let line = speechQueue.removeFirst()
+        var announcement = AttributedString(line)
+        announcement.accessibilitySpeechAnnouncementPriority = .high
+        AccessibilityNotification.Announcement(announcement).post()
+        let words = Double(line.split(separator: " ").count)
+        let watchdog = DispatchWorkItem { speakNext() }
+        speechWatchdog = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(3, words * 0.45 + 1.5), execute: watchdog)
+    }
+
     private func finish(fixture: Fixture) {
+        speechWatchdog?.cancel()
+        speechQueue.removeAll()
+        isSpeaking = false
         stopTicker()
         if gameState.season.fixtures.contains(where: { $0.id == fixture.id }) {
             gameState.simulateFixture(id: fixture.id)

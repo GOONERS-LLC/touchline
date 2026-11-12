@@ -80,7 +80,7 @@ extension GameState {
             let goals = result.goalEvents.filter { $0.playerId == speaker.id }.count
             let lines: [String]
             if goals >= 2 {
-                lines = ["Match ball's coming home with me. ⚽️⚽️", "Two goals, three points, one happy dressing room.",
+                lines = ["Match ball's coming home with me.", "Two goals, three points, one happy dressing room.",
                          "Strikers live for days like this."]
             } else if scored > conceded {
                 lines = ["Days like this make the bad ones worth it.", "Three points. On to the next one.",
@@ -130,7 +130,7 @@ extension GameState {
         history.awards.suffix(8).compactMap { award -> SocialPost? in
             var rng = SocialRandom(seed: award.id)
             let clubMatch = clubs.first { $0.name == award.clubName }
-            let lines = ["Congratulations \(award.playerName), the \(award.award)! 🏆",
+            let lines = ["Congratulations \(award.playerName), the \(award.award)!",
                          "History made. \(award.playerName) wins the \(award.award)."]
             let likes = 900_000 + rng.next(1_800_000)
             return SocialPost(id: "a-\(award.id)", kind: .award, handle: "@" + Self.tagName(award.clubName),

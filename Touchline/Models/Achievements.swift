@@ -61,7 +61,7 @@ extension GameState {
               let achievement = Achievement.catalog.first(where: { $0.id == id }),
               achievement.mode == nil || achievement.mode == gameMode else { return }
         achievements[id] = season.currentDate
-        addNews(headline: "🏆 Achievement Unlocked: \(achievement.title)",
+        addNews(headline: "Achievement Unlocked: \(achievement.title)",
                 body: achievement.detail,
                 category: .award, sender: "Achievements")
     }

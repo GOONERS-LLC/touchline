@@ -37,3 +37,31 @@ targets:
         MARKETING_VERSION: "2.0.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_OPTIMIZATION_LEVEL: "-O"
+
+  TouchlineUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: TouchlineUITests
+    dependencies:
+      - target: Touchline
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.goonersllc.touchline.uitests
+        TEST_TARGET_NAME: Touchline
+        CODE_SIGNING_ALLOWED: NO
+
+schemes:
+  Touchline:
+    build:
+      targets:
+        Touchline: all
+        TouchlineUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - TouchlineUITests
+    archive:
+      config: Release

@@ -14,56 +14,403 @@ public struct PostMatchView: View {
     @State private var showElsewhere = false
     @State private var pressReply: String?
 
+    // The full-time journey, one screen at a time.
+    private enum Step { case fullTime, playerOfMatch, results }
+    private enum Tab: String, CaseIterable { case facts = "Match Facts", ratings = "Ratings", stats = "Stats" }
+    @State private var step: Step = .fullTime
+    @State private var tab: Tab = .facts
+    @State private var ratingsShowHome = true
+    @State private var profilePlayer: ProfileTarget?
+    @State private var playedFeedback = false
+    @AccessibilityFocusState private var headingFocused: Bool
+
+    private struct ProfileTarget: Identifiable { let id: UUID }
+
     public var body: some View {
-        ScrollView {
+        VStack(spacing: 0) {
             if let fixture = gameState.activeMatchFixture,
                let res = fixture.result,
                let home = gameState.club(withId: fixture.homeClubId),
                let away = gameState.club(withId: fixture.awayClubId) {
-                VStack(spacing: 16) {
-                    scoreboard(fixture: fixture, res: res, home: home, away: away)
-                    if let potm = potmPlayer(for: res) { potmCard(potm, res: res) }
-                    if !res.goalEvents.isEmpty { goalsCard(res: res, home: home, away: away) }
-                    disciplineCard(res: res, home: home, away: away)
-                    pressCard(fixture: fixture)
-                    ratingsCard(res: res)
-                    if res.events.contains(where: { $0.type == .goal || $0.type == .shotOnTarget || $0.type == .chance }) {
-                        MomentumChartView(
-                            result: res,
-                            homeName: home.shortName,
-                            awayName: away.shortName,
-                            homeColor: Color(hex: home.primaryColor),
-                            awayColor: Color(hex: away.primaryColor == home.primaryColor ? away.secondaryColor : away.primaryColor)
-                        )
-                        .gfCard()
+                ScrollView {
+                    VStack(spacing: 16) {
+                        switch step {
+                        case .fullTime:
+                            scoreboard(fixture: fixture, res: res, home: home, away: away)
+                                .accessibilityFocused($headingFocused)
+                            GFTabs(selection: $tab)
+                                .onChange(of: tab) { _, _ in Haptics.selection() }
+                            switch tab {
+                            case .facts:
+                                matchFacts(res: res, home: home, away: away)
+                                pressCard(fixture: fixture)
+                            case .ratings:
+                                ratingsTab(res: res, home: home, away: away)
+                            case .stats:
+                                if res.events.contains(where: { $0.type == .goal || $0.type == .shotOnTarget || $0.type == .chance }) {
+                                    MomentumChartView(
+                                        result: res,
+                                        homeName: home.name,
+                                        awayName: away.name,
+                                        homeColor: Color(hex: home.primaryColor),
+                                        awayColor: Color(hex: away.primaryColor == home.primaryColor ? away.secondaryColor : away.primaryColor)
+                                    )
+                                    .gfCard()
+                                }
+                                statsCard(res: res, home: home, away: away)
+                            }
+                        case .playerOfMatch:
+                            playerOfMatchScreen(res: res)
+                        case .results:
+                            divisionResults(fixture: fixture)
+                            tableCard(fixture: fixture)
+                        }
                     }
-                    statsCard(res: res, home: home, away: away)
-                    tableCard(fixture: fixture)
-                    elsewhereCard(fixture: fixture)
-                    actions
+                    .padding()
                 }
-                .padding()
+                continueBar
             } else {
                 ContentUnavailableView("No Match Summary", systemImage: "sportscourt",
                                        description: Text("Play a match to see the full-time recap."))
             }
         }
         .stadiumBackground()
-        .navigationTitle("Full Time")
+        .navigationTitle(step == .fullTime ? "Full Time" : step == .playerOfMatch ? "Player of the Match" : "Around the Division")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .animation(.easeInOut(duration: 0.22), value: step)
+        .onChange(of: step) { _, _ in headingFocused = true }
+        .sheet(item: $profilePlayer) { target in
+            NavigationStack { PlayerDetailView(playerId: target.id) }
+                .environment(gameState)
+        }
         .onAppear {
-            guard let fixture = gameState.activeMatchFixture,
+            guard !playedFeedback,
+                  let fixture = gameState.activeMatchFixture,
                   let res = fixture.result,
                   let userClub = gameState.userClub else { return }
+            playedFeedback = true
+            CrowdAtmosphere.shared.stopMatch()
             switch res.outcomeLetter(for: userClub.id) {
-            case "W": SoundManager.shared.play(.win, enabled: gameState.soundEnabled)
-            case "L": SoundManager.shared.play(.loss, enabled: gameState.soundEnabled)
-            default: SoundManager.shared.play(.draw, enabled: gameState.soundEnabled)
+            case "W": SoundManager.shared.play(.win, enabled: gameState.soundEnabled); Haptics.success()
+            case "L": SoundManager.shared.play(.loss, enabled: gameState.soundEnabled); Haptics.error()
+            default: SoundManager.shared.play(.draw, enabled: gameState.soundEnabled); Haptics.warning()
+            }
+            headingFocused = true
+        }
+    }
+
+    // MARK: - Continue
+
+    private var continueBar: some View {
+        VStack(spacing: 8) {
+            Button {
+                Haptics.tap()
+                switch step {
+                case .fullTime: step = .playerOfMatch
+                case .playerOfMatch: step = .results
+                case .results:
+                    // Forget the finished match so the next match day selects the
+                    // next fixture, never this one again.
+                    gameState.closeFinishedMatch()
+                    gameState.currentScreen = .dashboard
+                }
+            } label: {
+                Text(step == .results ? "Back to Home" : "Continue")
+            }
+            .buttonStyle(.gfPrimary)
+            .accessibilityHint(step == .fullTime ? "Shows the player of the match"
+                               : step == .playerOfMatch ? "Shows this week's results in your division"
+                               : "Returns to your club's home screen")
+            if step == .results {
+                Button {
+                    gameState.closeFinishedMatch()
+                    gameState.currentScreen = .matchHistory
+                } label: {
+                    Text("Fixtures and Results")
+                }
+                .buttonStyle(.gfOutline)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+    }
+
+    // MARK: - Match Facts: goals mixed in order with cards, injuries and changes
+
+    private func matchFacts(res: MatchResult, home: Club, away: Club) -> some View {
+        let timeline = res.events.filter { $0.type.isTimelineEvent || $0.type == .halfTime }
+        var runningHome = 0, runningAway = 0
+        var rows: [(event: MatchEvent, score: String?)] = []
+        for ev in timeline {
+            switch ev.type {
+            case .goal, .penalty:
+                if ev.isHomeTeam { runningHome += 1 } else { runningAway += 1 }
+                rows.append((ev, "\(runningHome) - \(runningAway)"))
+            case .ownGoal:
+                if ev.isHomeTeam { runningAway += 1 } else { runningHome += 1 }
+                rows.append((ev, "\(runningHome) - \(runningAway)"))
+            default:
+                rows.append((ev, nil))
+            }
+        }
+        return VStack(spacing: 0) {
+            GFSectionHeader(title: "Match Facts", icon: "list.bullet.rectangle")
+                .padding(.bottom, 6)
+            if rows.allSatisfy({ $0.event.type == .halfTime }) {
+                Text("A quiet game: no goals, cards or changes.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 12)
+            }
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                if row.event.type == .halfTime {
+                    HStack {
+                        Rectangle().fill(Color.white.opacity(0.15)).frame(height: 1)
+                        Text("Half-time").font(.caption.weight(.bold)).foregroundStyle(.secondary)
+                        Rectangle().fill(Color.white.opacity(0.15)).frame(height: 1)
+                    }
+                    .padding(.vertical, 8)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Half-time")
+                } else {
+                    factRow(row.event, score: row.score, home: home, away: away)
+                }
+            }
+        }
+        .gfCard()
+    }
+
+    private func factRow(_ ev: MatchEvent, score: String?, home: Club, away: Club) -> some View {
+        let player = ev.playerId.flatMap { gameState.player(withId: $0)?.player }
+        let assist = ev.assistPlayerId.flatMap { gameState.player(withId: $0)?.player }
+        let club = ev.isHomeTeam ? home : away
+        let name = ev.type == .substitution ? "Substitution" : (player?.fullName ?? ev.shortText)
+        let detail: String? = {
+            switch ev.type {
+            case .goal: return assist.map { "Assist: \($0.fullName)" }
+            case .penalty: return "Penalty"
+            case .ownGoal: return "Own goal"
+            case .substitution: return ev.shortText.components(separatedBy: ": ").last
+            default: return nil
+            }
+        }()
+        var spoken = "\(ev.minute) minutes. \(ev.type.spokenName). "
+        spoken += ev.type == .substitution ? (detail ?? "") : name
+        spoken += ", \(club.name)."
+        if let detail, ev.type != .substitution { spoken += " \(detail)." }
+        if let score { spoken += " Score \(score.replacingOccurrences(of: " - ", with: " to "))." }
+
+        return HStack(alignment: .top, spacing: 10) {
+            Text("\(ev.minute)'")
+                .font(.subheadline.weight(.bold).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 36, alignment: .trailing)
+            EventBadge(type: ev.type)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(.subheadline.weight(.semibold))
+                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+                Text(club.name).font(.caption2).foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 4)
+            if let score {
+                Text(score)
+                    .font(.subheadline.weight(.heavy).monospacedDigit())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.white.opacity(0.12)))
+            }
+        }
+        .padding(.vertical, 7)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spoken)
+    }
+
+    // MARK: - Ratings: both line-ups on the pitch with match ratings
+
+    @ViewBuilder
+    private func ratingsTab(res: MatchResult, home: Club, away: Club) -> some View {
+        let club = ratingsShowHome ? home : away
+        let lineupIds = (ratingsShowHome ? res.homeLineup : res.awayLineup) ?? club.tactics.startingXI
+        let formation = (ratingsShowHome ? res.homeFormation : res.awayFormation) ?? club.tactics.formation
+        let lineup: [Player] = lineupIds.compactMap { gameState.player(withId: $0)?.player }
+        let starters = Set(lineupIds)
+        let subs: [(player: Player, rating: Double)] = res.playerRatings
+            .compactMap { entry -> (player: Player, rating: Double)? in
+                guard !starters.contains(entry.key), let lookup = gameState.player(withId: entry.key),
+                      lookup.club?.id == club.id else { return nil }
+                return (lookup.player, entry.value)
+            }
+            .sorted { $0.rating > $1.rating }
+
+        GFTabs(selection: $ratingsShowHome, options: [(true, home.name), (false, away.name)])
+        if lineup.count >= 11 {
+            FormationPitchView(
+                formation: formation,
+                players: lineup,
+                selectedPlayerId: res.manOfTheMatch,
+                gameRatings: res.playerRatings,
+                tapHint: "Double tap to open the player's profile",
+                onSelect: { profilePlayer = ProfileTarget(id: $0.id) }
+            )
+        } else {
+            ratingsCard(res: res)
+        }
+        if !subs.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                GFSectionHeader(title: "Off the Bench", icon: "arrow.left.arrow.right")
+                ForEach(subs, id: \.player.id) { sub in
+                    Button { profilePlayer = ProfileTarget(id: sub.player.id) } label: {
+                        HStack {
+                            Text(sub.player.fullName).font(.subheadline)
+                            Spacer()
+                            RatingPill(rating: sub.rating)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(sub.player.fullName), substitute, match rating \(String(format: "%.1f", sub.rating))")
+                }
+            }
+            .gfCard()
+        }
+    }
+
+    // MARK: - Player of the Match screen
+
+    @ViewBuilder
+    private func playerOfMatchScreen(res: MatchResult) -> some View {
+        if let id = res.manOfTheMatch ?? res.playerRatings.max(by: { $0.value < $1.value })?.key,
+           let lookup = gameState.player(withId: id) {
+            let player = lookup.player
+            let rating = res.playerRatings[id] ?? 0
+            let goals = res.events.filter { ($0.type == .goal || $0.type == .penalty) && $0.playerId == id }.count
+            let assists = res.events.filter { $0.type == .goal && $0.assistPlayerId == id }.count
+            let isMine = lookup.club?.id == gameState.userClubId
+
+            VStack(spacing: 6) {
+                Image(systemName: "star.circle.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(Color.highlight)
+                    .accessibilityHidden(true)
+                Text("Player of the Match")
+                    .font(.gfDisplay(24))
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityFocused($headingFocused)
+            }
+            .padding(.top, 8)
+
+            Button {
+                Haptics.tap()
+                profilePlayer = ProfileTarget(id: id)
+            } label: {
+                VStack(spacing: 14) {
+                    FaceView(player: player, size: 120, style: .full)
+                        .frame(width: 120, height: 120)
+                        .padding(6)
+                        .background(Circle().fill(Color.white.opacity(0.08)))
+                        .overlay(Circle().stroke(Color.highlight, lineWidth: 3))
+                    Text(player.fullName)
+                        .font(.title2.weight(.bold))
+                        .multilineTextAlignment(.center)
+                    Text("\(player.primaryPosition.displayName) · \(lookup.club?.name ?? "Free agent") · Age \(player.age)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    HStack(spacing: 10) {
+                        potmTile(String(format: "%.1f", rating), "Rating")
+                        potmTile("\(goals)", goals == 1 ? "Goal" : "Goals")
+                        potmTile("\(assists)", assists == 1 ? "Assist" : "Assists")
+                        potmTile("\(player.overall)", "Overall")
+                    }
+                    Label(isMine ? "View profile" : "View profile and make an offer",
+                          systemImage: isMine ? "person.text.rectangle" : "signature")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.highlight)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity)
+                .gfCard()
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(player.fullName), \(player.primaryPosition.displayName) for \(lookup.club?.name ?? "no club"), age \(player.age). Match rating \(String(format: "%.1f", rating)). \(goals) \(goals == 1 ? "goal" : "goals"), \(assists) \(assists == 1 ? "assist" : "assists"). Overall \(player.overall).")
+            .accessibilityHint(isMine ? "Opens the player's profile" : "Opens the player's profile, where you can make a transfer offer")
+            .accessibilityAddTraits(.isButton)
+        } else {
+            Text("No player of the match was recorded.")
+                .foregroundStyle(.secondary)
+                .padding(.top, 40)
+        }
+    }
+
+    private func potmTile(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.headline.weight(.heavy).monospacedDigit())
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.08)))
+    }
+
+    // MARK: - Around the division
+
+    private func divisionResults(fixture: Fixture) -> some View {
+        let week = gameState.season.fixtures(forWeek: fixture.matchWeek)
+            .filter { $0.isPlayed && $0.competition == fixture.competition }
+            .sorted { a, b in a.id == fixture.id ? true : (b.id == fixture.id ? false : a.date < b.date) }
+        return VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(fixture.competition)
+                    .font(.gfDisplay(22))
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityFocused($headingFocused)
+                Text("Matchweek \(fixture.matchWeek) results")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.bottom, 4)
+            ForEach(week, id: \.id) { f in
+                if let r = f.result,
+                   let h = gameState.club(withId: f.homeClubId),
+                   let a = gameState.club(withId: f.awayClubId) {
+                    resultRow(home: h, away: a, result: r, isUser: f.id == fixture.id)
+                }
             }
         }
     }
 
+    private func resultRow(home: Club, away: Club, result: MatchResult, isUser: Bool) -> some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Text(home.name)
+                    .font(.subheadline.weight(result.homeGoals > result.awayGoals ? .bold : .regular))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
+                CrestView(club: home, size: 22)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            Text("\(result.homeGoals) - \(result.awayGoals)")
+                .font(.headline.weight(.heavy).monospacedDigit())
+                .frame(minWidth: 54)
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(isUser ? Color.brand : Color.white.opacity(0.1)))
+            HStack(spacing: 6) {
+                CrestView(club: away, size: 22)
+                Text(away.name)
+                    .font(.subheadline.weight(result.awayGoals > result.homeGoals ? .bold : .regular))
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(isUser ? Color.brand.opacity(0.18) : Color.white.opacity(0.05)))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(isUser ? "Your match. " : "")\(home.name) \(result.homeGoals), \(away.name) \(result.awayGoals)")
+    }
+
     // MARK: - Scoreboard
+
 
     private func scoreboard(fixture: Fixture, res: MatchResult, home: Club, away: Club) -> some View {
         let outcome = gameState.userClubId.map { res.outcomeLetter(for: $0) } ?? "-"
@@ -238,7 +585,7 @@ public struct PostMatchView: View {
                         Text(playerName(event.playerId) ?? event.shortText)
                             .font(.subheadline)
                         Spacer()
-                        Text(event.isHomeTeam ? home.shortName : away.shortName)
+                        Text(event.isHomeTeam ? home.name : away.name)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -530,3 +877,52 @@ public struct PostMatchView: View {
         return (lookup.player, lookup.club?.name ?? "Unknown", res.playerRatings[id] ?? 0)
     }
 }
+
+/// Coloured icon for a timeline event. Colour is never the only signal: each
+/// row also names the event in text and to VoiceOver.
+struct EventBadge: View {
+    let type: MatchEventType
+    var body: some View {
+        Group {
+            switch type {
+            case .yellowCard:
+                RoundedRectangle(cornerRadius: 2).fill(Color(hex: "FACC15")).frame(width: 12, height: 16)
+            case .redCard:
+                RoundedRectangle(cornerRadius: 2).fill(Color(hex: "EF4444")).frame(width: 12, height: 16)
+            case .secondYellow:
+                ZStack {
+                    RoundedRectangle(cornerRadius: 2).fill(Color(hex: "FACC15")).frame(width: 12, height: 16).offset(x: -3, y: -2)
+                    RoundedRectangle(cornerRadius: 2).fill(Color(hex: "EF4444")).frame(width: 12, height: 16).offset(x: 3, y: 2)
+                }
+            case .goal, .penalty:
+                Image(systemName: "soccerball").foregroundStyle(Color.white)
+            case .ownGoal:
+                Image(systemName: "soccerball").foregroundStyle(Color.lossRed)
+            case .injury:
+                Image(systemName: "cross.case.fill").foregroundStyle(Color.lossRed)
+            case .substitution:
+                Image(systemName: "arrow.left.arrow.right").foregroundStyle(Color.winGreen)
+            default:
+                Image(systemName: type.icon).foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 24, height: 22)
+        .accessibilityHidden(true)
+    }
+}
+
+struct RatingPill: View {
+    let rating: Double
+    var body: some View {
+        Text(String(format: "%.1f", rating))
+            .font(.caption)
+            .fontWeight(.heavy)
+            .monospacedDigit()
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(rating >= 8 ? Color(hex: "1E9E62") : rating >= 7 ? Color.brand : rating >= 6 ? Color(hex: "B7791F") : Color(hex: "C53030"))
+            .clipShape(Capsule())
+    }
+}
+

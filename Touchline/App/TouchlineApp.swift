@@ -16,14 +16,19 @@ struct TouchlineApp: App {
     @Environment(\.scenePhase) private var scenePhase
     
     init() {
-        // Native segmented controls match the capsule tabs: navy track,
-        // white selected segment, condensed capitals.
+        Preferences.registerDefaults()
+        CrowdAtmosphere.shared.prepare()
+        // Native segmented controls match Touchline tabs: ink track, cobalt selection.
         let seg = UISegmentedControl.appearance()
-        seg.selectedSegmentTintColor = .white
-        seg.backgroundColor = UIColor(red: 0.075, green: 0.16, blue: 0.29, alpha: 0.92)
-        let font = UIFont.systemFont(ofSize: 12, weight: .heavy)
+        seg.selectedSegmentTintColor = UIColor(red: 0.184, green: 0.357, blue: 0.918, alpha: 1)
+        seg.backgroundColor = UIColor(red: 0.078, green: 0.11, blue: 0.2, alpha: 1)
+        let font = UIFont.systemFont(ofSize: 13, weight: .semibold)
         seg.setTitleTextAttributes([.foregroundColor: UIColor.white, .font: font], for: .normal)
-        seg.setTitleTextAttributes([.foregroundColor: UIColor(red: 0.04, green: 0.11, blue: 0.2, alpha: 1), .font: font], for: .selected)
+        seg.setTitleTextAttributes([.foregroundColor: UIColor.white, .font: font], for: .selected)
+        if let harness = UITestHarness.makeState() {
+            _gameState = State(initialValue: harness)
+            return
+        }
         // Attempt to load an existing autosave, otherwise bootstrap a new world.
         do {
             let savedState = try SaveManager.shared.loadAutoSave()
