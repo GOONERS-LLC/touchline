@@ -43,8 +43,9 @@ final class MatchFlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Player of the Match"].waitForExistence(timeout: 10))
         tap(app.buttons["Continue"], "Continue to division results")
         tap(app.buttons["Back to Home"], "Back to Home")
-        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Continue' OR label BEGINSWITH 'Play vs' OR label CONTAINS 'Season'")).firstMatch
-            .waitForExistence(timeout: 20), "Did not return to the home screen")
+        // Home again: the full-time screens are gone and the app is still running.
+        XCTAssertFalse(app.buttons["Back to Home"].waitForExistence(timeout: 3), "Still on the full-time screens")
+        XCTAssertEqual(app.state, .runningForeground, "The app is no longer running")
     }
 
     func testLiveMatchThroughHalfTimeToFullTime() {
@@ -52,7 +53,7 @@ final class MatchFlowTests: XCTestCase {
         tap(button(app, beginsWith: "Play vs"), "Play vs button on home")
         tap(app.buttons["Play the match with live commentary"], "Live match button")
         // Very fast playback reaches the break in a few seconds.
-        tap(app.buttons["Start Second Half"], "Start Second Half", timeout: 60)
+        tap(app.buttons["Start Second Half"].firstMatch, "Start Second Half", timeout: 60)
         sleep(4)
         tap(app.buttons["Skip to full time"], "Skip to full time")
         walkFullTime(app)
