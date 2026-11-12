@@ -1,0 +1,29 @@
+# macOS
+.DS_Store
+
+# Xcode / build artifacts
+build/
+build-output/
+DerivedData/
+*.xcarchive
+*.dSYM
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+
+# Build artifacts are ignored, EXCEPT released IPAs kept under releases/
+*.ipa
+!releases/**/*.ipa
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Node (data generation tooling)
+node_modules/
+npm-debug.log*
+
+# Editors
+.idea/
+.vscode/
