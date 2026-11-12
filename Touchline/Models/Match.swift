@@ -26,6 +26,11 @@ public struct MatchResult: Codable, Identifiable, Hashable {
     public var awayStats: MatchStats
     public var playerRatings: [UUID: Double]  // Player UUID -> Match Rating (1.0 to 10.0)
     public var manOfTheMatch: UUID?
+    /// Starting elevens and shapes, recorded so the Ratings tab can draw the match lineups.
+    public var homeLineup: [UUID]? = nil
+    public var awayLineup: [UUID]? = nil
+    public var homeFormation: FormationPreset? = nil
+    public var awayFormation: FormationPreset? = nil
     
     public init(
         id: UUID = UUID(),

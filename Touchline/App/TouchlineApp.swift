@@ -17,6 +17,8 @@ struct TouchlineApp: App {
     
     init() {
         Self.configureAppearance()
+        Preferences.registerDefaults()
+        CrowdAtmosphere.shared.prepare()
         // Attempt to load existing autosave or bootstrap initial data
         if let savedState = try? SaveManager.shared.loadAutoSave() {
             // Always land on the main menu when the app opens, so the user

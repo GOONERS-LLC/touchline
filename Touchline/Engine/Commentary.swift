@@ -147,7 +147,7 @@ public struct Commentary {
             "\(shooter.fullName) twists and turns his marker inside out before firing toward the near post, hitting the side netting! Half the stadium thought that was in!"
         ]
         
-        let detailText = templates.randomElement()!
+        let detailText = (templates + moreChances(shooter: shooter, club: club)).randomElement()!
         return (shortText, detailText)
     }
     
@@ -160,7 +160,7 @@ public struct Commentary {
         minute: Int,
         isHome: Bool
     ) -> (short: String, detail: String) {
-        let shortText = "SENSATIONAL SAVE! \(keeper.displayName) \(minute)'"
+        let shortText = saveHeadline(keeper: keeper, minute: minute)
         
         let templates = [
             "WHAT A REFLEX STOP! \(shooter.fullName) looked certain to score with a bullet header from point-blank range, but \(keeper.fullName) flung out a strong hand to tip it over the bar!",
@@ -173,9 +173,9 @@ public struct Commentary {
             "A crucial intervention by \(keeper.fullName)! Sticking out an outstretched boot, he deflects what looked like a guaranteed goal behind for a corner."
         ]
         
-        return (shortText, templates.randomElement()!)
+        return (shortText, (templates + moreSaves(keeper: keeper, shooter: shooter, keeperClub: keeperClub)).randomElement()!)
     }
-    
+
     // MARK: - Misses & Woodwork
     
     public static func miss(
@@ -192,7 +192,7 @@ public struct Commentary {
                 "HOW HAS THAT STAYED OUT?! \(shooter.fullName)'s header loops over the keeper, cannons against the crossbar, bounces on the goal line, and is hooked clear!",
                 "WOODWORK AGAIN! \(shooter.fullName) drills a low drive that rebounds off the base of the upright with the goalkeeper beaten."
             ]
-            return (shortText, woodworkTemplates.randomElement()!)
+            return (shortText, (woodworkTemplates + moreWoodwork(shooter: shooter)).randomElement()!)
         }
         
         let shortText = "CHANCE MISSED! \(shooter.displayName) \(minute)'"
@@ -206,7 +206,7 @@ public struct Commentary {
             "\(shooter.fullName) blazes over! With the defense retreating, the striker opted for power over placement and cleared the crossbar by ten yards.",
             "A glorious delivery went begging as \(shooter.fullName) completely mistimed his jump, brushing the ball with his shoulder instead of making solid contact."
         ]
-        return (shortText, missTemplates.randomElement()!)
+        return (shortText, (missTemplates + moreMisses(shooter: shooter, club: club)).randomElement()!)
     }
     
     // MARK: - Disciplinary Cards
@@ -240,7 +240,7 @@ public struct Commentary {
             "A heavy sliding tackle on the wet pitch. \(player.fullName) got a piece of the ball, but followed through with too much force. The referee brandishes yellow.",
             "Time wasting caution. The referee penalizes \(player.fullName) for delaying the restart of play by kicking the ball away."
         ]
-        return (shortText, yellowTemplates.randomElement()!)
+        return (shortText, (yellowTemplates + moreYellows(player: player)).randomElement()!)
     }
     
     // MARK: - Injuries & Substitutions
@@ -252,7 +252,7 @@ public struct Commentary {
         injuryType: InjuryType
     ) -> (short: String, detail: String) {
         let shortText = "INJURY — \(player.displayName) (\(club.name)) \(minute)'"
-        let detailText = "Play stops as \(player.fullName) goes down clutching his leg in obvious pain. The physios rush onto the pitch with the medical kit. After a brief assessment, he is signaled off the pitch with what looks like a \(injuryType.displayName.lowercased())."
+        let detailText = injuryDetail(player: player, club: club, injuryName: injuryType.displayName.lowercased())
         return (shortText, detailText)
     }
     

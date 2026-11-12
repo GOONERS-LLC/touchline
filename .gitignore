@@ -27,3 +27,4 @@ npm-debug.log*
 # Editors
 .idea/
 .vscode/
+tools/.tm-cache/

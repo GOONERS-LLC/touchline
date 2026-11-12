@@ -439,6 +439,7 @@ public struct PrimaryActionStyle: ButtonStyle {
                     .stroke(Color.white.opacity(0.12), lineWidth: 1)
             )
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .onChange(of: configuration.isPressed) { _, pressed in if pressed { Haptics.tap() } }
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
@@ -459,6 +460,7 @@ public struct SecondaryActionStyle: ButtonStyle {
                     .stroke(Color.hairline, lineWidth: 1)
             )
             .opacity(configuration.isPressed ? 0.8 : 1)
+            .onChange(of: configuration.isPressed) { _, pressed in if pressed { Haptics.selection() } }
     }
 }
 

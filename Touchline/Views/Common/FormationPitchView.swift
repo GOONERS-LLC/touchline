@@ -15,89 +15,75 @@ import SwiftUI
 /// Coordinates run from the user's own goal (y = 1.0, bottom) to the opponent goal
 /// (y = 0.0, top), i.e. an attacking-first orientation.
 enum FormationLayout {
-
-    /// A horizontal role column used to separate players sharing a line.
-    private enum Lane {
-        case gk, leftCenter, center, rightCenter, left, right, leftInner, rightInner
-
-        var x: CGFloat {
-            switch self {
-            case .gk: return 0.50
-            case .leftCenter: return 0.36
-            case .center: return 0.50
-            case .rightCenter: return 0.64
-            case .leftInner: return 0.28
-            case .rightInner: return 0.72
-            case .left: return 0.14
-            case .right: return 0.86
-            }
+    /// Lateral preference: 0 is the left touchline, 1 the right, 0.5 central.
+    private static func lateral(_ p: Position) -> CGFloat {
+        switch p {
+        case .LB, .LWB, .LM, .LW: return 0
+        case .RB, .RWB, .RM, .RW: return 1
+        default: return 0.5
         }
     }
 
-    private struct Slot {
-        let lane: Lane
-        let depth: CGFloat   // 0 (own goal line) ... 1 (near halfway/attack)
-    }
-
-    /// Returns up to 11 slot coordinates, ordered to match `formation.defaultPositions`.
-    static func slots(for formation: FormationPreset) -> [CGPoint] {
-        let positions = formation.defaultPositions
-        let raw: [Slot] = positions.map { slot(for: $0) }
-        return raw.map { CGPoint(x: $0.lane.x, y: 0.90 - $0.depth * 0.78) }
-    }
-
-    /// Maps a position in a formation to a lane + depth. Depth is derived from the
-    /// position's category so lines stay visually separated.
-    private static func slot(for position: Position) -> Slot {
-        switch position {
-        case .GK:
-            return Slot(lane: .gk, depth: 0.02)
-
-        case .CB:
-            return Slot(lane: .center, depth: 0.10)
-        case .LB:
-            return Slot(lane: .left, depth: 0.12)
-        case .RB:
-            return Slot(lane: .right, depth: 0.12)
-        case .LWB:
-            return Slot(lane: .left, depth: 0.24)
-        case .RWB:
-            return Slot(lane: .right, depth: 0.24)
-
-        case .CDM:
-            return Slot(lane: .center, depth: 0.26)
-        case .CM:
-            return Slot(lane: .center, depth: 0.40)
-        case .LM:
-            return Slot(lane: .left, depth: 0.40)
-        case .RM:
-            return Slot(lane: .right, depth: 0.40)
-        case .CAM:
-            return Slot(lane: .center, depth: 0.54)
-
-        case .LW:
-            return Slot(lane: .left, depth: 0.66)
-        case .RW:
-            return Slot(lane: .right, depth: 0.66)
-        case .ST:
-            return Slot(lane: .center, depth: 0.74)
-        case .CF:
-            return Slot(lane: .center, depth: 0.66)
+    /// Small vertical nudges inside a line so holding players sit a touch
+    /// deeper and playmakers a touch higher, without breaking the line.
+    private static func nudge(_ p: Position) -> CGFloat {
+        switch p {
+        case .CDM: return 0.035
+        case .CAM, .CF: return -0.03
+        case .LW, .RW: return -0.015
+        case .LWB, .RWB: return -0.02
+        default: return 0
         }
     }
 
-    /// Spreads slots that share both a lane and a depth so they do not overlap.
+    /// Defensive weight used to place the deepest central player in the middle of a line.
+    private static func depthRank(_ p: Position) -> Int {
+        switch p {
+        case .CB: return 0
+        case .CDM: return 1
+        case .CM: return 2
+        case .CAM: return 3
+        case .CF: return 4
+        case .ST: return 5
+        default: return 2
+        }
+    }
+
+    /// Returns 11 slot coordinates (0...1, own goal at the bottom), ordered to
+    /// match `formation.defaultPositions`. Players are grouped into the
+    /// formation's real lines (4-3-3 draws as four, three, three), wide players
+    /// sit on the flanks and central players spread evenly between them.
     static func resolvedSlots(for formation: FormationPreset) -> [CGPoint] {
-        var points = slots(for: formation)
-        // Group near-identical points and fan them horizontally.
-        var used: [Int: Int] = [:]  // bucket key -> count so far
-        for i in points.indices {
-            let key = Int(points[i].y * 100)
-            let seen = used[key, default: 0]
-            used[key] = seen + 1
-            if seen > 0 {
-                let shift = CGFloat(seen) * 0.16
-                points[i].x = min(0.94, max(0.06, points[i].x + shift))
+        let positions = formation.defaultPositions
+        var points = Array(repeating: CGPoint(x: 0.5, y: 0.9), count: positions.count)
+        guard !positions.isEmpty else { return points }
+        points[0] = CGPoint(x: 0.5, y: 0.915)
+
+        let lines = formation.lines
+        let top: CGFloat = 0.13, bottom: CGFloat = 0.74
+        var cursor = 1
+        for (lineIndex, count) in lines.enumerated() {
+            let indices = Array(cursor..<min(positions.count, cursor + count))
+            cursor += count
+            let y = lines.count == 1 ? (top + bottom) / 2
+                : bottom - (bottom - top) * CGFloat(lineIndex) / CGFloat(lines.count - 1)
+
+            // Order: left flank, centrals (deepest in the middle), right flank.
+            let left = indices.filter { lateral(positions[$0]) == 0 }
+            let right = indices.filter { lateral(positions[$0]) == 1 }
+            var central = indices.filter { lateral(positions[$0]) == 0.5 }
+                .sorted { depthRank(positions[$0]) > depthRank(positions[$1]) }
+            if central.count >= 3 {
+                // Put the most defensive central player in the middle.
+                let deepest = central.removeLast()
+                central.insert(deepest, at: central.count / 2)
+            }
+            let ordered = left + central + right
+            let n = ordered.count
+            let margin: CGFloat = n >= 5 ? 0.09 : n == 4 ? 0.13 : n == 3 ? 0.22 : 0.33
+            for (i, idx) in ordered.enumerated() {
+                let x = n == 1 ? 0.5 : margin + (1 - 2 * margin) * CGFloat(i) / CGFloat(n - 1)
+                points[idx] = CGPoint(x: x, y: y + nudge(positions[idx]))
             }
         }
         return points
@@ -110,17 +96,25 @@ public struct FormationPitchView: View {
     public let formation: FormationPreset
     public let players: [Player]
     public let selectedPlayerId: UUID?
+    /// Match ratings to show on each token (post-match Ratings tab).
+    public var ratings: [UUID: Double]? = nil
+    /// The spoken hint for tapping a token.
+    public var tapHint: String = "Double tap to select this player for substitution"
     public let onSelect: (Player) -> Void
 
     public init(
         formation: FormationPreset,
         players: [Player],
         selectedPlayerId: UUID?,
+        ratings: [UUID: Double]? = nil,
+        tapHint: String = "Double tap to select this player for substitution",
         onSelect: @escaping (Player) -> Void
     ) {
         self.formation = formation
         self.players = players
         self.selectedPlayerId = selectedPlayerId
+        self.ratings = ratings
+        self.tapHint = tapHint
         self.onSelect = onSelect
     }
 
@@ -138,26 +132,32 @@ public struct FormationPitchView: View {
                 ForEach(Array(players.enumerated()), id: \.element.id) { index, player in
                     if index < slots.count {
                         let point = slots[index]
+                        let slotPosition = index < formation.defaultPositions.count ? formation.defaultPositions[index] : player.primaryPosition
+                        let rating = ratings?[player.id]
                         PlayerTokenView(
                             player: player,
-                            isSelected: player.id == selectedPlayerId
+                            isSelected: player.id == selectedPlayerId,
+                            slotPosition: slotPosition,
+                            rating: rating
                         )
                         .position(x: point.x * size.width, y: point.y * size.height)
-                        .onTapGesture { onSelect(player) }
-                        .accessibilityLabel("\(player.fullName), \(player.primaryPosition.displayName), overall \(player.overall)")
+                        .onTapGesture { Haptics.selection(); onSelect(player) }
+                        .accessibilityLabel(rating.map { "\(player.fullName), \(slotPosition.displayName), match rating \(String(format: "%.1f", $0))" }
+                                            ?? "\(player.fullName), playing \(slotPosition.displayName), overall \(player.overall)")
                         .accessibilityAddTraits(player.id == selectedPlayerId ? [.isSelected, .isButton] : .isButton)
-                        .accessibilityHint("Double tap to select this player for substitution")
+                        .accessibilityHint(tapHint)
                     }
                 }
             }
         }
         .aspectRatio(68.0 / 105.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.white.opacity(0.25), lineWidth: 2)
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.hairline, lineWidth: 1)
         )
         .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(formation.displayName) formation")
     }
 
     private func drawPitch(in context: inout GraphicsContext, size: CGSize) {
@@ -202,6 +202,28 @@ public struct FormationPitchView: View {
         let bottomGoal = CGRect(x: field.midX - goalW / 2, y: field.maxY - goalH, width: goalW, height: goalH)
         context.stroke(Path(topGoal), with: .color(lineColor), lineWidth: lineWidth)
         context.stroke(Path(bottomGoal), with: .color(lineColor), lineWidth: lineWidth)
+
+        // Centre spot, penalty spots and the arcs on the edge of each box.
+        let spot = max(2.5, w * 0.008)
+        for c in [CGPoint(x: field.midX, y: field.midY),
+                  CGPoint(x: field.midX, y: field.minY + boxH * 0.72),
+                  CGPoint(x: field.midX, y: field.maxY - boxH * 0.72)] {
+            context.fill(Path(ellipseIn: CGRect(x: c.x - spot, y: c.y - spot, width: spot * 2, height: spot * 2)), with: .color(lineColor))
+        }
+        let arcR = field.width * 0.12
+        var topArc = Path()
+        topArc.addArc(center: CGPoint(x: field.midX, y: field.minY + boxH * 0.72), radius: arcR,
+                      startAngle: .degrees(35), endAngle: .degrees(145), clockwise: false)
+        var bottomArc = Path()
+        bottomArc.addArc(center: CGPoint(x: field.midX, y: field.maxY - boxH * 0.72), radius: arcR,
+                         startAngle: .degrees(215), endAngle: .degrees(325), clockwise: false)
+        context.stroke(topArc, with: .color(lineColor), lineWidth: lineWidth)
+        context.stroke(bottomArc, with: .color(lineColor), lineWidth: lineWidth)
+
+        // Soft floodlight vignette.
+        context.fill(Path(CGRect(origin: .zero, size: size)),
+                     with: .radialGradient(Gradient(colors: [.clear, Color.black.opacity(0.35)]),
+                                           center: CGPoint(x: w / 2, y: h / 2), startRadius: w * 0.3, endRadius: h * 0.75))
     }
 }
 
@@ -210,42 +232,68 @@ public struct FormationPitchView: View {
 public struct PlayerTokenView: View {
     public let player: Player
     public let isSelected: Bool
+    public var slotPosition: Position? = nil
+    public var rating: Double? = nil
 
-    public init(player: Player, isSelected: Bool) {
+    public init(player: Player, isSelected: Bool, slotPosition: Position? = nil, rating: Double? = nil) {
         self.player = player
         self.isSelected = isSelected
+        self.slotPosition = slotPosition
+        self.rating = rating
+    }
+
+    private var role: Position { slotPosition ?? player.primaryPosition }
+
+    private var ratingColor: Color {
+        guard let rating else { return Color.surfaceRaised }
+        if rating >= 8.0 { return Color(hex: "1E9E62") }
+        if rating >= 7.0 { return Color(hex: "2F5BEA") }
+        if rating >= 6.0 { return Color(hex: "B7791F") }
+        return Color(hex: "C53030")
     }
 
     public var body: some View {
-        VStack(spacing: 2) {
-            ZStack {
-                Circle()
-                    .fill(player.primaryPosition.category.accentColor)
-                    .frame(width: 34, height: 34)
-                Circle()
-                    .stroke(isSelected ? Color.white : Color.black.opacity(0.35), lineWidth: isSelected ? 3 : 1)
-                    .frame(width: 34, height: 34)
-                Text(player.primaryPosition.abbreviation)
-                    .font(.system(size: 11, weight: .heavy))
-                    .foregroundStyle(.white)
-                    .minimumScaleFactor(0.6)
-                if isSelected {
+        VStack(spacing: 3) {
+            ZStack(alignment: .topTrailing) {
+                ZStack {
                     Circle()
-                        .stroke(Color.white, lineWidth: 2)
-                        .frame(width: 42, height: 42)
+                        .fill(LinearGradient(colors: [role.category.accentColor, role.category.accentColor.opacity(0.7)],
+                                             startPoint: .top, endPoint: .bottom))
+                        .frame(width: 36, height: 36)
+                        .shadow(color: .black.opacity(0.45), radius: 3, y: 2)
+                    Circle()
+                        .stroke(isSelected ? Color.white : Color.white.opacity(0.35), lineWidth: isSelected ? 3 : 1)
+                        .frame(width: 36, height: 36)
+                    Text(role.abbreviation)
+                        .font(.system(size: 11, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .minimumScaleFactor(0.6)
+                }
+                if let rating {
+                    Text(String(format: "%.1f", rating))
+                        .font(.system(size: 9, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(ratingColor)
+                        .clipShape(Capsule())
+                        .offset(x: 12, y: -6)
                 }
             }
-            Text(player.displayName)
-                .font(.system(size: 9, weight: .semibold))
+            Text(player.lastName.isEmpty ? player.displayName : player.lastName)
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.white)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
-                .background(Color.black.opacity(0.55))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.ink.opacity(0.75))
                 .clipShape(Capsule())
                 .lineLimit(1)
-            Text("\(player.overall)")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.white)
+                .frame(maxWidth: 78)
+            if rating == nil {
+                Text("\(player.overall)")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color.highlight)
+            }
         }
         .contentShape(Rectangle())
     }

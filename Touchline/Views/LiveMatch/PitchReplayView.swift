@@ -192,153 +192,194 @@ public struct PitchReplayView: View {
 
 public struct LiveMatchView: View {
     @Environment(GameState.self) private var gameState
-    
+
     @State private var minute = 0
     @State private var isPlaying = false
     @State private var didSimulate = false
     @State private var ticker: Timer?
-    
+    /// Lines waiting to be read by VoiceOver. While this is non-empty and
+    /// "Wait for VoiceOver" is on, the clock holds so nothing is skipped.
+    @State private var speechQueue: [String] = []
+    @State private var isSpeaking = false
+    @State private var speechWatchdog: DispatchWorkItem?
+
     private var fixture: Fixture? { gameState.activeMatchFixture }
     private var result: MatchResult? { fixture?.result }
-    
+    private var detail: CommentaryDetail { Preferences.commentaryDetail }
+
     public var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 12) {
             if let fixture = fixture,
                let home = gameState.club(withId: fixture.homeClubId),
                let away = gameState.club(withId: fixture.awayClubId) {
-                
+
                 scoreboard(home: home, away: away)
-                
+
                 PitchReplayView(
                     fixture: fixture,
                     homeClub: home,
                     awayClub: away,
                     minute: minute
                 )
-                .padding(.horizontal, 12)
-                
-                timelineFeed
-                
+                .frame(maxHeight: 220)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .padding(.horizontal, 16)
+                .accessibilityHidden(true)
+
+                timelineFeed(home: home, away: away)
+
                 controls(fixture: fixture)
             } else {
                 ContentUnavailableView("No Active Match", systemImage: "sportscourt")
             }
         }
-        .padding(.vertical)
+        .padding(.vertical, 8)
+        .background(Color.ink.ignoresSafeArea())
         .navigationTitle("Live Match")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
         .onAppear(perform: prepare)
-        .onDisappear { stopTicker() }
+        .onDisappear {
+            stopTicker()
+            CrowdAtmosphere.shared.stopMatch()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.announcementDidFinishNotification)) { _ in
+            speakNext()
+        }
     }
-    
+
     // MARK: - Subviews
-    
+
     private func scoreboard(home: Club, away: Club) -> some View {
-        VStack(spacing: 6) {
-            Text(fixture?.competition ?? "Match")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Circle().fill(isPlaying ? Color.lossRed : Color.drawGray).frame(width: 8, height: 8)
+                Text(isPlaying ? "LIVE" : (minute >= 90 ? "FULL TIME" : minute == 0 ? "PRE-MATCH" : "PAUSED"))
+                    .font(.caption2).fontWeight(.heavy).tracking(1.2)
+                Text("· \(fixture?.competition ?? "Match")")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
             HStack {
-                HStack(spacing: 8) {
-                    CrestView(club: home, size: 30)
-                    Text(home.shortName).accessibilityLabel(home.name).font(.headline)
+                VStack(spacing: 4) {
+                    CrestView(club: home, size: 40)
+                    Text(home.name).font(.caption).fontWeight(.semibold).lineLimit(2).multilineTextAlignment(.center)
                 }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                
+                .frame(maxWidth: .infinity)
                 VStack(spacing: 2) {
                     Text(scoreText)
-                        .font(.title)
-                        .fontWeight(.bold)
-                        .frame(width: 90)
+                        .font(.system(size: 38, weight: .black, design: .rounded))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
                     Text("\(minute)'")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                
-                HStack(spacing: 8) {
-                    Text(away.shortName).accessibilityLabel(away.name).font(.headline)
-                    CrestView(club: away, size: 30)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .padding()
-        .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(home.name) \(currentHomeGoals), \(away.name) \(currentAwayGoals), minute \(minute)")
-    }
-    
-    private var timelineFeed: some View {
-        List {
-            let visible = (result?.events ?? []).filter { $0.minute <= minute }
-            if visible.isEmpty {
-                Text(minute == 0 ? "Kick-off imminent..." : "No key events yet.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(visible.reversed()) { ev in
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack {
-                            Image(systemName: ev.type.icon)
-                                .foregroundStyle(.secondary)
-                            Text("\(ev.minute)'").fontWeight(.bold)
-                            Text(ev.shortText)
-                        }
                         .font(.subheadline)
-                    }
-                    .accessibleMatchEvent(ev)
+                        .fontWeight(.bold)
+                        .foregroundStyle(Color.highlight)
+                        .monospacedDigit()
                 }
+                .frame(width: 120)
+                VStack(spacing: 4) {
+                    CrestView(club: away, size: 40)
+                    Text(away.name).font(.caption).fontWeight(.semibold).lineLimit(2).multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
             }
         }
-        .listStyle(.plain)
+        .padding(14)
+        .background(Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.hairline, lineWidth: 1))
+        .padding(.horizontal, 16)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(home.name) \(currentHomeGoals), \(away.name) \(currentAwayGoals). Minute \(minute).")
+        .accessibilityAddTraits(.updatesFrequently)
     }
-    
-    private func controls(fixture: Fixture) -> some View {
-        HStack(spacing: 12) {
-            Button {
-                isPlaying ? stopTicker() : startTicker()
-            } label: {
-                Label(isPlaying ? "Pause" : "Play", systemImage: isPlaying ? "pause.fill" : "play.fill")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(Color.surfaceRaised)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+
+    private func timelineFeed(home: Club, away: Club) -> some View {
+        let visible = (result?.events ?? []).filter { $0.minute <= minute && detail.includes($0.type) }
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 8) {
+                if visible.isEmpty {
+                    Text(minute == 0 ? "The teams are in the tunnel. Kick-off is moments away." : "No incidents yet.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 12)
+                } else {
+                    ForEach(visible.reversed()) { ev in
+                        HStack(alignment: .top, spacing: 10) {
+                            Text("\(ev.minute)'")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                                .frame(width: 30, alignment: .trailing)
+                            EventBadge(type: ev.type)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(ev.shortText)
+                                    .font(.subheadline)
+                                    .fontWeight(ev.type.isMajorEvent ? .bold : .semibold)
+                                Text(ev.detailText)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(ev.type.isMajorEvent ? Color.surfaceRaised : Color.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(ev.minute) minutes. \(ev.type.spokenName). \(ev.detailText)")
+                    }
+                }
             }
-            .disabled(minute >= 90)
-            .accessibilityLabel(isPlaying ? "Pause replay" : "Play replay")
-            
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func controls(fixture: Fixture) -> some View {
+        HStack(spacing: 10) {
             Button {
+                Haptics.tap()
+                isPlaying ? pauseMatch() : startTicker()
+            } label: {
+                Label(isPlaying ? "Pause" : (minute == 0 ? "Kick Off" : "Resume"), systemImage: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.headline)
+            }
+            .buttonStyle(SecondaryActionStyle())
+            .disabled(minute >= 90)
+            .accessibilityLabel(isPlaying ? "Pause match" : "Resume match")
+
+            Button {
+                Haptics.tap()
                 finish(fixture: fixture)
             } label: {
-                Label("Full-Time", systemImage: "flag.checkered")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(Color.brand)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                Label(minute >= 90 ? "Full Time" : "Skip to End", systemImage: "flag.checkered")
+                    .font(.headline)
             }
-            .accessibilityLabel("Skip to full time")
+            .buttonStyle(PrimaryActionStyle())
+            .accessibilityLabel(minute >= 90 ? "Go to full time" : "Skip to full time")
         }
-        .padding(.horizontal)
+        .padding(.horizontal, 16)
     }
-    
+
     // MARK: - Logic
-    
+
     private var currentHomeGoals: Int {
         (result?.goalEvents ?? []).filter { $0.minute <= minute && $0.isHomeTeam }.count
     }
-    
+
     private var currentAwayGoals: Int {
         (result?.goalEvents ?? []).filter { $0.minute <= minute && !$0.isHomeTeam }.count
     }
-    
+
     private var scoreText: String {
         "\(currentHomeGoals) - \(currentAwayGoals)"
     }
-    
+
+    private var holdsForVoiceOver: Bool {
+        UIAccessibility.isVoiceOverRunning && Preferences.waitForVoiceOver
+    }
+
     private func prepare() {
         guard let fixture = fixture else { return }
         // Simulate first (pre-decides the outcome), then replay it minute by minute.
@@ -351,13 +392,26 @@ public struct LiveMatchView: View {
             didSimulate = true
         }
         minute = 0
+        CrowdAtmosphere.shared.startMatch()
+        Haptics.matchEvent(.kickOff)
+        if let home = gameState.club(withId: fixture.homeClubId), let away = gameState.club(withId: fixture.awayClubId) {
+            enqueue("Kick-off at \(home.stadium). \(home.name) against \(away.name).")
+        }
         startTicker()
     }
-    
+
     private func startTicker() {
         guard minute < 90 else { return }
         isPlaying = true
+        CrowdAtmosphere.shared.resume()
+        scheduleTimer()
+    }
+
+    private func scheduleTimer() {
         ticker?.invalidate()
+        guard isPlaying, minute < 90 else { return }
+        // Hold the clock while VoiceOver still has commentary to read.
+        if holdsForVoiceOver && (isSpeaking || !speechQueue.isEmpty) { ticker = nil; return }
         let interval = gameState.matchSettings.speed.tickInterval
         ticker = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { timer in
             Task { @MainActor in
@@ -365,39 +419,94 @@ public struct LiveMatchView: View {
                 if minute >= 90 {
                     timer.invalidate()
                     isPlaying = false
+                    Haptics.matchEvent(.fullTime)
                 } else if gameState.matchSettings.stopAtHalfTime && minute == 45 {
                     timer.invalidate()
                     isPlaying = false
-                    AccessibilityNotification.Announcement("Half-time. Paused for substitutions.").post()
+                    enqueue("Half-time. The match is paused so you can make changes.")
+                } else if holdsForVoiceOver && (isSpeaking || !speechQueue.isEmpty) {
+                    timer.invalidate()
+                    ticker = nil
                 }
             }
         }
     }
-    
+
+    private func pauseMatch() {
+        stopTicker()
+        CrowdAtmosphere.shared.pause()
+    }
+
     private func stopTicker() {
         ticker?.invalidate()
         ticker = nil
         isPlaying = false
     }
-    
+
     private func advanceMinute() {
         let previous = minute
         minute = min(90, minute + 1)
-        
-        // Announce major events as their minute arrives.
-        let newEvents = (result?.events ?? []).filter {
-            $0.minute > previous && $0.minute <= minute && $0.type.isMajorEvent
-        }
+        CrowdAtmosphere.shared.tickMinute()
+
+        let newEvents = (result?.events ?? []).filter { $0.minute > previous && $0.minute <= minute }
         for ev in newEvents {
-            AccessibilityNotification.Announcement(ev.detailText).post()
-            if ev.type == .goal {
+            CrowdAtmosphere.shared.react(to: ev)
+            switch ev.type {
+            case .goal, .penalty, .ownGoal:
+                let userId = gameState.userClub?.id
+                let scoringForUser = (ev.type == .ownGoal) ? ev.clubId != userId : ev.clubId == userId
+                Haptics.goal(forUser: scoringForUser)
                 SoundManager.shared.play(.goal, enabled: gameState.soundEnabled)
+            default:
+                Haptics.matchEvent(ev.type)
+            }
+            guard detail.includes(ev.type), ev.type != .kickOff else { continue }
+            enqueue("\(ev.minute) minutes. \(ev.detailText)")
+            if Preferences.announceScore, [MatchEventType.goal, .penalty, .ownGoal].contains(ev.type),
+               let fixture, let home = gameState.club(withId: fixture.homeClubId), let away = gameState.club(withId: fixture.awayClubId) {
+                enqueue("The score is \(home.name) \(currentHomeGoals), \(away.name) \(currentAwayGoals).")
             }
         }
+
+        if Preferences.minuteUpdates, minute % 15 == 0, minute < 90, minute != 45,
+           let fixture, let home = gameState.club(withId: fixture.homeClubId), let away = gameState.club(withId: fixture.awayClubId) {
+            enqueue("\(minute) minutes played. \(home.name) \(currentHomeGoals), \(away.name) \(currentAwayGoals).")
+        }
+        CrowdAtmosphere.shared.maybeChant(homeLeading: currentHomeGoals > currentAwayGoals)
     }
-    
+
+    // MARK: - VoiceOver pacing
+
+    private func enqueue(_ line: String) {
+        guard UIAccessibility.isVoiceOverRunning else { return }
+        speechQueue.append(line)
+        if !isSpeaking { speakNext() }
+    }
+
+    /// Reads the next queued line. Called again when VoiceOver reports the
+    /// previous announcement finished, with a watchdog in case it never does.
+    private func speakNext() {
+        speechWatchdog?.cancel()
+        guard !speechQueue.isEmpty else {
+            isSpeaking = false
+            if isPlaying && ticker == nil && minute < 90 { scheduleTimer() }
+            return
+        }
+        isSpeaking = true
+        let line = speechQueue.removeFirst()
+        var announcement = AttributedString(line)
+        announcement.accessibilitySpeechAnnouncementPriority = .high
+        AccessibilityNotification.Announcement(announcement).post()
+        let words = Double(line.split(separator: " ").count)
+        let watchdog = DispatchWorkItem { speakNext() }
+        speechWatchdog = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(3, words * 0.45 + 1.5), execute: watchdog)
+    }
+
     private func finish(fixture: Fixture) {
         stopTicker()
+        speechWatchdog?.cancel()
+        speechQueue.removeAll()
         if let idx = gameState.season.fixtures.firstIndex(where: { $0.id == fixture.id }) {
             if !gameState.season.fixtures[idx].isPlayed {
                 gameState.simulateMatch(fixture: &gameState.season.fixtures[idx])

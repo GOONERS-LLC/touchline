@@ -1098,7 +1098,7 @@ private struct OwnerMetricTile: View {
         .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
         .padding(12)
         .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title): \(value)")
     }
@@ -1151,7 +1151,7 @@ public struct OwnerBoardroomView: View {
                         Label(gameState.isEndOfSeason ? "Plan New Season" : "Advance One Week", systemImage: "calendar.badge.clock")
                             .fontWeight(.bold).frame(maxWidth: .infinity).padding()
                     }
-                    .background(Color.brand).foregroundStyle(.white).clipShape(RoundedRectangle(cornerRadius: 14))
+                    .background(Color.brand).foregroundStyle(.white).clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .accessibilityHint("Simulates the next week. Your manager controls matchday.")
 
                     GroupBox("Owner's Briefing") {
@@ -1452,8 +1452,6 @@ public struct DashboardView: View {
             VStack(spacing: 20) {
                 if !gameState.isUnemployed, let club = gameState.userClub {
                     managerHQ(club)
-                    managerReadiness(club)
-                    managerOperations
                 }
                 // Unemployed: surface job offers as the primary action.
                 if gameState.isUnemployed {
@@ -1482,7 +1480,7 @@ public struct DashboardView: View {
                         .frame(maxWidth: .infinity)
                         .background(Color.brand)
                         .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                     }
                     .accessibilityLabel("Job offers")
                 } else {
@@ -1570,6 +1568,10 @@ public struct DashboardView: View {
                     .accessibilityLabel("\(isMatchDay ? "Match day" : "Next match"): \(isHome ? userClub.name : opponent.name) versus \(isHome ? opponent.name : userClub.name). \(nextFixture.competition), matchweek \(nextFixture.matchWeek), \(nextFixture.date). You are \(isHome ? "at home" : "away").")
                 }
 
+                if !gameState.isUnemployed, let club = gameState.userClub {
+                    managerReadiness(club)
+                }
+
                 // League Standing Snapshot
                 if let userClub = gameState.userClub,
                    let currentLeague = gameState.currentLeague {
@@ -1598,35 +1600,7 @@ public struct DashboardView: View {
                     }
                     .padding()
                     .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                }
-                
-                // Club Finances Quick Snapshot
-                if let userClub = gameState.userClub {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Transfer Budget")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(Player.formatCurrency(userClub.finances.transferBudget))
-                                .font(.headline)
-                        }
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Transfer budget \(Player.spokenCurrency(userClub.finances.transferBudget))")
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 4) {
-                            Text("Wage Budget")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text("\(Player.formatCurrency(userClub.finances.currentWageBill)) / \(Player.formatCurrency(userClub.finances.wageBudget))")
-                                .font(.headline)
-                        }
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Wage budget \(Player.spokenCurrency(userClub.finances.wageBudget)) per week, \(Player.spokenCurrency(userClub.finances.currentWageBill)) currently spent")
-                    }
-                    .padding()
-                    .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 }
                 
                 // Inbox — the manager's personal mail, surfaced on Home.
@@ -1664,7 +1638,7 @@ public struct DashboardView: View {
                     }
                     .padding()
                     .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Inbox, \(gameState.unreadMailCount) unread")
@@ -1681,7 +1655,7 @@ public struct DashboardView: View {
                             .accessibilityHint("Opens the full news feed")
                     }
                     
-                    ForEach(gameState.news.prefix(3)) { item in
+                    ForEach(gameState.news.prefix(2)) { item in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(item.headline)
                                 .font(.subheadline)
@@ -1696,7 +1670,7 @@ public struct DashboardView: View {
                 }
                 .padding()
                 .background(Color.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             }
             .padding()
         }
@@ -1779,6 +1753,21 @@ public struct DashboardView: View {
                 ManagerReadinessMetric(value: "\(averageFitness)%", label: "Fitness", tint: .defColor)
                 ManagerReadinessMetric(value: "\(averageSharpness)%", label: "Sharpness", tint: .pitchGreen)
             }
+            Button {
+                gameState.currentScreen = .training
+            } label: {
+                HStack {
+                    Label("Plan this week's training", systemImage: "figure.run")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.footnote).foregroundStyle(.tertiary)
+                }
+                .padding(12)
+                .background(Color.surfaceRaised)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens training")
             Divider()
             HStack {
                 Label("Board: \(gameState.jobSecurity.status)", systemImage: "building.columns.fill")
@@ -1788,9 +1777,7 @@ public struct DashboardView: View {
                     .font(.subheadline.monospacedDigit())
             }
         }
-        .padding()
-        .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .footballCardStyle()
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Match readiness. \(available.count) of \(starters.count) starters available. Average fitness \(averageFitness) percent. Average sharpness \(averageSharpness) percent. Board confidence \(gameState.jobSecurity.boardConfidence) percent, \(gameState.jobSecurity.status).")
     }
@@ -1818,7 +1805,7 @@ public struct DashboardView: View {
                 .frame(maxWidth: .infinity, minHeight: 52)
                 .padding(.horizontal, 8)
                 .background(Color.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityHint("Opens \(title.lowercased()) management")
@@ -1914,7 +1901,7 @@ public struct SquadView: View {
                         }
                         .padding()
                         .background(Color.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .padding(.horizontal)
                     }
 
@@ -2031,7 +2018,7 @@ public struct SquadView: View {
         }
         .padding(.vertical, 4)
         .background(Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .padding(.horizontal)
     }
 }
@@ -2111,8 +2098,27 @@ public struct TacticsView: View {
                             Text(preset.displayName).tag(preset)
                         }
                     }
+                    .onChange(of: userClub.tactics.formation) { _, _ in Haptics.selection() }
+
+                    Text(userClub.tactics.formation.styleNote)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    let starters = userClub.startingXIPlayers
+                    if starters.count >= 11 {
+                        FormationPitchView(
+                            formation: userClub.tactics.formation,
+                            players: starters,
+                            selectedPlayerId: nil,
+                            tapHint: "Shows where this player lines up",
+                            onSelect: { _ in }
+                        )
+                        .frame(maxWidth: 340)
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
+                    }
                 }
-                
+
                 Section(header: Text("Tactical Instructions")) {
                     Picker("Mentality", selection: Binding(
                         get: { userClub.tactics.mentality },
@@ -2726,248 +2732,15 @@ public struct MatchDayView: View {
     }
 }
 
-// MARK: - Post Match Screen
-
-public struct PostMatchView: View {
-    @Environment(GameState.self) private var gameState
-    
-    public var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                if let fixture = gameState.activeMatchFixture,
-                   let res = fixture.result,
-                   let home = gameState.club(withId: fixture.homeClubId),
-                   let away = gameState.club(withId: fixture.awayClubId) {
-                    
-                    Text("Full Time")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .foregroundStyle(.secondary)
-                    
-                    HStack(spacing: 24) {
-                        VStack {
-                            Text(home.shortName).accessibilityLabel(home.name).font(.title).fontWeight(.bold)
-                            Text("\(res.homeGoals)").font(.system(size: 48, weight: .black))
-                        }
-                        Text("-").font(.title).foregroundStyle(.secondary)
-                        VStack {
-                            Text(away.shortName).accessibilityLabel(away.name).font(.title).fontWeight(.bold)
-                            Text("\(res.awayGoals)").font(.system(size: 48, weight: .black))
-                        }
-                    }
-                    
-                    // Player of the Match
-                    if let potm = potmPlayer(for: res) {
-                        Button {
-                            gameState.currentScreen = .playerDetail(potm.player.id)
-                        } label: {
-                            VStack(spacing: 8) {
-                                Text("Player of the Match")
-                                    .font(.caption)
-                                    .fontWeight(.bold)
-                                    .foregroundStyle(.secondary)
-                                HStack(spacing: 12) {
-                                    FaceView(player: potm.player, size: 52, style: .full)
-                                        .frame(width: 52, height: 52)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(potm.player.fullName)
-                                            .font(.headline)
-                                        Text("\(potm.clubName) • \(potm.player.primaryPosition.abbreviation)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    VStack(spacing: 2) {
-                                        Image(systemName: "star.fill")
-                                            .foregroundStyle(.yellow)
-                                        Text(String(format: "%.1f", potm.rating))
-                                            .font(.headline)
-                                            .fontWeight(.bold)
-                                    }
-                                }
-                            }
-                            .padding()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.horizontal)
-                        .accessibilityLabel("Player of the Match, \(potm.player.fullName), rating \(String(format: "%.1f", potm.rating)). Double tap to view stats")
-                    }
-                    
-                    // Goal timeline
-                    if !res.goalEvents.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Goals")
-                                .font(.headline)
-                            ForEach(res.goalEvents) { event in
-                                HStack(spacing: 10) {
-                                    Text("\(event.minute)'")
-                                        .font(.caption)
-                                        .fontWeight(.bold)
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 34, alignment: .trailing)
-                                    Image(systemName: "soccerball")
-                                        .foregroundStyle(.primary)
-                                    Text(event.shortText)
-                                        .font(.subheadline)
-                                    Spacer()
-                                    Text(event.isHomeTeam ? home.shortName : away.shortName).accessibilityLabel(event.isHomeTeam ? home.name : away.name)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .padding(.horizontal)
-                    }
-                    
-                    // Match Stats Overview
-                    VStack(spacing: 8) {
-                        StatComparisonRow(title: "Possession", home: "\(Int(res.homeStats.possession))%", away: "\(Int(res.awayStats.possession))%")
-                        StatComparisonRow(title: "Shots", home: "\(res.homeStats.shots)", away: "\(res.awayStats.shots)")
-                        StatComparisonRow(title: "Shots on Target", home: "\(res.homeStats.shotsOnTarget)", away: "\(res.awayStats.shotsOnTarget)")
-                        StatComparisonRow(title: "Corners", home: "\(res.homeStats.corners)", away: "\(res.awayStats.corners)")
-                        StatComparisonRow(title: "Fouls", home: "\(res.homeStats.fouls)", away: "\(res.awayStats.fouls)")
-                        StatComparisonRow(title: "Expected Goals (xG)", home: String(format: "%.2f", res.homeStats.xG), away: String(format: "%.2f", res.awayStats.xG))
-                    }
-                    .padding()
-                    .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .padding(.horizontal)
-                    
-                    if res.attendance > 0 {
-                        Text("Attendance: \(res.attendance.formatted())")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    
-                    // Rest of the league's results for this matchweek.
-                    let otherResults = otherResultsThisWeek(for: fixture)
-                    if !otherResults.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Elsewhere in Matchweek \(fixture.matchWeek)")
-                                .font(.headline)
-                            ForEach(otherResults, id: \.fixture.id) { entry in
-                                HStack {
-                                    Text(entry.homeName)
-                                        .font(.subheadline)
-                                        .frame(maxWidth: .infinity, alignment: .trailing)
-                                    Text("\(entry.result.homeGoals) - \(entry.result.awayGoals)")
-                                        .font(.subheadline)
-                                        .fontWeight(.bold)
-                                        .padding(.horizontal, 8)
-                                    Text(entry.awayName)
-                                        .font(.subheadline)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                            }
-                        }
-                        .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .padding(.horizontal)
-                    }
-                    
-                    VStack(spacing: 12) {
-                        Button(action: {
-                            gameState.currentScreen = .matchHistory
-                        }) {
-                            Label("View Match History", systemImage: "list.bullet.rectangle")
-                                .fontWeight(.semibold)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.surfaceRaised)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        
-                        Button(action: {
-                            gameState.currentScreen = .dashboard
-                        }) {
-                            Text("Back to Home")
-                                .fontWeight(.semibold)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.brand)
-                                .foregroundStyle(.white)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                    }
-                    .padding(.horizontal, 32)
-                } else {
-                    ContentUnavailableView("No Match Summary", systemImage: "sportscourt", description: Text("Play a match to see the full-time recap."))
-                }
-            }
-            .padding(.vertical)
-        }
-        .navigationTitle("Match Summary")
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            guard let fixture = gameState.activeMatchFixture,
-                  let res = fixture.result,
-                  let userClub = gameState.userClub else { return }
-            let outcome = res.outcomeLetter(for: userClub.id)
-            switch outcome {
-            case "W": SoundManager.shared.play(.win, enabled: gameState.soundEnabled)
-            case "L": SoundManager.shared.play(.loss, enabled: gameState.soundEnabled)
-            default: SoundManager.shared.play(.draw, enabled: gameState.soundEnabled)
-            }
-        }
-    }
-
-    private func otherResultsThisWeek(for fixture: Fixture) -> [(fixture: Fixture, homeName: String, awayName: String, result: MatchResult)] {
-        gameState.season.fixtures(forWeek: fixture.matchWeek)
-            .filter { $0.isPlayed && $0.id != fixture.id && $0.competition == fixture.competition }
-            .compactMap { f in
-                guard let result = f.result,
-                      let home = gameState.club(withId: f.homeClubId),
-                      let away = gameState.club(withId: f.awayClubId) else { return nil }
-                return (f, home.name, away.name, result)
-            }
-    }
-
-    /// Resolves the match's Player of the Match into a displayable tuple.
-    /// Prefers the engine-designated MOTM, falling back to the highest-rated
-    /// player if none was recorded.
-    private func potmPlayer(for res: MatchResult) -> (player: Player, clubName: String, rating: Double)? {
-        var playerId = res.manOfTheMatch
-        if playerId == nil {
-            playerId = res.playerRatings.max(by: { $0.value < $1.value })?.key
-        }
-        guard let id = playerId,
-              let lookup = gameState.player(withId: id) else { return nil }
-        let rating = res.playerRatings[id] ?? 0
-        return (lookup.player, lookup.club?.name ?? "Unknown", rating)
-    }
-}
-
-public struct StatComparisonRow: View {
-    public let title: String
-    public let home: String
-    public let away: String
-    
-    public var body: some View {
-        HStack {
-            Text(home).frame(width: 60, alignment: .leading).fontWeight(.semibold)
-            Spacer()
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            Text(away).frame(width: 60, alignment: .trailing).fontWeight(.semibold)
-        }
-        .font(.subheadline)
-    }
-}
+// Post Match flow lives in Views/PostMatch/PostMatchFlow.swift
 
 // MARK: - Player Detail Screen
 
 public struct PlayerDetailView: View {
     @Environment(GameState.self) private var gameState
     public let playerId: UUID
+    /// When shown in a sheet (for example from Player of the Match), closes it.
+    public var onDone: (() -> Void)? = nil
     @State private var showingRenewal = false
     
     public var body: some View {
@@ -3036,7 +2809,7 @@ public struct PlayerDetailView: View {
                     .padding()
                     .frame(maxWidth: .infinity)
                     .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                     
                     // Headline face stats (FIFA-style)
                     VStack(alignment: .leading, spacing: 10) {
@@ -3046,7 +2819,7 @@ public struct PlayerDetailView: View {
                     }
                     .padding()
                     .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                     
                     // Technical Attributes
                     VStack(alignment: .leading, spacing: 10) {
@@ -3061,7 +2834,7 @@ public struct PlayerDetailView: View {
                     }
                     .padding()
                     .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                     
                     // Physical Attributes
                     VStack(alignment: .leading, spacing: 10) {
@@ -3073,7 +2846,7 @@ public struct PlayerDetailView: View {
                     }
                     .padding()
                     .background(Color.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
 
                     // Contract status and renewal for players at the user's club.
                     if let contract = player.contract, let userClub = gameState.userClub, club?.id == userClub.id {
@@ -3119,7 +2892,7 @@ public struct PlayerDetailView: View {
                         }
                         .padding()
                         .background(Color.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                     }
                     
                     // Transfer action: only for players not already at the user's club.
@@ -3147,7 +2920,7 @@ public struct PlayerDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") { gameState.currentScreen = .squad }
+                Button("Done") { if let onDone { onDone() } else { gameState.currentScreen = .squad } }
                     .accessibilityLabel("Close player profile")
             }
         }
@@ -3322,8 +3095,10 @@ public struct SettingsView: View {
                 )) {
                     Label("Sound Effects", systemImage: "speaker.wave.2.fill")
                 }
-                .accessibilityHint("Plays sound and haptic feedback for goals, wins and losses")
+                .accessibilityHint("Plays sounds for goals, wins and losses")
             }
+
+            FeedbackSettingsSection()
             
             Section(header: Text("Match Playback")) {
                 Picker("Replay Speed", selection: Binding(
