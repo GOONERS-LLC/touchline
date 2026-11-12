@@ -921,22 +921,13 @@ public final class GameState: Codable {
         processTransferNegotiations()
         processAIIncomingBids()
         
-        // 4. Advance calendar date by 7 days
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        let gapToNextSlot = max(1, SeasonCalendar.dayOffset(forSlot: season.currentWeek + 1) - SeasonCalendar.dayOffset(forSlot: season.currentWeek))
-        if let currentDate = formatter.date(from: season.currentDate),
-           let nextWeekDate = Calendar.current.date(byAdding: .day, value: gapToNextSlot, to: currentDate) {
-            var next = formatter.string(from: nextWeekDate)
-            // A midweek European game moves the date on a few days; snap back to
-            // next week's domestic fixtures so the calendar never drifts.
-            if let firstNext = season.fixtures(forWeek: season.currentWeek + 1)
-                .filter({ !$0.isEuropean }).map({ $0.date }).min(),
-               firstNext < next, firstNext > season.currentDate {
-                next = firstNext
-            }
-            season.currentDate = next
+        // 4. Move to the next slot on the season calendar (a Saturday or a
+        // Wednesday cup night). Taken straight from the calendar, so a midweek
+        // European game can never push the date past the next match; it only
+        // ever moves forward.
+        let nextSlotDate = dateForWeek(season.currentWeek + 1)
+        if nextSlotDate > season.currentDate {
+            season.currentDate = nextSlotDate
         }
         
         // 5. Advance matchweek counter
