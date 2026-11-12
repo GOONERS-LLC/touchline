@@ -262,8 +262,8 @@ struct CalendarAdvanceView: View {
             }
             for fixture in results.prefix(4) {
                 guard let r = fixture.result else { continue }
-                let home = gameState.club(withId: fixture.homeClubId)?.name ?? "?"
-                let away = gameState.club(withId: fixture.awayClubId)?.name ?? "?"
+                let home = gameState.club(withId: fixture.homeClubId)?.shortName ?? "?"
+                let away = gameState.club(withId: fixture.awayClubId)?.shortName ?? "?"
                 fresh.append(FeedEvent(icon: "sportscourt", text: "\(home) \(r.homeGoals)-\(r.awayGoals) \(away)", highlight: false))
             }
             if results.count > 4 {

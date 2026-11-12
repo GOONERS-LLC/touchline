@@ -132,8 +132,8 @@ jobs:
       - name: Crash tests on the iPhone simulator
         working-directory: ${{ steps.locate.outputs.projdir }}
         run: |
-          # Plays live and instant matches, the owner's watch mode, half a
-          # season and the kit designer on a simulator. Any crash fails the build.
+          # Plays a live match through half-time, an instant result, the owner
+          # watching, and half a season on a simulator. Any crash fails the build.
           SIM=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in sorted(d.items(), reverse=True) if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
           echo "Using simulator $SIM"
           set -o pipefail

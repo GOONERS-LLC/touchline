@@ -82,8 +82,8 @@ public struct ContentView: View {
         .groupBoxStyle(GFGroupBoxStyle())
         .environment(\.stadiumTheme, stadiumTheme)
         .preferredColorScheme(stadiumTheme ? .dark : nil)
-        .tint(stadiumTheme ? Color(hex: "FFB020") : nil)
-        .toolbarBackground(stadiumTheme ? Color(hex: "0A0F1E").opacity(0.94) : Color(UIColor.systemBackground), for: .navigationBar)
+        .tint(stadiumTheme ? Color(hex: "FF8A65") : nil)
+        .toolbarBackground(stadiumTheme ? Color(hex: "07171A").opacity(0.92) : Color(UIColor.systemBackground), for: .navigationBar)
         .dynamicTypeBounds()
     }
 }
@@ -104,30 +104,28 @@ public struct MainMenuView: View {
     public var body: some View {
         ScrollView {
             VStack(spacing: 18) {
-                // The Touchline mark: a white T standing on an amber touchline.
-                VStack(alignment: .leading, spacing: 10) {
-                    ZStack(alignment: .bottom) {
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .fill(LinearGradient(colors: [Color(hex: "2F5BEA"), Color(hex: "14215A")], startPoint: .topTrailing, endPoint: .bottomLeading))
-                            .frame(width: 84, height: 84)
-                        VStack(spacing: 0) {
-                            Rectangle().fill(Color.white).frame(width: 46, height: 10)
-                            Rectangle().fill(Color.white).frame(width: 10, height: 40)
-                        }
-                        .offset(y: -18)
-                        Capsule().fill(Color(hex: "FFB020")).frame(width: 62, height: 4).offset(y: -11)
+                // Logo over the stadium
+                VStack(spacing: 4) {
+                    ZStack {
+                        Image(systemName: "shield.fill")
+                            .font(.system(size: 64))
+                            .foregroundStyle(Color.white.opacity(0.92))
+                        Image(systemName: "soccerball")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundStyle(Color.gfNight)
+                            .offset(y: -6)
                     }
-                    .shadow(color: Color(hex: "2F5BEA").opacity(0.45), radius: 16, y: 6)
-                    Text("Touchline")
-                        .font(.system(size: 44, weight: .heavy, design: .rounded))
+                    .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+                    Text("TOUCHLINE")
+                        .font(.gfDisplay(30))
                         .foregroundStyle(.white)
-                    Text("Run the club. Read the game.")
-                        .font(.system(size: 16, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color(hex: "FFB020"))
+                    Text("FOOTBALL MANAGEMENT")
+                        .font(.gfLabel(14))
+                        .tracking(3)
+                        .foregroundStyle(.white.opacity(0.75))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 34)
-                .padding(.bottom, 10)
+                .padding(.top, 30)
+                .padding(.bottom, 14)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Touchline Football Management")
                 .accessibilityAddTraits(.isHeader)
@@ -297,14 +295,14 @@ public struct GameModeCard: View {
 public struct ClubCreationView: View {
     @Environment(GameState.self) private var gameState
     
-    @State private var clubName = "AFC Phoenix"
-    @State private var shortName = "PHX"
-    @State private var stadiumName = "Phoenix Arena"
-    @State private var cityName = "Manchester"
-    @State private var primaryColor = "#EF0107"
-    @State private var secondaryColor = "#FFFFFF"
+    @State private var clubName = "Harbour Town"
+    @State private var shortName = "HBT"
+    @State private var stadiumName = "Quayside Park"
+    @State private var cityName = "Bristol"
+    @State private var primaryColor = "#1F7A6E"
+    @State private var secondaryColor = "#E4573D"
     @State private var selectedReplaceClubId: UUID?
-    @State private var ownerName = "Alex Morgan"
+    @State private var ownerName = "Sam Carter"
     @State private var clubVision: ClubVision = .sustainable
     @State private var creationError: String?
     
@@ -531,8 +529,8 @@ public struct ClubSelectView: View {
 public struct ManagerCreationView: View {
     @Environment(GameState.self) private var gameState
 
-    @State private var firstName = "Alex"
-    @State private var lastName = "Morgan"
+    @State private var firstName = "Sam"
+    @State private var lastName = "Carter"
     @State private var nationality: ManagerNationality = .england
     @State private var age = 38
     @State private var background: ManagerBackground = .journeyman
@@ -1690,7 +1688,7 @@ public struct StandingsView: View {
                             .foregroundStyle(.secondary)
                             .frame(width: 22)
                         CrestView(club: entry.club, size: 20)
-                        Text("\(entry.player.displayName.uppercased()) (\(entry.club.name))")
+                        Text("\(entry.player.displayName.uppercased()) (\(entry.club.shortName))")
                             .font(.subheadline.weight(entry.club.isUserClub ? .heavy : .regular))
                             .lineLimit(1)
                         Spacer()
@@ -2015,7 +2013,7 @@ public struct TransferHubView: View {
                                     .font(.subheadline.monospacedDigit())
                                     .fontWeight(.semibold)
                             }
-                            Text("\(record.fromClubName) to \(record.toClubName)")
+                            Text("\(record.fromClubName) → \(record.toClubName)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -2599,22 +2597,16 @@ public struct MatchDayView: View {
                 .foregroundStyle(.white.opacity(0.85))
             HStack {
                 VStack(spacing: 6) {
-                    ZStack(alignment: .bottomTrailing) {
-                        KitView(kit: home.effectiveKit, sponsor: home.isUserClub ? gameState.shirtSponsorName : nil, monogram: home.shortName, height: 96)
-                        CrestView(club: home, size: 30).offset(x: 8, y: 4)
-                    }
+                    CrestView(club: home, size: 40)
                     Text(home.name).font(.caption.weight(.bold)).multilineTextAlignment(.center).lineLimit(2)
                 }
                 .frame(maxWidth: .infinity)
                 VStack(spacing: 4) {
-                    Text("v").font(.system(size: 30, weight: .heavy, design: .rounded)).foregroundStyle(Color.highlight).accessibilityLabel("versus")
+                    Text("VS").font(.system(size: 28, weight: .black, design: .rounded))
                     Text(fixture.date).font(.caption2.monospacedDigit()).opacity(0.8)
                 }
                 VStack(spacing: 6) {
-                    ZStack(alignment: .bottomTrailing) {
-                        KitView(kit: away.effectiveKit, sponsor: away.isUserClub ? gameState.shirtSponsorName : nil, monogram: away.shortName, height: 96)
-                        CrestView(club: away, size: 30).offset(x: 8, y: 4)
-                    }
+                    CrestView(club: away, size: 40)
                     Text(away.name).font(.caption.weight(.bold)).multilineTextAlignment(.center).lineLimit(2)
                 }
                 .frame(maxWidth: .infinity)
@@ -2806,9 +2798,9 @@ struct MatchPreviewCard: View {
     /// Pre-match odds: a split bar with each outcome's chance and price.
     private func oddsBar(_ odds: MatchOdds) -> some View {
         let parts: [(label: String, p: Double, color: Color)] = [
-            (home.name, odds.home, Color.winGreen),
+            (home.shortName, odds.home, Color.winGreen),
             ("Draw", odds.draw, Color.secondary),
-            (away.name, odds.away, Color.lossRed)
+            (away.shortName, odds.away, Color.lossRed)
         ]
         return VStack(alignment: .leading, spacing: 6) {
             Text("Pre-Match Odds").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -3395,7 +3387,7 @@ extension PlayerDetailView {
                 ForEach(log) { line in
                     statLine(year: line.season, team: line.club, p: line.appearances, a: line.goals, b: line.assists, rating: line.averageRating, bold: false)
                 }
-                statLine(year: gameState.season.year, team: club?.name ?? "–", p: now.appearances,
+                statLine(year: gameState.season.year, team: club?.shortName ?? "–", p: now.appearances,
                          a: isKeeper ? now.cleanSheets : now.goals, b: isKeeper ? now.manOfTheMatch : now.assists,
                          rating: now.averageRating, bold: false)
                 Divider()
@@ -3489,7 +3481,7 @@ extension PlayerDetailView {
                 .font(.gfLabel(17))
                 .padding(.horizontal, 44).padding(.vertical, 13)
                 .foregroundStyle(.white)
-                .background(Capsule().fill(Color(hex: "3D7A5C")))
+                .background(Capsule().fill(Color(hex: "E4573D")))
                 .overlay(Capsule().stroke(Color.white.opacity(0.85), lineWidth: 2))
         }
         .padding(.vertical, 8)
@@ -3795,6 +3787,9 @@ public struct SettingsView: View {
     @State private var backupSize = 0
     @AppStorage("gfStadiumTheme") private var stadiumTheme = true
     @AppStorage("gfShowMatchRating") private var showMatchRating = false
+    @AppStorage(CrowdAtmosphere.enabledKey) private var crowdSound = true
+    @AppStorage(CrowdAtmosphere.volumeKey) private var crowdVolume = 0.8
+    @AppStorage(Haptics.enabledKey) private var haptics = true
 
     private func refreshStorage() {
         storageUsed = SaveManager.shared.storageUsed()
@@ -3834,14 +3829,34 @@ public struct SettingsView: View {
                 )) {
                     Label("Sound Effects", systemImage: "speaker.wave.2.fill")
                 }
-                .accessibilityHint("Plays sounds for goals, wins and losses")
+                .accessibilityHint("Plays sound and haptic feedback for goals, wins and losses")
                 Toggle(isOn: $stadiumTheme) {
-                    Label("Floodlight Theme", systemImage: "sparkles.tv")
+                    Label("Stadium Theme", systemImage: "sparkles.tv")
                 }
-                .accessibilityHint("The dark Touchline look. Turn off to follow the system appearance")
+                .accessibilityHint("A dark floodlit-stadium look. Turn off to follow the system appearance")
             }
 
-            FeedbackSettingsSection()
+            Section(header: Text("Crowd and Haptics"), footer: Text("Real stadium recordings: the home crowd roars, groans, boos and sings as the match unfolds.")) {
+                Toggle(isOn: $crowdSound) {
+                    Label("Crowd Sound", systemImage: "person.3.sequence.fill")
+                }
+                .accessibilityHint("Plays a live stadium crowd during matches")
+                if crowdSound {
+                    Slider(value: $crowdVolume, in: 0.1...1, step: 0.1) {
+                        Text("Crowd Volume")
+                    } minimumValueLabel: {
+                        Image(systemName: "speaker.fill").accessibilityHidden(true)
+                    } maximumValueLabel: {
+                        Image(systemName: "speaker.wave.3.fill").accessibilityHidden(true)
+                    }
+                    .accessibilityLabel("Crowd volume")
+                    .accessibilityValue("\(Int(crowdVolume * 100)) percent")
+                }
+                Toggle(isOn: $haptics) {
+                    Label("Haptics", systemImage: "iphone.radiowaves.left.and.right")
+                }
+                .accessibilityHint("Vibrations for goals, cards, saves and the woodwork during matches")
+            }
 
             Section(header: Text("Lineups"),
                     footer: Text("The match rating is the base rating adjusted for match fitness, sharpness, recent form and morale: how well the player is likely to play next. Green means above his base rating, red below.")) {
@@ -4518,7 +4533,7 @@ public struct EuropeanCompetitionsView: View {
             Section {
                 Picker("Competition", selection: $selectedCompetition) {
                     ForEach(EuropeanCompetition.allCases) { comp in
-                        Text(comp.displayName).tag(comp)
+                        Text(comp.shortName).tag(comp)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -4568,7 +4583,7 @@ public struct EuropeanCompetitionsView: View {
                         .filter { $0.homeClubId == userClubId || $0.awayClubId == userClubId }
                         .sorted { $0.matchweek < $1.matchweek }
                     if !userFixtures.isEmpty {
-                        Section(header: Text("Your \(state.competition.displayName) Fixtures")) {
+                        Section(header: Text("Your \(state.competition.shortName) Fixtures")) {
                             ForEach(userFixtures) { fx in
                                 EuropeanFixtureRow(fixture: fx, competitionState: state)
                             }
@@ -4858,7 +4873,7 @@ public struct InternationalHubView: View {
             Section {
                 Picker("Tournament", selection: $selectedTournament) {
                     ForEach(InternationalTournament.Kind.allCases) { kind in
-                        Text(kind.displayName).tag(kind)
+                        Text(kind.shortName).tag(kind)
                     }
                 }
                 .pickerStyle(.menu)
@@ -4981,7 +4996,7 @@ public struct YouthAcademyView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(scout.name)
                                     .font(.body)
-                                Text("Lead Scout, \(scout.quality)-star")
+                                Text("Lead Scout • \(String(repeating: "★", count: scout.quality))")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }

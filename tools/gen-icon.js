@@ -22,9 +22,9 @@ for (let y = 0; y < SIZE; y++) {
     // Diagonal glow from the top right, like a floodlight.
     const glow = Math.max(0, 1 - Math.hypot(x - SIZE * 0.85, y - SIZE * 0.1) / (SIZE * 0.9));
     set(x, y,
-      Math.min(255, lerp(18, 8, k) + Math.round(glow * 30)),
-      Math.min(255, lerp(30, 12, k) + Math.round(glow * 60)),
-      Math.min(255, lerp(72, 28, k) + Math.round(glow * 150)));
+      Math.min(255, lerp(7, 4, k) + Math.round(glow * 20)),
+      Math.min(255, lerp(46, 20, k) + Math.round(glow * 120)),
+      Math.min(255, lerp(52, 22, k) + Math.round(glow * 110)));
   }
 }
 function rect(x0, y0, x1, y1, color) {
@@ -34,7 +34,7 @@ function disc(cx, cy, r, color) {
   for (let y = cy - r; y <= cy + r; y++) for (let x = cx - r; x <= cx + r; x++)
     if (Math.hypot(x - cx, y - cy) <= r) set(x, y, ...color);
 }
-const white = [245, 247, 255], amber = [255, 176, 32];
+const white = [245, 247, 255], amber = [228, 87, 61];
 // Crossbar and stem of the T.
 rect(212, 250, 812, 360, white);
 rect(457, 250, 567, 780, white);
@@ -42,7 +42,7 @@ rect(457, 250, 567, 780, white);
 rect(120, 820, 904, 860, amber);
 // Ball resting on the touchline, right of the stem.
 disc(700, 740, 70, amber);
-disc(700, 740, 30, [18, 30, 72]);
+disc(700, 740, 30, [7, 40, 44]);
 
 // Encode PNG.
 function chunk(type, data) {

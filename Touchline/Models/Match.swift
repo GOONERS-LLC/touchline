@@ -26,11 +26,6 @@ public struct MatchResult: Codable, Identifiable, Hashable {
     public var awayStats: MatchStats
     public var playerRatings: [UUID: Double]  // Player UUID -> Match Rating (1.0 to 10.0)
     public var manOfTheMatch: UUID?
-    /// Starting elevens and shapes, recorded so the Ratings tab can draw the match lineups.
-    public var homeLineup: [UUID]? = nil
-    public var awayLineup: [UUID]? = nil
-    public var homeFormation: FormationPreset? = nil
-    public var awayFormation: FormationPreset? = nil
     
     public init(
         id: UUID = UUID(),
@@ -73,7 +68,6 @@ public struct MatchResult: Codable, Identifiable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case id, homeClubId, awayClubId, homeGoals, awayGoals, events, matchWeek
         case competition, date, attendance, homeStats, awayStats, playerRatings, manOfTheMatch
-        case homeLineup, awayLineup, homeFormation, awayFormation
     }
 
     public init(from decoder: Decoder) throws {
@@ -92,10 +86,6 @@ public struct MatchResult: Codable, Identifiable, Hashable {
         awayStats = try c.decodeIfPresent(MatchStats.self, forKey: .awayStats) ?? .empty
         playerRatings = try c.decodeIfPresent([UUID: Double].self, forKey: .playerRatings) ?? [:]
         manOfTheMatch = try c.decodeIfPresent(UUID.self, forKey: .manOfTheMatch)
-        homeLineup = try c.decodeIfPresent([UUID].self, forKey: .homeLineup)
-        awayLineup = try c.decodeIfPresent([UUID].self, forKey: .awayLineup)
-        homeFormation = try? c.decodeIfPresent(FormationPreset.self, forKey: .homeFormation)
-        awayFormation = try? c.decodeIfPresent(FormationPreset.self, forKey: .awayFormation)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -114,10 +104,6 @@ public struct MatchResult: Codable, Identifiable, Hashable {
         if awayStats != .empty { try c.encode(awayStats, forKey: .awayStats) }
         if !playerRatings.isEmpty { try c.encode(playerRatings, forKey: .playerRatings) }
         try c.encodeIfPresent(manOfTheMatch, forKey: .manOfTheMatch)
-        try c.encodeIfPresent(homeLineup, forKey: .homeLineup)
-        try c.encodeIfPresent(awayLineup, forKey: .awayLineup)
-        try c.encodeIfPresent(homeFormation, forKey: .homeFormation)
-        try c.encodeIfPresent(awayFormation, forKey: .awayFormation)
     }
 
     // MARK: - Computed Properties

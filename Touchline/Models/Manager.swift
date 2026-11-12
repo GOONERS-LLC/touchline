@@ -149,8 +149,8 @@ public struct ManagerProfile: Codable, Hashable {
     public var careerHistory: [ManagerSeasonRecord]
 
     public init(
-        firstName: String = "Alex",
-        lastName: String = "Morgan",
+        firstName: String = "Sam",
+        lastName: String = "Carter",
         nationality: String = ManagerNationality.england.rawValue,
         age: Int = 38,
         faceSeed: UInt64 = 0,

@@ -12,7 +12,6 @@ public struct MatchSettings: Codable, Hashable {
 
     /// Playback speed of the live match replay.
     public enum Speed: String, Codable, CaseIterable, Identifiable, Hashable {
-        case verySlow = "Very Slow"
         case slow = "Slow"
         case normal = "Normal"
         case fast = "Fast"
@@ -23,8 +22,7 @@ public struct MatchSettings: Codable, Hashable {
         /// Seconds between displayed minutes during replay.
         public var tickInterval: Double {
             switch self {
-            case .verySlow: return 1.6
-            case .slow: return 0.8
+            case .slow: return 0.7
             case .normal: return 0.35
             case .fast: return 0.18
             case .veryFast: return 0.08

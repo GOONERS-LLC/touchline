@@ -68,7 +68,7 @@ enum GoalLines {
                 "\(S) just keeps running. Past one, past two, into the box, and a calm finish across \(K). A goal entirely of his own making.",
                 "Nobody can get near \(s)! He glides down the wing, cuts inside and leaves three defenders on the floor before finishing.",
                 "\(S) takes on the whole defence and wins. A stepover, a burst of pace and a low finish under \(K).",
-                "Collecting it in his own half, \(S) runs at \(opponent.name)'s back line, rides one tackle, then another, and finishes with the outside of his boot."
+                "Collecting it in his own half, \(S) runs at \(opponent.shortName)'s back line, rides one tackle, then another, and finishes with the outside of his boot."
             ]
         case .reboundAfterSpill:
             lines = [
@@ -110,7 +110,7 @@ enum GoalLines {
         case .counterAttackBreakaway:
             lines = [
                 "Devastating counter-attack! From their own box to a goal in three passes. \(A) sends a 50-yard ball into \(S)'s stride and he strokes it home.",
-                "\(opponent.name) had everyone forward for a corner and they pay for it. \(A) breaks clear and finds \(S), who has the whole half to himself.",
+                "\(opponent.shortName) had everyone forward for a corner and they pay for it. \(A) breaks clear and finds \(S), who has the whole half to himself.",
                 "A lightning break. \(A) carries it 40 yards before releasing \(S), who sprints clear and finishes past \(K).",
                 "Three against two on the break, and \(a) makes the right choice. \(S) is unmarked and makes no mistake.",
                 "\(K) is caught off his line by the speed of the counter and \(S) finishes into the empty net from 30 yards!"
@@ -175,10 +175,10 @@ enum GoalLines {
             ]
         case .pressingTurnover:
             lines = [
-                "\(S) hunts down the defender, steals the ball on the edge of the box and finishes before \(opponent.name) can react.",
+                "\(S) hunts down the defender, steals the ball on the edge of the box and finishes before \(opponent.shortName) can react.",
                 "A sloppy pass out from the back, \(S) intercepts, and it's in the net in a heartbeat. That's what the high press is for.",
                 "\(S) pressures \(K) into a hurried clearance, charges it down and walks the ball into the net!",
-                "\(opponent.name) try to play out from the back and \(S) punishes them, nicking it off a centre-back and lifting it over \(K)."
+                "\(opponent.shortName) try to play out from the back and \(S) punishes them, nicking it off a centre-back and lifting it over \(K)."
             ]
         case .backheelFlick:
             lines = [
@@ -189,7 +189,7 @@ enum GoalLines {
             lines = [
                 "The full-back overlaps, \(A) whips in a cross on the run and \(S) attacks it at the penalty spot to head home.",
                 "\(A) charges forward from defence and crosses for \(S), who arrives on cue to steer it past \(K).",
-                "Great width from \(club.name). \(a) gets to the byline and crosses, and \(S) volleys it in at the back post."
+                "Great width from \(club.shortName). \(a) gets to the byline and crosses, and \(S) volleys it in at the back post."
             ]
         case .lobFromDistance:
             lines = [
@@ -198,15 +198,15 @@ enum GoalLines {
             ]
         case .tikiTakaMove:
             lines = [
-                "A goal of real beauty: 20 passes, every \(club.name) player touching the ball, and \(S) finishing it off from \(a)'s final pass.",
+                "A goal of real beauty: 20 passes, every \(club.shortName) player touching the ball, and \(S) finishing it off from \(a)'s final pass.",
                 "One-touch football at its best. \(A) and \(S) exchange passes around the box and \(S) finishes calmly.",
-                "\(club.name) pass \(opponent.name) to sleep and then strike. \(a) threads it through and \(S) passes it into the corner."
+                "\(club.shortName) pass \(opponent.shortName) to sleep and then strike. \(a) threads it through and \(S) passes it into the corner."
             ]
         case .driveIntoBox:
             lines = [
                 "\(S) drives forward from midfield, nobody steps out to meet him, and he hammers it past \(K) from the edge of the area.",
                 "A powerful run from \(S) through the middle. He shrugs off one challenge and fires low into the corner.",
-                "\(S) carries the ball 40 yards and \(opponent.name) back off. He takes the invitation and shoots, and it's in!"
+                "\(S) carries the ball 40 yards and \(opponent.shortName) back off. He takes the invitation and shoots, and it's in!"
             ]
         }
         let body = (lines + moreLines(type: type, S: S, s: s, A: A, a: a, from: from, K: K, club: club, opponent: opponent)).randomElement()!
@@ -290,7 +290,7 @@ enum GoalLines {
             return ["From defending a corner to scoring at the other end in ten seconds! \(S) finishes the break.",
                     "\(A) leads the break and squares for \(S), who passes it into the empty net.",
                     "Lightning on the counter! \(S) races clear of the last defender and slots past \(K).",
-                    "\(club.name) catch \(opponent.name) on the break, and \(S) finishes it off with a cool finish."]
+                    "\(club.shortName) catch \(opponent.shortName) on the break, and \(S) finishes it off with a cool finish."]
         case .divingHeader:
             return ["\(S) throws himself at the low cross and heads it home before anyone else can react!",
                     "A diving header from \(S), meeting \(a)'s cross six inches above the grass.",
@@ -329,7 +329,7 @@ enum GoalLines {
                     "After an almighty scramble, \(S) toe-pokes it over the line."]
         case .pressingTurnover:
             return ["\(S) closes down the defender, wins the ball and slots it into the corner.",
-                    "A mistake at the back and \(S) pounces, finishing before \(opponent.name) can recover.",
+                    "A mistake at the back and \(S) pounces, finishing before \(opponent.shortName) can recover.",
                     "\(S) charges down the clearance and the ball rolls into the net!"]
         case .backheelFlick:
             return ["A backheel from \(S)! The finish is pure improvisation and it beats \(K).",
@@ -342,7 +342,7 @@ enum GoalLines {
                     "From halfway, \(S) chips \(K)! The ball drops under the bar."]
         case .tikiTakaMove:
             return ["Pass after pass after pass, and \(S) finishes it off. A team goal of real beauty.",
-                    "\(club.name) keep the ball for over a minute before \(S) finishes off the move.",
+                    "\(club.shortName) keep the ball for over a minute before \(S) finishes off the move.",
                     "A slick one-two with \(a) puts \(S) clear, and he finishes calmly."]
         case .driveIntoBox:
             return ["\(S) drives into the box, holds off a challenge and fires low past \(K).",
@@ -358,28 +358,28 @@ enum GoalLines {
         if teamGoals == oppGoals {
             lines = minute > 80
                 ? ["EQUALISER! Pandemonium!", "Level at \(score) with the clock ticking down. Game on!",
-                   "\(club.name) have rescued something late on!", "Just when it looked lost, \(club.name) are level!"]
-                : ["That levels it at \(score).", "All square again at \(score).", "\(club.name) are back in it!",
+                   "\(club.shortName) have rescued something late on!", "Just when it looked lost, \(club.shortName) are level!"]
+                : ["That levels it at \(score).", "All square again at \(score).", "\(club.shortName) are back in it!",
                    "Parity restored. \(score).", "And just like that, we have a new game."]
         } else if teamGoals == oppGoals + 1 {
             if minute > 82 {
-                lines = ["A CRUCIAL LATE GOAL! \(club.name) lead \(score)!", "Surely that's the winner!",
-                         "That could be worth three points!", "\(club.name) lead at the death!"]
+                lines = ["A CRUCIAL LATE GOAL! \(club.shortName) lead \(score)!", "Surely that's the winner!",
+                         "That could be worth three points!", "\(club.shortName) lead at the death!"]
             } else if teamGoals == 1 {
-                lines = ["\(club.name) take the lead!", "The deadlock is broken!", "1-0 \(club.name)!",
-                         "The breakthrough \(club.name) were looking for!", "First blood to \(club.name)."]
+                lines = ["\(club.shortName) take the lead!", "The deadlock is broken!", "1-0 \(club.shortName)!",
+                         "The breakthrough \(club.shortName) were looking for!", "First blood to \(club.shortName)."]
             } else {
-                lines = ["\(club.name) are back in front, \(score)!", "\(club.name) lead \(score) again.",
+                lines = ["\(club.shortName) are back in front, \(score)!", "\(club.shortName) lead \(score) again.",
                          "The lead is restored!", "Back in front!"]
             }
         } else if teamGoals == oppGoals + 2 {
-            lines = ["\(club.name) have a two-goal cushion now.", "That's \(score), and \(club.name) are in control.",
-                     "\(opponent.name) have a mountain to climb.", "Daylight between the sides: \(score)."]
+            lines = ["\(club.shortName) have a two-goal cushion now.", "That's \(score), and \(club.shortName) are in control.",
+                     "\(opponent.shortName) have a mountain to climb.", "Daylight between the sides: \(score)."]
         } else if teamGoals > oppGoals + 2 {
-            lines = ["This is turning into a rout: \(score)!", "\(opponent.name) have collapsed. \(score).",
+            lines = ["This is turning into a rout: \(score)!", "\(opponent.shortName) have collapsed. \(score).",
                      "The goals keep coming. \(score)!", "\(scorer.lastName) twists the knife. \(score)."]
         } else {
-            lines = ["A goal back for \(club.name). \(score).", "\(club.name) pull one back!",
+            lines = ["A goal back for \(club.shortName). \(score).", "\(club.shortName) pull one back!",
                      "Is this the start of a comeback? \(score).", "Consolation, or the spark for a fightback?"]
         }
         return lines.randomElement()!

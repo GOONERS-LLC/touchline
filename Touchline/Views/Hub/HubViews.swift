@@ -283,7 +283,6 @@ public struct DashboardView: View {
             }
             Group {
                 tile(gameState.jobOffers.isEmpty ? "Jobs" : "Jobs (\(gameState.jobOffers.count))", "briefcase.fill", .jobOffers)
-                NavigationLink { ClubKitPage() } label: { HubTile(title: "Kit", icon: "tshirt.fill") }
                 tile("Settings", "gearshape.fill", .settings)
                 tile("Menu", "house.fill", .mainMenu)
             }
@@ -302,7 +301,7 @@ public struct DashboardView: View {
             return "Play vs \(opponent.name)"
         }
         if gameState.nextUserFixture == nil { return "Finish Season" }
-        return "Continue to Match Day"
+        return "Continue"
     }
 
     private var primaryCaption: String? {

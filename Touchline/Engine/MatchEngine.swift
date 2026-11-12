@@ -686,14 +686,7 @@ public struct MatchEngine {
         // visiting side, rather than a flat random fill of the stadium.
         let attendance = homeClub.finances.expectedAttendance(opponentReputation: awayClub.reputation)
         
-        // Offsides: real flags in the commentary that match the stat line.
-        events.append(contentsOf: offsideEvents(count: homeStats.offsides, club: homeClub, squad: homeAll, isHome: true, lastMinute: maxMinute))
-        events.append(contentsOf: offsideEvents(count: awayStats.offsides, club: awayClub, squad: awayAll, isHome: false, lastMinute: maxMinute))
-        events = events.enumerated()
-            .sorted { $0.element.minute == $1.element.minute ? $0.offset < $1.offset : $0.element.minute < $1.element.minute }
-            .map { $0.element }
-
-        var matchResult = MatchResult(
+        let matchResult = MatchResult(
             homeClubId: homeClub.id,
             awayClubId: awayClub.id,
             homeGoals: homeGoals,
@@ -708,10 +701,6 @@ public struct MatchEngine {
             playerRatings: ratingsMap,
             manOfTheMatch: motm?.player.id
         )
-        matchResult.homeLineup = homeClub.tactics.startingXI
-        matchResult.awayLineup = awayClub.tactics.startingXI
-        matchResult.homeFormation = homeClub.tactics.formation
-        matchResult.awayFormation = awayClub.tactics.formation
         
         // 9. Sync results back to clubs and update players' persistent models
         applyMatchToClub(club: &homeClub, activePlayers: homeAll, opponentGoals: awayGoals, motmId: motm?.player.id)
@@ -723,20 +712,6 @@ public struct MatchEngine {
         return (matchResult, nil)
     }
     
-    /// Builds offside flags at believable moments, avoiding the half-time whistle.
-    private static func offsideEvents(count: Int, club: Club, squad: [ActiveMatchPlayer], isHome: Bool, lastMinute: Int) -> [MatchEvent] {
-        let runners = squad.filter { [.forward, .midfielder].contains($0.player.primaryPosition.category) }
-        guard !runners.isEmpty else { return [] }
-        var minutes = Set<Int>()
-        while minutes.count < count { minutes.insert([Int](2...min(88, lastMinute)).filter { $0 != 45 }.randomElement()!) }
-        return minutes.sorted().map { minute in
-            let runner = (runners.filter { $0.player.primaryPosition.category == .forward }.randomElement() ?? runners.randomElement()!).player
-            let commentary = Commentary.offside(player: runner, club: club, minute: minute)
-            return MatchEvent(minute: minute, type: .offside, clubId: club.id, playerId: runner.id,
-                              shortText: commentary.short, detailText: commentary.detail, isHomeTeam: isHome)
-        }
-    }
-
     // MARK: - Chance Resolution
     
     private static func resolveChance(
@@ -916,27 +891,6 @@ public struct MatchEngine {
                     isHomeTeam: isHomeAttacking
                 )
             )
-        } else if Double.random(in: 0...1) < 0.3 {
-            // Blocked by a defender before it reaches the goalkeeper.
-            let blockers = (isHomeAttacking ? awayActive : homeActive)
-                .filter { !$0.isSentOff && !$0.isSubstitutedOut && $0.player.primaryPosition.category == .defender }
-            let commentary = Commentary.blocked(
-                shooter: shooter.player,
-                blocker: blockers.randomElement()?.player,
-                club: attackingClub,
-                minute: minute
-            )
-            events.append(
-                MatchEvent(
-                    minute: minute,
-                    type: .shotBlocked,
-                    clubId: attackingClub.id,
-                    playerId: shooter.player.id,
-                    shortText: commentary.short,
-                    detailText: commentary.detail,
-                    isHomeTeam: isHomeAttacking
-                )
-            )
         } else {
             // Chance missed off-target
             let commentary = Commentary.miss(
@@ -993,19 +947,6 @@ public struct MatchEngine {
             available.max(by: { $0.player.attributes.crossing < $1.player.attributes.crossing }) ??
             available.first else { return }
         
-        let cornerCommentary = Commentary.corner(taker: taker.player, club: attackingClub, minute: minute)
-        events.append(
-            MatchEvent(
-                minute: minute,
-                type: .corner,
-                clubId: attackingClub.id,
-                playerId: taker.player.id,
-                shortText: cornerCommentary.short,
-                detailText: cornerCommentary.detail,
-                isHomeTeam: isHomeAttacking
-            )
-        )
-
         // Find top aerial threat
         let aerialTargets = available.filter { $0.player.id != taker.player.id }
         let headerTarget = aerialTargets.max(by: { ($0.player.attributes.heading + $0.player.attributes.jumping) < ($1.player.attributes.heading + $1.player.attributes.jumping) }) ?? taker
@@ -1227,32 +1168,7 @@ public struct MatchEngine {
         var cardProbability = min(0.9, (aggression * 0.45 + (100.0 - tackling) * 0.3) / 100.0 * 2.0)
         if isPenalty { cardProbability = min(0.92, cardProbability + 0.30) }
 
-        guard Double.random(in: 0...1) < cardProbability else {
-            // No booking: still describe the foul so the commentary never skips it.
-            if !isPenalty {
-                let victimClub = isHomeTeamFouling ? awayClub : homeClub
-                let victims = (isHomeTeamFouling ? awayActive : homeActive).filter { !$0.isSentOff && !$0.isSubstitutedOut }
-                let commentary = Commentary.foul(
-                    fouler: fouler.player,
-                    victim: victims.randomElement()?.player,
-                    club: foulingClub,
-                    victimClub: victimClub,
-                    minute: minute
-                )
-                events.append(
-                    MatchEvent(
-                        minute: minute,
-                        type: .foul,
-                        clubId: foulingClub.id,
-                        playerId: fouler.player.id,
-                        shortText: commentary.short,
-                        detailText: commentary.detail,
-                        isHomeTeam: isHomeTeamFouling
-                    )
-                )
-            }
-            return
-        }
+        guard Double.random(in: 0...1) < cardProbability else { return }
 
         // Card roll: yellow or straight red
         let isStraightRed = Double.random(in: 0...1) < 0.03

@@ -90,48 +90,22 @@ enum FormationLayout {
     }
 
     /// The formation as lines of slot indices, attack first and goalkeeper
-    /// last, each line ordered left to right. Lines follow the shape's name,
-    /// so 4-3-3 is drawn as four, three, three (a holding midfielder sits in
-    /// the middle of the three rather than on a line of his own).
+    /// last, each line ordered left to right. Slots at nearly the same
+    /// depth (a full-back and a centre-back) share a line.
     static func rows(for formation: FormationPreset) -> [[Int]] {
-        let positions = formation.defaultPositions
-        guard !positions.isEmpty else { return [] }
-        func lateral(_ p: Position) -> Int {
-            switch p {
-            case .LB, .LWB, .LM, .LW: return 0
-            case .RB, .RWB, .RM, .RW: return 2
-            default: return 1
+        let points = resolvedSlots(for: formation)
+        let order = points.indices.sorted { points[$0].y < points[$1].y }
+        var rows: [[Int]] = []
+        var lastY: CGFloat = -1
+        for i in order {
+            if rows.isEmpty || points[i].y - lastY > 0.06 {
+                rows.append([i])
+                lastY = points[i].y
+            } else {
+                rows[rows.count - 1].append(i)
             }
         }
-        func depthRank(_ p: Position) -> Int {
-            switch p {
-            case .CB: return 0
-            case .CDM: return 1
-            case .CM: return 2
-            case .CAM: return 3
-            case .CF: return 4
-            case .ST: return 5
-            default: return 2
-            }
-        }
-        var lines: [[Int]] = []
-        var cursor = 1
-        for count in formation.lines {
-            let indices = Array(cursor..<min(positions.count, cursor + count))
-            cursor += count
-            let left = indices.filter { lateral(positions[$0]) == 0 }
-            let right = indices.filter { lateral(positions[$0]) == 2 }
-            var central = indices.filter { lateral(positions[$0]) == 1 }
-                .sorted { depthRank(positions[$0]) > depthRank(positions[$1]) }
-            if central.count >= 3 {
-                let deepest = central.removeLast()
-                central.insert(deepest, at: central.count / 2)
-            }
-            lines.append(left + central + right)
-        }
-        if cursor < positions.count { lines.append(Array(cursor..<positions.count)) }
-        // Attack first, goalkeeper last.
-        return lines.reversed() + [[0]]
+        return rows.map { $0.sorted { points[$0].x < points[$1].x } }
     }
 
     /// Spreads players who share a lane and a row evenly and symmetrically
@@ -162,24 +136,17 @@ public struct FormationPitchView: View {
     public let formation: FormationPreset
     public let players: [Player]
     public let selectedPlayerId: UUID?
-    /// Ratings from a finished match; when set, cards show these instead.
-    public var gameRatings: [UUID: Double]? = nil
-    public var tapHint: String = "Double tap to select, then double tap another player to swap"
     public let onSelect: (Player) -> Void
 
     public init(
         formation: FormationPreset,
         players: [Player],
         selectedPlayerId: UUID?,
-        gameRatings: [UUID: Double]? = nil,
-        tapHint: String = "Double tap to select, then double tap another player to swap",
         onSelect: @escaping (Player) -> Void
     ) {
         self.formation = formation
         self.players = players
         self.selectedPlayerId = selectedPlayerId
-        self.gameRatings = gameRatings
-        self.tapHint = tapHint
         self.onSelect = onSelect
     }
 
@@ -199,12 +166,11 @@ public struct FormationPitchView: View {
                                 player: player,
                                 slot: index < positions.count ? positions[index] : player.primaryPosition,
                                 isSelected: player.id == selectedPlayerId,
-                                width: 84,
-                                gameRating: gameRatings?[player.id]
+                                width: 84
                             )
-                            .onTapGesture { Haptics.selection(); onSelect(player) }
+                            .onTapGesture { onSelect(player) }
                             .accessibilityAddTraits(player.id == selectedPlayerId ? [.isSelected, .isButton] : .isButton)
-                            .accessibilityHint(tapHint)
+                            .accessibilityHint("Double tap to select, then double tap another player to swap")
                             .accessibilityAction { onSelect(player) }
                         }
                     }
@@ -285,17 +251,14 @@ public struct PlayerPitchCard: View {
     public var slot: Position?
     public var isSelected: Bool = false
     public var width: CGFloat = 72
-    /// A finished match's rating (1 to 10), shown in place of the overall.
-    public var gameRating: Double? = nil
     /// Settings → show the match rating (fitness, form, morale) instead of the base rating.
     @AppStorage("gfShowMatchRating") private var showMatchRating = false
 
-    public init(player: Player, slot: Position? = nil, isSelected: Bool = false, width: CGFloat = 72, gameRating: Double? = nil) {
+    public init(player: Player, slot: Position? = nil, isSelected: Bool = false, width: CGFloat = 72) {
         self.player = player
         self.slot = slot
         self.isSelected = isSelected
         self.width = width
-        self.gameRating = gameRating
     }
 
     private var position: Position { slot ?? player.primaryPosition }
@@ -308,13 +271,13 @@ public struct PlayerPitchCard: View {
             switch player.morale {
             case .delighted, .happy: return ("arrow.up.right", Color(hex: "7FD99A"), "morale high")
             case .unhappy, .furious: return ("arrow.down.right", Color(hex: "F2727F"), "morale low")
-            default: return ("arrow.right", Color(hex: "F7A731"), "morale steady")
+            default: return ("arrow.right", Color(hex: "FFC857"), "morale steady")
             }
         }
         let avg = recent.reduce(0, +) / Double(recent.count)
         if avg >= 7.2 { return ("arrow.up", Color(hex: "7FD99A"), "in great form") }
         if avg >= 6.7 { return ("arrow.up.right", Color(hex: "7FD99A"), "in good form") }
-        if avg >= 6.2 { return ("arrow.right", Color(hex: "F7A731"), "in steady form") }
+        if avg >= 6.2 { return ("arrow.right", Color(hex: "FFC857"), "in steady form") }
         if avg >= 5.8 { return ("arrow.down.right", Color(hex: "F2727F"), "in poor form") }
         return ("arrow.down", Color(hex: "F2727F"), "badly out of form")
     }
@@ -330,14 +293,14 @@ public struct PlayerPitchCard: View {
             HStack(spacing: 2) {
                 Text(position.abbreviation)
                     .font(.system(size: 12, weight: .black).width(.condensed))
-                    .foregroundStyle(Color(hex: "13294B"))
+                    .foregroundStyle(Color(hex: "103036"))
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
                     .background(RoundedRectangle(cornerRadius: 5).fill(chipColor))
                 Spacer(minLength: 0)
-                Text(gameRating.map { String(format: "%.1f", $0) } ?? "\(shownRating)")
+                Text("\(shownRating)")
                     .font(.system(size: 13, weight: .black).width(.condensed).monospacedDigit())
-                    .foregroundStyle(gameRating.map { $0 >= 7.5 ? Color(hex: "7FD99A") : $0 < 6.0 ? Color(hex: "F2727F") : Color.white } ?? ratingColor)
+                    .foregroundStyle(ratingColor)
             }
             HStack(spacing: 4) {
                 Image(systemName: t.icon)
@@ -380,7 +343,7 @@ public struct PlayerPitchCard: View {
         .frame(minWidth: 58, maxWidth: width)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(LinearGradient(colors: [Color(hex: "1B3A5C"), Color(hex: "14304E")], startPoint: .top, endPoint: .bottom))
+                .fill(LinearGradient(colors: [Color(hex: "15393F"), Color(hex: "0F2D32")], startPoint: .top, endPoint: .bottom))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -414,8 +377,7 @@ public struct PlayerPitchCard: View {
     }
 
     private var ratingWords: String {
-        if let gameRating { return "match rating \(String(format: "%.1f", gameRating))" }
-        return showMatchRating ? "match rating \(player.matchRating), base \(player.overall)" : "rated \(player.overall)"
+        showMatchRating ? "match rating \(player.matchRating), base \(player.overall)" : "rated \(player.overall)"
     }
 
     /// "Left back: Andy Robertson, rated 84, in good form, fitness 92 percent."

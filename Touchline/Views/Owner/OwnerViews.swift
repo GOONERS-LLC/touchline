@@ -156,7 +156,7 @@ public struct OwnerCareerTabView: View {
             return "Watch vs \(opponent.name)"
         }
         if gameState.nextUserFixture == nil { return "Finish Season" }
-        return "Continue to Match Day"
+        return "Continue"
     }
 
     private var primaryCaption: String? {
@@ -575,7 +575,7 @@ struct OwnerStaffView: View {
                             Text("Vacant").foregroundStyle(.secondary)
                         }
                         ForEach(team) { member in
-                            LabeledContent(member.name, value: "\(member.quality)-star · \(Player.formatCurrency(member.wage))/w")
+                            LabeledContent(member.name, value: "\(member.quality)★ · \(Player.formatCurrency(member.wage))/w")
                         }
                         NavigationLink("Find candidates") { StaffMarketView(role: role) }
                     }
@@ -600,7 +600,7 @@ struct StaffMarketView: View {
                 Section(footer: Text("\(role.roleDescription) New names appear every month. Better clubs attract better staff.")) {
                     LabeledContent("Club cash", value: Player.formatCurrency(club.finances.balance))
                     if Club.staffLimit(role) == 1, let holder = current.first {
-                        LabeledContent("Current", value: "\(holder.name), \(holder.quality)-star")
+                        LabeledContent("Current", value: "\(holder.name) \(holder.quality)★")
                     } else {
                         LabeledContent("Employed", value: "\(current.count) of \(Club.staffLimit(role))")
                     }
@@ -612,7 +612,7 @@ struct StaffMarketView: View {
                                 HStack {
                                     Text(person.name).fontWeight(.semibold)
                                     Spacer()
-                                    Text("\(person.quality)-star").foregroundStyle(Color.goldAccent)
+                                    Text(String(repeating: "★", count: person.quality)).foregroundStyle(Color.goldAccent)
                                 }
                                 Text("\(person.specialty) · age \(person.age)")
                                     .font(.caption).foregroundStyle(.secondary)
@@ -1013,7 +1013,6 @@ struct OwnerIdentityView: View {
                     .disabled(gameState.owner.namingRightsValue != nil)
                     .onAppear { stadiumName = club.stadium }
                 }
-                Section("Kit") { ClubKitCard() }
                 Section("Colours") {
                     colourPicker("Home", selected: club.primaryColor) { gameState.setClubColours(primary: $0, secondary: club.secondaryColor) }
                     colourPicker("Second", selected: club.secondaryColor) { gameState.setClubColours(primary: club.primaryColor, secondary: $0) }
