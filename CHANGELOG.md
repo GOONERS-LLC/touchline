@@ -15,6 +15,15 @@ Touchline is GridironFC 1.6.0, unchanged in play, with:
   chosen by stadium size and the home fans roar, groan, "ooh", boo, applaud
   and sing as the match unfolds. Settings, Crowd and Haptics.
 - Haptics for goals, cards, saves and the woodwork.
+- Every league plays its real number of matches: 38 in the Scottish
+  Premiership, 34 in MLS, 36 in the HNL, 46 in the EFL, with midweek rounds
+  so seasons still finish in May.
+- More domestic trophies: the EFL Cup, Scottish League Cup, Taça da Liga and
+  J.League Cup; the EFL Trophy and Scottish Challenge Cup; and super cups
+  such as the Community Shield, Supercopa and DFL-Supercup. Cups are played
+  on midweek cup nights.
+- A redesigned interface: a new main menu, larger home tiles, a bold next-match
+  card, underlined tabs, rounded buttons and an abstract teal background.
 - Crash tests on an iPhone simulator before every release.
 
 ## [1.6.0] - 2026-11-12
