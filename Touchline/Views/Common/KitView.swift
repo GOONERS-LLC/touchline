@@ -190,27 +190,181 @@ extension GameState {
         let name = deal.sponsorName.replacingOccurrences(of: " " + deal.tier.rawValue, with: "")
         return name.isEmpty ? nil : name
     }
-                    .buttonStyle(.gfPrimary)
-                }
-            }
-            .padding(.vertical, 6)
-            .sheet(isPresented: $designing) {
-                KitDesignerView(club: club).environment(gameState)
-            }
-        }
-    }
 }
 
-/// A page holding the kit card, for the manager's home grid.
-struct ClubKitPage: View {
-    var body: some View {
-        ScrollView {
-            ClubKitCard()
-                .gfCard()
-                .padding()
+// MARK: - Kit designer
+
+public struct KitDesignerView: View {
+    @Environment(GameState.self) private var gameState
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: KitDesign
+    @State private var original: KitDesign
+    private let clubId: UUID
+
+    public init(club: Club) {
+        clubId = club.id
+        _draft = State(initialValue: club.effectiveKit)
+        _original = State(initialValue: club.effectiveKit)
+    }
+
+    private var club: Club? { gameState.club(withId: clubId) }
+
+    public var body: some View {
+        NavigationStack {
+            Form {
+                if let club {
+                    let tradition = club.traditionalKit
+                    let approval = draft.approval(comparedTo: tradition)
+                    let changed = draft != tradition
+                    let currentMult = KitDesign.merchandiseMultiplier(approval: original.approval(comparedTo: tradition), changed: original != tradition)
+                    let newMult = KitDesign.merchandiseMultiplier(approval: approval, changed: changed)
+                    let projected = Int(Double(club.finances.merchandiseIncome) * newMult / currentMult)
+
+                    Section {
+                        HStack {
+                            Spacer()
+                            KitView(kit: draft, sponsor: gameState.shirtSponsorName, monogram: club.shortName, height: 240)
+                            Spacer()
+                        }
+                        .padding(.vertical, 8)
+                        .listRowBackground(Color.surface)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Supporter approval").font(.subheadline).fontWeight(.semibold)
+                                Spacer()
+                                Text("\(Int(approval * 100))%").font(.subheadline).fontWeight(.heavy).monospacedDigit()
+                            }
+                            ProgressView(value: approval)
+                                .tint(approval > 0.75 ? Color.winGreen : approval > 0.5 ? Color.highlight : Color.lossRed)
+                            Text(KitDesign.verdict(for: approval)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Supporter approval \(Int(approval * 100)) percent. \(KitDesign.verdict(for: approval))")
+
+                        LabeledContent("Merchandise income", value: "\(Player.formatCurrency(projected)) a year")
+                            .accessibilityLabel("Projected merchandise income \(Player.spokenCurrency(projected)) a year, \(projected >= club.finances.merchandiseIncome ? "up" : "down") from \(Player.spokenCurrency(club.finances.merchandiseIncome))")
+                        if gameState.shirtSponsorName == nil {
+                            Text("Sign a commercial partner and their name will appear across the shirt.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("Preview")
+                    }
+
+                    Section("Pattern") {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(KitDesign.Pattern.allCases) { pattern in
+                                    Button {
+                                        Haptics.selection()
+                                        draft.pattern = pattern
+                                    } label: {
+                                        VStack(spacing: 6) {
+                                            KitView(kit: draft.with(pattern: pattern), height: 90)
+                                            Text(pattern.rawValue).font(.caption2).fontWeight(.semibold)
+                                        }
+                                        .padding(8)
+                                        .background(draft.pattern == pattern ? Color.brand.opacity(0.3) : Color.surfaceRaised)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .stroke(draft.pattern == pattern ? Color.brand : Color.clear, lineWidth: 2))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel(pattern.rawValue)
+                                    .accessibilityAddTraits(draft.pattern == pattern ? [.isSelected, .isButton] : .isButton)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+
+                    Section("Colours") {
+                        colourRow("Main colour", \.primary)
+                        colourRow("Pattern colour", \.secondary)
+                        colourRow("Trim", \.trim)
+                        colourRow("Shorts", \.shorts)
+                        colourRow("Socks", \.socks)
+                    }
+
+                    Section("Details") {
+                        Picker("Collar", selection: $draft.collar) {
+                            ForEach(KitDesign.Collar.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        Toggle("Contrast sleeves", isOn: $draft.contrastSleeves)
+                    }
+
+                    Section {
+                        Button("Restore Traditional Kit") {
+                            Haptics.tap()
+                            draft = tradition
+                        }
+                        .disabled(draft == tradition)
+                    } footer: {
+                        Text("Supporters judge every change against the club's traditional colours. A popular new look sells shirts; an unpopular one hurts merchandise sales.")
+                    }
+                }
+            }
+            .navigationTitle("Kit Designer")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Unveil") { save() }
+                        .fontWeight(.bold)
+                        .disabled(draft == original)
+                        .accessibilityHint("Saves the new kit and announces it to supporters")
+                }
+            }
         }
-        .stadiumBackground()
-        .navigationTitle("Club Kit")
-        .navigationBarTitleDisplayMode(.inline)
+        .touchlineChrome()
+    }
+
+    private func colourRow(_ title: String, _ key: WritableKeyPath<KitDesign, String>) -> some View {
+        HStack {
+            Menu {
+                ForEach(KitColour.palette, id: \.0) { entry in
+                    Button(entry.0) { Haptics.selection(); draft[keyPath: key] = entry.1 }
+                }
+            } label: {
+                HStack {
+                    Text(title).foregroundStyle(.primary)
+                    Spacer()
+                    Text(KitColour.name(draft[keyPath: key]).capitalized).foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityLabel("\(title), \(KitColour.name(draft[keyPath: key]))")
+            .accessibilityHint("Choose from named colours")
+            ColorPicker(title, selection: Binding(
+                get: { Color(hex: draft[keyPath: key]) },
+                set: { draft[keyPath: key] = KitColour.hex(from: $0) }
+            ), supportsOpacity: false)
+            .labelsHidden()
+            .accessibilityLabel("Custom \(title.lowercased())")
+        }
+    }
+
+    private func save() {
+        guard let index = gameState.clubs.firstIndex(where: { $0.id == clubId }) else { return }
+        let tradition = gameState.clubs[index].traditionalKit
+        let oldMult = KitDesign.merchandiseMultiplier(approval: original.approval(comparedTo: tradition), changed: original != tradition)
+        let approval = draft.approval(comparedTo: tradition)
+        let newMult = KitDesign.merchandiseMultiplier(approval: approval, changed: draft != tradition)
+        let merch = gameState.clubs[index].finances.merchandiseIncome
+        gameState.clubs[index].finances.merchandiseIncome = Int(Double(merch) * newMult / oldMult)
+        gameState.clubs[index].kit = draft == tradition ? nil : draft
+        let clubName = gameState.clubs[index].name
+        gameState.news.insert(NewsItem(
+            headline: "\(clubName) unveil a new kit",
+            body: "\(draft.spokenDescription) \(KitDesign.verdict(for: approval))",
+            date: gameState.season.currentDate,
+            category: .general
+        ), at: 0)
+        try? SaveManager.shared.autoSave(gameState: gameState)
+        approval >= 0.55 ? Haptics.success() : Haptics.warning()
+        dismiss()
     }
 }
