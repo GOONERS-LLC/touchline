@@ -312,7 +312,7 @@ public struct LiveMatchView: View {
         let manages = gameState.gameMode == .manageClub
         return VStack(spacing: 14) {
             Text("HALF-TIME").font(.gfDisplay(22))
-            Text("\(home.shortName) \(currentHomeGoals) - \(currentAwayGoals) \(away.shortName)").font(.gfDisplay(22))
+            Text("\(home.name) \(currentHomeGoals) - \(currentAwayGoals) \(away.name)").font(.gfDisplay(22))
             if manages {
                 Text("Substitutions left: \(gameState.liveSubsRemaining)")
                     .font(.subheadline)
@@ -688,7 +688,7 @@ public struct LiveMatchView: View {
                         }
                     } else {
                         Haptics.matchEvent(.fullTime)
-                        CrowdAtmosphere.shared.fullTime(homeWon: currentHomeGoals == currentAwayGoals ? nil : currentHomeGoals > currentAwayGoals)
+                        CrowdAtmosphere.shared.fullTime()
                     }
                 }
             }

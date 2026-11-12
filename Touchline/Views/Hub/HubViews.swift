@@ -50,23 +50,23 @@ struct HubTile: View {
     var highlight: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(spacing: 4) {
             Image(systemName: icon)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 34, height: 34)
+                .frame(width: 24, height: 24)
                 .background(Circle().fill(highlight ? Color(hex: "2EC4B6") : Color(hex: "E4573D")))
             Text(title)
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .font(.system(size: 10, weight: .bold, design: .rounded))
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                .minimumScaleFactor(0.7)
         }
         .foregroundStyle(Color.white)
-        .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
-        .padding(.horizontal, 12)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .frame(maxWidth: .infinity, minHeight: 54)
+        .padding(.horizontal, 2)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .fill(LinearGradient(colors: [Color(hex: highlight ? "1B4D52" : "14393F"), Color(hex: "0E2A2F")], startPoint: .topLeading, endPoint: .bottomTrailing)))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
         .overlay(alignment: .topTrailing) {
             if badge > 0 {
                 Text("\(min(badge, 99))")
@@ -83,11 +83,11 @@ struct HubTile: View {
     }
 }
 
-/// Three tiles per row.
+/// Five small tiles per row.
 struct HubGrid<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 5), spacing: 6) {
             content()
         }
         .buttonStyle(.plain)

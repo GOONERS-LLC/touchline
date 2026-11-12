@@ -325,7 +325,6 @@ public struct ClubCreationView: View {
     @Environment(GameState.self) private var gameState
     
     @State private var clubName = "Harbour Town"
-    @State private var shortName = "HBT"
     @State private var stadiumName = "Quayside Park"
     @State private var cityName = "Bristol"
     @State private var primaryColor = "#1F7A6E"
@@ -358,9 +357,6 @@ public struct ClubCreationView: View {
             Section(header: Text("Club Identity")) {
                 TextField("Club Name", text: $clubName)
                     .accessibilityLabel("Club Name input")
-                TextField("Short Name (3 Letters)", text: $shortName)
-                    .textInputAutocapitalization(.characters)
-                    .accessibilityLabel("Three-letter abbreviation input")
                 TextField("Stadium Name", text: $stadiumName)
                     .accessibilityLabel("Stadium Name input")
                 TextField("Home City", text: $cityName)
@@ -395,7 +391,7 @@ public struct ClubCreationView: View {
             Section {
                 Button(action: {
                     guard validIdentity else {
-                        creationError = "Enter a club name, a three-letter short name, a stadium, a city, and two six-digit hex colours such as #2D8B4E."
+                        creationError = "Enter a club name, a stadium, a city, and two six-digit hex colours such as #2D8B4E."
                         return
                     }
                     guard let targetId = selectedReplaceClubId else {
@@ -407,7 +403,8 @@ public struct ClubCreationView: View {
                     }
                     guard gameState.createCustomClub(
                         name: clubName,
-                        shortName: shortName.trimmingCharacters(in: .whitespaces).uppercased(),
+                        // Used only internally; screens always show the full name.
+                        shortName: { let l = String(clubName.filter { $0.isLetter }.uppercased().prefix(3)); return l.count == 3 ? l : "CLB" }(),
                         stadium: stadiumName,
                         stadiumCapacity: 5000,
                         city: cityName,
@@ -447,7 +444,6 @@ public struct ClubCreationView: View {
 
     private var validIdentity: Bool {
         !clubName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && shortName.trimmingCharacters(in: .whitespacesAndNewlines).count == 3
             && !stadiumName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !cityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && isHexColour(primaryColor)
@@ -1728,7 +1724,7 @@ public struct StandingsView: View {
                             .foregroundStyle(.secondary)
                             .frame(width: 22)
                         CrestView(club: entry.club, size: 20)
-                        Text("\(entry.player.displayName.uppercased()) (\(entry.club.shortName))")
+                        Text("\(entry.player.displayName.uppercased()) (\(entry.club.name))")
                             .font(.subheadline.weight(entry.club.isUserClub ? .heavy : .regular))
                             .lineLimit(1)
                         Spacer()
@@ -2791,7 +2787,7 @@ struct MatchPreviewCard: View {
 
     private func position(_ club: Club) -> String {
         let table = gameState.currentLeagueStandings
-        guard let index = table.firstIndex(where: { $0.clubId == club.id }) else { return club.leagueTier.shortLabel }
+        guard let index = table.firstIndex(where: { $0.clubId == club.id }) else { return club.leagueTier.displayName }
         return "\(index + 1) of \(table.count)"
     }
 
@@ -2838,9 +2834,9 @@ struct MatchPreviewCard: View {
     /// Pre-match odds: a split bar with each outcome's chance and price.
     private func oddsBar(_ odds: MatchOdds) -> some View {
         let parts: [(label: String, p: Double, color: Color)] = [
-            (home.shortName, odds.home, Color.winGreen),
+            (home.name, odds.home, Color.winGreen),
             ("Draw", odds.draw, Color.secondary),
-            (away.shortName, odds.away, Color.lossRed)
+            (away.name, odds.away, Color.lossRed)
         ]
         return VStack(alignment: .leading, spacing: 6) {
             Text("Pre-Match Odds").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -3427,7 +3423,7 @@ extension PlayerDetailView {
                 ForEach(log) { line in
                     statLine(year: line.season, team: line.club, p: line.appearances, a: line.goals, b: line.assists, rating: line.averageRating, bold: false)
                 }
-                statLine(year: gameState.season.year, team: club?.shortName ?? "–", p: now.appearances,
+                statLine(year: gameState.season.year, team: club?.name ?? "–", p: now.appearances,
                          a: isKeeper ? now.cleanSheets : now.goals, b: isKeeper ? now.manOfTheMatch : now.assists,
                          rating: now.averageRating, bold: false)
                 Divider()
@@ -4573,7 +4569,7 @@ public struct EuropeanCompetitionsView: View {
             Section {
                 Picker("Competition", selection: $selectedCompetition) {
                     ForEach(EuropeanCompetition.allCases) { comp in
-                        Text(comp.shortName).tag(comp)
+                        Text(comp.displayName).tag(comp)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -4623,7 +4619,7 @@ public struct EuropeanCompetitionsView: View {
                         .filter { $0.homeClubId == userClubId || $0.awayClubId == userClubId }
                         .sorted { $0.matchweek < $1.matchweek }
                     if !userFixtures.isEmpty {
-                        Section(header: Text("Your \(state.competition.shortName) Fixtures")) {
+                        Section(header: Text("Your \(state.competition.displayName) Fixtures")) {
                             ForEach(userFixtures) { fx in
                                 EuropeanFixtureRow(fixture: fx, competitionState: state)
                             }
@@ -4913,7 +4909,7 @@ public struct InternationalHubView: View {
             Section {
                 Picker("Tournament", selection: $selectedTournament) {
                     ForEach(InternationalTournament.Kind.allCases) { kind in
-                        Text(kind.shortName).tag(kind)
+                        Text(kind.displayName).tag(kind)
                     }
                 }
                 .pickerStyle(.menu)

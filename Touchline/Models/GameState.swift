@@ -797,7 +797,14 @@ public final class GameState: Codable {
             try? SaveManager.shared.autoSave(gameState: self)
             return
         }
+        let matchDay = season.currentDate
         advanceWeek()
+        // The day ends where it was played: the rest of the round is completed,
+        // but the date stays on match day. Home then offers Continue (to the
+        // next match day) rather than jumping straight to the next Play.
+        if !isEndOfSeason, matchDay < season.currentDate {
+            season.currentDate = matchDay
+        }
         try? SaveManager.shared.autoSave(gameState: self)
     }
 
@@ -1006,7 +1013,7 @@ public final class GameState: Codable {
                 if let uid = userClubId, fixture.homeClubId == uid || fixture.awayClubId == uid {
                     let stage = fixture.stage + (fixture.leg > 0 ? ", leg \(fixture.leg)" : "")
                     addNews(
-                        headline: "\(competition.competition.shortName): \(clubName(for: fixture.homeClubId)) \(fixture.homeGoals)-\(fixture.awayGoals) \(clubName(for: fixture.awayClubId))",
+                        headline: "\(competition.competition.displayName): \(clubName(for: fixture.homeClubId)) \(fixture.homeGoals)-\(fixture.awayGoals) \(clubName(for: fixture.awayClubId))",
                         body: "\(name), \(stage).",
                         category: .general,
                         sender: name

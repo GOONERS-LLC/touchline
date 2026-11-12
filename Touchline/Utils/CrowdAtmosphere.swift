@@ -95,11 +95,32 @@ public final class CrowdAtmosphere {
         reactions.removeAll()
     }
 
-    /// The full-time whistle, then the crowd fades.
-    public func fullTime(homeWon: Bool?) {
+    /// The full-time whistle, then the crowd fades. The verdict on the result
+    /// is played by the full-time screen, for live and simulated matches alike.
+    public func fullTime() {
         play(.whistle, volume: 1)
-        if let homeWon { play(homeWon ? .applause : .groan, volume: 0.9, delay: 0.6) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.stopMatch() }
+        let bed = self.bed
+        bed?.setVolume(0, fadeDuration: 3)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.2) { bed?.stop() }
+        self.bed = nil
+    }
+
+    /// The supporters' verdict on your result: a roar for a win, boos for a
+    /// defeat, polite applause for a draw. Works without a live crowd running,
+    /// so simulated matches get it too.
+    public func resultVerdict(outcome: String) {
+        guard enabled else { return }
+        try? AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+        try? AVAudioSession.sharedInstance().setActive(true)
+        switch outcome {
+        case "W":
+            play([.goal1, .goal3].randomElement()!, volume: 0.9, delay: 0.3)
+            play(.applause, volume: 0.7, delay: 3.5)
+        case "L":
+            play(.boo, volume: 1, delay: 0.3)
+        default:
+            play(.applause, volume: 0.6, delay: 0.3)
+        }
     }
 
     /// Lets the crowd settle between incidents.

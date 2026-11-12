@@ -61,7 +61,7 @@ extension GameState {
         let isHome = fixture.homeClubId == uid
         let scored = isHome ? result.homeGoals : result.awayGoals
         let conceded = isHome ? result.awayGoals : result.homeGoals
-        let score = "\(me.shortName) \(scored)-\(conceded) \(opponent.shortName)"
+        let score = "\(me.name) \(scored)-\(conceded) \(opponent.name)"
         var moments: [ClubRecordMoment] = []
 
         if isHome && result.attendance > clubRecords.recordCrowd {

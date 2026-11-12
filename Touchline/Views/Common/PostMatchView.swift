@@ -2,17 +2,24 @@
 //  PostMatchView.swift
 //  Touchline
 //
-//  The full-time report: scoreboard, every goal with its scorer, assist and
-//  how it was scored, cards and injuries, player of the match, the user's
-//  player ratings, momentum, team stats and (on request) the other results.
+//  Full time in three screens. The report: the scoreboard with each side's
+//  scorers, Match Facts (goals, cards, injuries and changes in order), player
+//  ratings and team stats. Then Player of the Match. Then the other results
+//  and the table.
 //
 
 import SwiftUI
 
 public struct PostMatchView: View {
     @Environment(GameState.self) private var gameState
-    @State private var showElsewhere = false
-    @State private var pressReply: String?
+    @State private var showElsewhere = true
+
+    /// Full time in three screens: the report, Player of the Match, then the
+    /// rest of the round.
+    private enum Step { case report, playerOfMatch, results }
+    @State private var step: Step = .report
+    @State private var playedVerdict = false
+    @AccessibilityFocusState private var headingFocused: Bool
 
     public var body: some View {
         ScrollView {
@@ -21,26 +28,30 @@ public struct PostMatchView: View {
                let home = gameState.club(withId: fixture.homeClubId),
                let away = gameState.club(withId: fixture.awayClubId) {
                 VStack(spacing: 16) {
-                    scoreboard(fixture: fixture, res: res, home: home, away: away)
-                    if let potm = potmPlayer(for: res) { potmCard(potm, res: res) }
-                    if !res.goalEvents.isEmpty { goalsCard(res: res, home: home, away: away) }
-                    disciplineCard(res: res, home: home, away: away)
-                    pressCard(fixture: fixture)
-                    ratingsCard(res: res)
-                    if res.events.contains(where: { $0.type == .goal || $0.type == .shotOnTarget || $0.type == .chance }) {
-                        MomentumChartView(
-                            result: res,
-                            homeName: home.shortName,
-                            awayName: away.shortName,
-                            homeColor: Color(hex: home.primaryColor),
-                            awayColor: Color(hex: away.primaryColor == home.primaryColor ? away.secondaryColor : away.primaryColor)
-                        )
-                        .gfCard()
+                    switch step {
+                    case .report:
+                        scoreboard(fixture: fixture, res: res, home: home, away: away)
+                            .accessibilityFocused($headingFocused)
+                        matchFactsCard(res: res, home: home, away: away)
+                        ratingsCard(res: res)
+                        statsCard(res: res, home: home, away: away)
+                    case .playerOfMatch:
+                        if let potm = potmPlayer(for: res) {
+                            playerOfMatchScreen(potm, res: res)
+                        } else {
+                            Text("No player of the match was recorded.")
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 60)
+                        }
+                    case .results:
+                        Text(fixture.cupRound.map { "\(fixture.competition), \($0)" } ?? "\(fixture.competition), Matchweek \(fixture.matchWeek)")
+                            .font(.gfDisplay(20))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityAddTraits(.isHeader)
+                            .accessibilityFocused($headingFocused)
+                        elsewhereCard(fixture: fixture)
+                        tableCard(fixture: fixture)
                     }
-                    statsCard(res: res, home: home, away: away)
-                    tableCard(fixture: fixture)
-                    elsewhereCard(fixture: fixture)
-                    actions
                 }
                 .padding()
             } else {
@@ -48,26 +59,58 @@ public struct PostMatchView: View {
                                        description: Text("Play a match to see the full-time recap."))
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            Group {
+                if step == .results {
+                    actions
+                } else {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { step = step == .report ? .playerOfMatch : .results }
+                    } label: {
+                        Text("Continue")
+                    }
+                    .buttonStyle(.gfPrimary)
+                    .accessibilityHint(step == .report ? "Shows the player of the match" : "Shows the other results")
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+        }
         .stadiumBackground()
-        .navigationTitle("Full Time")
+        .navigationTitle(step == .report ? "Full Time" : step == .playerOfMatch ? "Player of the Match" : "Results")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .onChange(of: step) { _, _ in headingFocused = true }
         .onAppear {
-            guard let fixture = gameState.activeMatchFixture,
+            guard !playedVerdict,
+                  let fixture = gameState.activeMatchFixture,
                   let res = fixture.result,
                   let userClub = gameState.userClub else { return }
-            switch res.outcomeLetter(for: userClub.id) {
-            case "W": SoundManager.shared.play(.win, enabled: gameState.soundEnabled)
-            case "L": SoundManager.shared.play(.loss, enabled: gameState.soundEnabled)
-            default: SoundManager.shared.play(.draw, enabled: gameState.soundEnabled)
+            playedVerdict = true
+            let outcome = res.outcomeLetter(for: userClub.id)
+            // The crowd's verdict, for live and simulated matches alike; the
+            // short tones are kept for when crowd sound is turned off.
+            if UserDefaults.standard.bool(forKey: CrowdAtmosphere.enabledKey) {
+                CrowdAtmosphere.shared.resultVerdict(outcome: outcome)
+            } else {
+                switch outcome {
+                case "W": SoundManager.shared.play(.win, enabled: gameState.soundEnabled)
+                case "L": SoundManager.shared.play(.loss, enabled: gameState.soundEnabled)
+                default: SoundManager.shared.play(.draw, enabled: gameState.soundEnabled)
+                }
             }
         }
     }
 
     // MARK: - Scoreboard
 
+    /// Crests and names either side of a big score, with each side's scorers
+    /// listed under its name.
     private func scoreboard(fixture: Fixture, res: MatchResult, home: Club, away: Club) -> some View {
         let outcome = gameState.userClubId.map { res.outcomeLetter(for: $0) } ?? "-"
-        return VStack(spacing: 12) {
+        let homeScorers = res.goalEvents.filter { $0.isHomeTeam }
+        let awayScorers = res.goalEvents.filter { !$0.isHomeTeam }
+        return VStack(spacing: 14) {
             HStack(spacing: 6) {
                 Text(fixture.cupRound.map { "\(fixture.competition) • \($0)" } ?? "\(fixture.competition) • Matchweek \(fixture.matchWeek)")
                     .font(.caption.weight(.semibold))
@@ -76,28 +119,32 @@ public struct PostMatchView: View {
                     GFPill(text: derby, color: .white, icon: "flame.fill")
                 }
             }
-            HStack(alignment: .center) {
-                teamColumn(home)
-                VStack(spacing: 2) {
-                    Text("\(res.homeGoals) – \(res.awayGoals)")
-                        .font(.system(size: 34, weight: .black, design: .rounded))
+            HStack(alignment: .top, spacing: 8) {
+                teamColumn(home, scorers: homeScorers)
+                VStack(spacing: 4) {
+                    Text("\(res.homeGoals) - \(res.awayGoals)")
+                        .font(.system(size: 46, weight: .heavy, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(.white)
-                    Text("FULL TIME").font(.caption2.weight(.heavy)).tracking(1.5).foregroundStyle(.white.opacity(0.8))
+                        .fixedSize()
+                    Text("Full time")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.75))
+                    if outcome != "-" {
+                        Text(outcome == "W" ? "Victory" : outcome == "D" ? "Draw" : "Defeat")
+                            .font(.caption.weight(.heavy))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
+                            .background(
+                                (outcome == "W" ? Color.winGreen : outcome == "D" ? Color.drawGray : Color.lossRed),
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            )
+                            .foregroundStyle(.white)
+                            .padding(.top, 2)
+                    }
                 }
-                teamColumn(away)
-            }
-            if outcome != "-" {
-                Text(outcome == "W" ? "VICTORY" : outcome == "D" ? "DRAW" : "DEFEAT")
-                    .font(.caption.weight(.heavy))
-                    .tracking(2)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 5)
-                    .background(
-                        (outcome == "W" ? Color.winGreen : outcome == "D" ? Color.drawGray : Color.lossRed),
-                        in: Capsule()
-                    )
-                    .foregroundStyle(.white)
+                .padding(.top, 8)
+                teamColumn(away, scorers: awayScorers)
             }
             if res.attendance > 0 {
                 Label("\(res.attendance.formatted()) at \(home.stadium)", systemImage: "person.3.fill")
@@ -105,72 +152,121 @@ public struct PostMatchView: View {
                     .foregroundStyle(.white.opacity(0.8))
             }
         }
-        .padding(.vertical, 20)
+        .padding(.vertical, 18)
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)
         .background(
             ZStack {
                 LinearGradient(colors: [Color(hex: home.primaryColor), Color(hex: away.primaryColor)],
-                               startPoint: .leading, endPoint: .trailing)
-                Color.black.opacity(0.35)
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                LinearGradient(colors: [Color.black.opacity(0.25), Color.black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
             }
         )
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(scoreboardSummary(fixture: fixture, res: res, home: home, away: away, outcome: outcome))
+        .accessibilityAddTraits(.isHeader)
     }
 
-    private func teamColumn(_ club: Club) -> some View {
+    private func scoreboardSummary(fixture: Fixture, res: MatchResult, home: Club, away: Club, outcome: String) -> String {
+        func scorers(_ events: [MatchEvent]) -> String {
+            events.map { "\(playerName($0.playerId) ?? "unknown") \($0.minute) minutes\($0.type == .penalty ? ", penalty" : $0.type == .ownGoal ? ", own goal" : "")" }
+                .joined(separator: ", ")
+        }
+        var text = "Full time. \(home.name) \(res.homeGoals), \(away.name) \(res.awayGoals)."
+        if outcome == "W" { text += " Victory." } else if outcome == "L" { text += " Defeat." } else if outcome == "D" { text += " Draw." }
+        let h = res.goalEvents.filter { $0.isHomeTeam }, a = res.goalEvents.filter { !$0.isHomeTeam }
+        if !h.isEmpty { text += " \(home.name) scorers: \(scorers(h))." }
+        if !a.isEmpty { text += " \(away.name) scorers: \(scorers(a))." }
+        text += " \(fixture.competition)."
+        return text
+    }
+
+    private func teamColumn(_ club: Club, scorers: [MatchEvent]) -> some View {
         VStack(spacing: 6) {
-            CrestView(club: club, size: 36)
+            CrestView(club: club, size: 50)
             Text(club.name)
-                .font(.caption.weight(.bold))
+                .font(.subheadline.weight(.heavy))
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
+            VStack(spacing: 2) {
+                ForEach(scorers) { goal in
+                    HStack(spacing: 4) {
+                        Image(systemName: "soccerball").font(.system(size: 9))
+                        Text("\(playerSurname(goal.playerId)) \(goal.minute)'\(goal.type == .penalty ? " (pen)" : goal.type == .ownGoal ? " (og)" : "")")
+                            .font(.caption2.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                    .foregroundStyle(.white.opacity(0.9))
+                }
+            }
         }
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: - Goals
+    private func playerSurname(_ id: UUID?) -> String {
+        guard let id, let player = gameState.player(withId: id)?.player else { return "Goal" }
+        return player.lastName.isEmpty ? player.fullName : player.lastName
+    }
 
     private func playerName(_ id: UUID?) -> String? {
         guard let id else { return nil }
         return gameState.player(withId: id)?.player.fullName
     }
 
-    private func goalsCard(res: MatchResult, home: Club, away: Club) -> some View {
-        var running = (home: 0, away: 0)
-        let rows: [(event: MatchEvent, score: String)] = res.goalEvents.map { event in
-            if event.isHomeTeam { running.home += 1 } else { running.away += 1 }
-            return (event, "\(running.home)-\(running.away)")
-        }
-        return VStack(alignment: .leading, spacing: 12) {
-            GFSectionHeader(title: "Goals", icon: "soccerball")
-            ForEach(rows, id: \.event.id) { row in
+    // MARK: - Match facts
+
+    /// Goals, cards, injuries and substitutions together, in the order they
+    /// happened. Goals keep their scorer, assist and description.
+    @ViewBuilder
+    private func matchFactsCard(res: MatchResult, home: Club, away: Club) -> some View {
+        let kinds: Set<MatchEventType> = [.goal, .penalty, .ownGoal, .yellowCard, .redCard, .secondYellow, .injury, .substitution]
+        let goalIds = Set(res.goalEvents.map(\.id))
+        let rows: [(event: MatchEvent, score: String?)] = {
+            var homeGoals = 0, awayGoals = 0
+            return res.events.filter { kinds.contains($0.type) }.map { event in
+                guard goalIds.contains(event.id) else { return (event, nil) }
+                if event.isHomeTeam { homeGoals += 1 } else { awayGoals += 1 }
+                return (event, "\(homeGoals)-\(awayGoals)")
+            }
+        }()
+        VStack(alignment: .leading, spacing: 12) {
+            GFSectionHeader(title: "Match Facts", icon: "list.bullet.rectangle")
+            if rows.isEmpty {
+                Text("No goals, cards or changes.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(Array(rows.enumerated()), id: \.element.event.id) { index, row in
                 let event = row.event
                 let club = event.isHomeTeam ? home : away
                 HStack(alignment: .top, spacing: 12) {
                     VStack(spacing: 4) {
                         Text("\(event.minute)'")
                             .font(.subheadline.weight(.heavy).monospacedDigit())
-                        Text(row.score)
-                            .font(.caption2.weight(.bold).monospacedDigit())
-                            .foregroundStyle(.secondary)
+                        if let score = row.score {
+                            Text(score)
+                                .font(.caption2.weight(.bold).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .frame(width: 42)
+                    factIcon(event.type)
+                        .frame(width: 18)
+                        .padding(.top, 2)
                     VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            CrestView(club: club, size: 16)
-                            Text(playerName(event.playerId) ?? event.shortText)
-                                .font(.subheadline.weight(.bold))
-                            if event.type == .penalty { GFPill(text: "PEN", color: .orange) }
-                            if event.type == .ownGoal { GFPill(text: "OG", color: .lossRed) }
-                        }
-                        if let assist = playerName(event.assistPlayerId) {
+                        Text(factTitle(event))
+                            .font(.subheadline.weight(row.score != nil ? .bold : .semibold))
+                        if row.score != nil, let assist = playerName(event.assistPlayerId) {
                             Label("Assist: \(assist)", systemImage: "arrowshape.turn.up.right.fill")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Color.accentColor)
                         }
+                        Text(club.name)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                         if !event.detailText.isEmpty {
                             Text(event.detailText)
                                 .font(.caption)
@@ -180,88 +276,106 @@ public struct PostMatchView: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .accessibilityElement(children: .combine)
-                if row.event.id != rows.last?.event.id { Divider() }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(event.minute) minutes. \(factKind(event.type)). \(factTitle(event)), \(club.name).\(row.score.map { " Score \($0.replacingOccurrences(of: "-", with: " to "))." } ?? "") \(event.detailText)")
+                if index < rows.count - 1 { Divider() }
             }
         }
         .gfCard()
     }
 
-    // MARK: - Press conference
-
-    @ViewBuilder
-    private func pressCard(fixture: Fixture) -> some View {
-        if let reply = pressReply {
-            VStack(alignment: .leading, spacing: 8) {
-                GFSectionHeader(title: "Press Conference", icon: "mic.fill")
-                Text(reply).font(.subheadline)
-            }
-            .gfCard()
-        } else if let question = gameState.pressQuestion(for: fixture) {
-            VStack(alignment: .leading, spacing: 10) {
-                GFSectionHeader(title: "Press Conference", icon: "mic.fill")
-                Text("“\(question)”")
-                    .font(.subheadline.italic())
-                ForEach(PressTone.allCases) { tone in
-                    Button {
-                        withAnimation(.snappy) {
-                            pressReply = gameState.answerPressConference(fixtureId: fixture.id, tone: tone)
-                        }
-                    } label: {
-                        Label(tone.rawValue, systemImage: tone.icon)
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                            .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .gfCard()
-        }
+    private func factTitle(_ event: MatchEvent) -> String {
+        if event.type == .substitution { return event.shortText }
+        return playerName(event.playerId) ?? event.shortText
     }
 
-    // MARK: - Cards and injuries
-
-    @ViewBuilder
-    private func disciplineCard(res: MatchResult, home: Club, away: Club) -> some View {
-        let events = res.events.filter { [.yellowCard, .redCard, .secondYellow, .injury].contains($0.type) }
-        if !events.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                GFSectionHeader(title: "Cards & Injuries", icon: "exclamationmark.triangle.fill")
-                ForEach(events) { event in
-                    HStack(spacing: 10) {
-                        Text("\(event.minute)'")
-                            .font(.caption.weight(.bold).monospacedDigit())
-                            .frame(width: 34, alignment: .leading)
-                        disciplineIcon(event.type)
-                        Text(playerName(event.playerId) ?? event.shortText)
-                            .font(.subheadline)
-                        Spacer()
-                        Text(event.isHomeTeam ? home.shortName : away.shortName)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityElement(children: .combine)
-                }
-            }
-            .gfCard()
-        }
-    }
-
-    @ViewBuilder
-    private func disciplineIcon(_ type: MatchEventType) -> some View {
+    private func factKind(_ type: MatchEventType) -> String {
         switch type {
+        case .goal: return "Goal"
+        case .penalty: return "Penalty goal"
+        case .ownGoal: return "Own goal"
+        case .yellowCard: return "Yellow card"
+        case .redCard: return "Red card"
+        case .secondYellow: return "Second yellow card, sent off"
+        case .injury: return "Injury"
+        case .substitution: return "Substitution"
+        default: return "Event"
+        }
+    }
+
+    @ViewBuilder
+    private func factIcon(_ type: MatchEventType) -> some View {
+        switch type {
+        case .goal, .penalty:
+            Image(systemName: "soccerball").font(.subheadline)
+        case .ownGoal:
+            Image(systemName: "soccerball").font(.subheadline).foregroundStyle(Color.lossRed)
         case .yellowCard:
             RoundedRectangle(cornerRadius: 2).fill(.yellow).frame(width: 11, height: 15)
-                .accessibilityLabel("Yellow card")
-        case .redCard, .secondYellow:
+        case .redCard:
             RoundedRectangle(cornerRadius: 2).fill(.red).frame(width: 11, height: 15)
-                .accessibilityLabel("Red card")
-        default:
+        case .secondYellow:
+            ZStack {
+                RoundedRectangle(cornerRadius: 2).fill(.yellow).frame(width: 11, height: 15).offset(x: -3, y: -2)
+                RoundedRectangle(cornerRadius: 2).fill(.red).frame(width: 11, height: 15).offset(x: 3, y: 2)
+            }
+        case .injury:
             Image(systemName: "cross.case.fill").foregroundStyle(.red).font(.caption)
-                .accessibilityLabel("Injury")
+        default:
+            Image(systemName: "arrow.left.arrow.right").foregroundStyle(Color.winGreen).font(.caption)
         }
+    }
+
+    // MARK: - Player of the match
+
+    /// A whole screen for the player of the match. Tap for their profile.
+    private func playerOfMatchScreen(_ potm: (player: Player, clubName: String, rating: Double), res: MatchResult) -> some View {
+        let goals = res.goalEvents.filter { $0.playerId == potm.player.id && $0.type != .ownGoal }.count
+        let assists = res.goalEvents.filter { $0.assistPlayerId == potm.player.id }.count
+        return VStack(spacing: 18) {
+            Text("Player of the Match")
+                .font(.gfDisplay(26))
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityFocused($headingFocused)
+                .padding(.top, 10)
+            Button {
+                gameState.currentScreen = .playerDetail(potm.player.id)
+            } label: {
+                VStack(spacing: 14) {
+                    FaceView(player: potm.player, size: 130, style: .full)
+                        .frame(width: 180, height: 180)
+                        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                        .shadow(color: Color(hex: "FFC857").opacity(0.5), radius: 18)
+                    Text(potm.player.fullName)
+                        .font(.gfDisplay(26))
+                        .multilineTextAlignment(.center)
+                    Text("\(potm.player.primaryPosition.displayName) · \(potm.clubName) · Age \(potm.player.age)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color(hex: "FFC857"))
+                        .multilineTextAlignment(.center)
+                    HStack(spacing: 14) {
+                        statChip(icon: "star.fill", text: String(format: "%.1f", potm.rating), highlight: true)
+                        statChip(icon: "soccerball", text: "\(goals)", highlight: false)
+                        statChip(icon: "shoe.fill", text: "\(assists)", highlight: false)
+                    }
+                    Label("Open profile", systemImage: "person.text.rectangle")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.top, 4)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
+                .background(
+                    RadialGradient(colors: [Color(hex: "FFC857").opacity(0.25), .clear], center: .top, startRadius: 5, endRadius: 320)
+                )
+                .gfCard(padding: 0)
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(potm.player.fullName), \(potm.player.primaryPosition.displayName) for \(potm.clubName), age \(potm.player.age). Match rating \(String(format: "%.1f", potm.rating)). \(goals) \(goals == 1 ? "goal" : "goals"), \(assists) \(assists == 1 ? "assist" : "assists").")
+            .accessibilityHint("Opens the player's profile")
+            .accessibilityAddTraits(.isButton)
+        }
+        .frame(minHeight: 520)
     }
 
     // MARK: - Player of the match & ratings

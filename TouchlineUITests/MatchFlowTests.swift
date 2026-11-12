@@ -36,15 +36,18 @@ final class MatchFlowTests: XCTestCase {
         element.tap()
     }
 
-    /// Full time: the report scrolls, then Continue returns home.
+    /// Full time: the report, then Player of the Match, then the other
+    /// results; Continue on each, then home.
     private func walkFullTime(_ app: XCUIApplication) {
         let cont = app.buttons["Continue"]
         XCTAssertTrue(cont.waitForExistence(timeout: 30), "Full time never appeared")
-        app.swipeUp()
-        app.swipeUp()
-        if !cont.isHittable { app.swipeUp() }
-        cont.tap()
-        XCTAssertFalse(app.navigationBars["Full Time"].waitForExistence(timeout: 3), "Still on the full-time screen")
+        XCTAssertTrue(app.navigationBars["Full Time"].exists, "Not on the full-time report")
+        tap(cont, "Continue to Player of the Match")
+        XCTAssertTrue(app.navigationBars["Player of the Match"].waitForExistence(timeout: 10), "No Player of the Match screen")
+        tap(app.buttons["Continue"], "Continue to the results")
+        XCTAssertTrue(app.navigationBars["Results"].waitForExistence(timeout: 10), "No results screen")
+        tap(app.buttons["Continue"], "Continue home")
+        XCTAssertFalse(app.navigationBars["Results"].waitForExistence(timeout: 3), "Still on the results screen")
         XCTAssertEqual(app.state, .runningForeground, "The app is no longer running")
     }
 
@@ -61,6 +64,7 @@ final class MatchFlowTests: XCTestCase {
         let next = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Continue' OR label BEGINSWITH 'Play vs'")).firstMatch
         if !next.waitForExistence(timeout: 30) { print(app.debugDescription) }
         XCTAssertTrue(next.exists, "No Continue or Play button on the home screen")
+        XCTAssertTrue(next.label.hasPrefix("Continue"), "After a match the home screen should offer Continue, not \(next.label)")
         if next.label.hasPrefix("Continue") {
             next.tap()
             let play = button(app, beginsWith: "Play vs")
