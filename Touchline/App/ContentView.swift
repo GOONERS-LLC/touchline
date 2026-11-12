@@ -2599,16 +2599,22 @@ public struct MatchDayView: View {
                 .foregroundStyle(.white.opacity(0.85))
             HStack {
                 VStack(spacing: 6) {
-                    CrestView(club: home, size: 40)
+                    ZStack(alignment: .bottomTrailing) {
+                        KitView(kit: home.effectiveKit, sponsor: home.isUserClub ? gameState.shirtSponsorName : nil, monogram: home.shortName, height: 96)
+                        CrestView(club: home, size: 30).offset(x: 8, y: 4)
+                    }
                     Text(home.name).font(.caption.weight(.bold)).multilineTextAlignment(.center).lineLimit(2)
                 }
                 .frame(maxWidth: .infinity)
                 VStack(spacing: 4) {
-                    Text("VS").font(.system(size: 28, weight: .black, design: .rounded))
+                    Text("v").font(.system(size: 30, weight: .heavy, design: .rounded)).foregroundStyle(Color.highlight).accessibilityLabel("versus")
                     Text(fixture.date).font(.caption2.monospacedDigit()).opacity(0.8)
                 }
                 VStack(spacing: 6) {
-                    CrestView(club: away, size: 40)
+                    ZStack(alignment: .bottomTrailing) {
+                        KitView(kit: away.effectiveKit, sponsor: away.isUserClub ? gameState.shirtSponsorName : nil, monogram: away.shortName, height: 96)
+                        CrestView(club: away, size: 30).offset(x: 8, y: 4)
+                    }
                     Text(away.name).font(.caption.weight(.bold)).multilineTextAlignment(.center).lineLimit(2)
                 }
                 .frame(maxWidth: .infinity)
