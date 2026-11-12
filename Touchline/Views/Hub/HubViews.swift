@@ -50,20 +50,23 @@ struct HubTile: View {
     var highlight: Bool = false
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             Image(systemName: icon)
-                .font(.system(size: 17, weight: .semibold))
-                .frame(height: 20)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(highlight ? Color(hex: "2EC4B6") : Color(hex: "E4573D")))
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 13, weight: .bold, design: .rounded))
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
         }
-        .foregroundStyle(highlight ? Color.gfNight : Color.white)
-        .frame(maxWidth: .infinity, minHeight: 50)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(highlight ? Color.gfMint : Color.gfSurface))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.gfStroke, lineWidth: 1))
+        .foregroundStyle(Color.white)
+        .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
+        .padding(.horizontal, 12)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(LinearGradient(colors: [Color(hex: highlight ? "1B4D52" : "14393F"), Color(hex: "0E2A2F")], startPoint: .topLeading, endPoint: .bottomTrailing)))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
         .overlay(alignment: .topTrailing) {
             if badge > 0 {
                 Text("\(min(badge, 99))")
@@ -80,11 +83,11 @@ struct HubTile: View {
     }
 }
 
-/// Four small tiles per row.
+/// Three tiles per row.
 struct HubGrid<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
             content()
         }
         .buttonStyle(.plain)
@@ -104,11 +107,11 @@ struct NextMatchLine: View {
                 let today = fixture.date == gameState.season.currentDate
                 let venue = fixture.homeClubId == club.id ? "home" : "away"
                 let round = fixture.cupRound.map { "\(fixture.competition), \($0)" } ?? fixture.competition
-                HStack(spacing: 8) {
-                    CrestView(club: opponent, size: 22)
+                HStack(spacing: 12) {
+                    CrestView(club: opponent, size: 38)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(today ? "MATCH DAY · vs \(opponent.name)" : "Next: vs \(opponent.name)")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.system(.headline, design: .rounded))
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
                         Text("\(venue.capitalized) · \(round) · \(DashboardView.shortDate(fixture.date))")
@@ -119,9 +122,15 @@ struct NextMatchLine: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(today ? Color.gfMint.opacity(0.18) : Color.gfSurface))
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(LinearGradient(colors: today ? [Color(hex: "E4573D"), Color(hex: "A93424")] : [Color(hex: "1B4D52"), Color(hex: "0E2A2F")],
+                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                )
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 2).fill(today ? Color.white : Color(hex: "FFC857")).frame(width: 4).padding(.vertical, 12)
+                }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(today
                     ? "Match day. \(verb) \(opponent.name), \(venue), \(round)."

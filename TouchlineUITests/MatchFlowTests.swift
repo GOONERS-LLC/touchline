@@ -28,7 +28,11 @@ final class MatchFlowTests: XCTestCase {
     }
 
     private func tap(_ element: XCUIElement, _ what: String, timeout: TimeInterval = 30) {
-        XCTAssertTrue(element.waitForExistence(timeout: timeout), "Missing: \(what)")
+        if !element.waitForExistence(timeout: timeout) {
+            // Shown in the CI log: what was on screen instead.
+            for line in XCUIApplication().debugDescription.split(separator: "\n").prefix(150) { print("DBG: \(line)") }
+        }
+        XCTAssertTrue(element.exists, "Missing: \(what)")
         element.tap()
     }
 

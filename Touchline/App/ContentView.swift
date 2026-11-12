@@ -90,6 +90,40 @@ public struct ContentView: View {
 
 // MARK: - Main Menu Screen
 
+/// A main-menu row: an icon disc, the title with its description, and an arrow.
+struct MenuRowLabel: View {
+    let icon: String
+    let title: String
+    let detail: String?
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+                .background(Circle().fill(Color.white.opacity(0.14)))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .opacity(0.8)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.bold))
+                .opacity(0.6)
+                .accessibilityHidden(true)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
 public struct MainMenuView: View {
     @Environment(GameState.self) private var gameState
     @State private var pendingNewCareerMode: GameMode?
@@ -104,28 +138,32 @@ public struct MainMenuView: View {
     public var body: some View {
         ScrollView {
             VStack(spacing: 18) {
-                // Logo over the stadium
-                VStack(spacing: 4) {
-                    ZStack {
-                        Image(systemName: "shield.fill")
-                            .font(.system(size: 64))
-                            .foregroundStyle(Color.white.opacity(0.92))
-                        Image(systemName: "soccerball")
-                            .font(.system(size: 28, weight: .bold))
-                            .foregroundStyle(Color.gfNight)
-                            .offset(y: -6)
+                // The Touchline mark: a white T standing on a coral touchline.
+                HStack(alignment: .center, spacing: 16) {
+                    ZStack(alignment: .bottom) {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(LinearGradient(colors: [Color(hex: "1B4D52"), Color(hex: "07171A")], startPoint: .topTrailing, endPoint: .bottomLeading))
+                            .frame(width: 76, height: 76)
+                        VStack(spacing: 0) {
+                            Rectangle().fill(Color.white).frame(width: 42, height: 9)
+                            Rectangle().fill(Color.white).frame(width: 9, height: 36)
+                        }
+                        .offset(y: -16)
+                        Capsule().fill(Color(hex: "E4573D")).frame(width: 56, height: 4).offset(y: -10)
                     }
-                    .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
-                    Text("TOUCHLINE")
-                        .font(.gfDisplay(30))
-                        .foregroundStyle(.white)
-                    Text("FOOTBALL MANAGEMENT")
-                        .font(.gfLabel(14))
-                        .tracking(3)
-                        .foregroundStyle(.white.opacity(0.75))
+                    .shadow(color: Color(hex: "2EC4B6").opacity(0.35), radius: 14, y: 6)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Touchline")
+                            .font(.system(size: 38, weight: .heavy, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text("Football Management")
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color(hex: "FFC857"))
+                    }
+                    Spacer(minLength: 0)
                 }
-                .padding(.top, 30)
-                .padding(.bottom, 14)
+                .padding(.top, 36)
+                .padding(.bottom, 10)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Touchline Football Management")
                 .accessibilityAddTraits(.isHeader)
@@ -135,13 +173,9 @@ public struct MainMenuView: View {
                         Button {
                             gameState.currentScreen = gameState.userClub == nil ? .jobOffers : .dashboard
                         } label: {
-                            VStack(spacing: 2) {
-                                Text("Continue")
-                                Text("\(gameState.userClub?.name ?? "Job search") · \(gameState.season.year)")
-                                    .font(.caption)
-                                    .textCase(nil)
-                                    .opacity(0.85)
-                            }
+                            MenuRowLabel(icon: "play.fill",
+                                         title: "Continue",
+                                         detail: "\(gameState.userClub?.name ?? "Job search") · \(gameState.season.year)")
                         }
                         .buttonStyle(.gfPrimary)
                         .accessibilityLabel("Continue career\(gameState.userClub.map { " with \($0.name)" } ?? " in the job market")")
@@ -150,13 +184,9 @@ public struct MainMenuView: View {
                         Button {
                             startMode(mode)
                         } label: {
-                            VStack(spacing: 2) {
-                                Text(mode == .createClub ? "New Owner Career" : "New Manager Career")
-                                Text(mode == .createClub ? "Run the club as chairman" : "Pick the team, tactics and transfers")
-                                    .font(.caption)
-                                    .textCase(nil)
-                                    .opacity(0.8)
-                            }
+                            MenuRowLabel(icon: mode == .createClub ? "building.columns.fill" : "person.fill.badge.plus",
+                                         title: mode == .createClub ? "New Owner Career" : "New Manager Career",
+                                         detail: mode == .createClub ? "Run the club as chairman" : "Pick the team, tactics and transfers")
                         }
                         .buttonStyle(.gfOutline)
                         .accessibilityLabel("\(mode.displayName). \(mode.modeDescription)")
@@ -164,13 +194,9 @@ public struct MainMenuView: View {
                     Button {
                         showingEditor = true
                     } label: {
-                        VStack(spacing: 2) {
-                            Text("Editor")
-                            Text(DatapackStore.shared.activeName.map { "Datapack in use: \($0)" } ?? "Create and edit datapacks")
-                                .font(.caption)
-                                .textCase(nil)
-                                .opacity(0.8)
-                        }
+                        MenuRowLabel(icon: "square.and.pencil",
+                                     title: "Editor",
+                                     detail: DatapackStore.shared.activeName.map { "Datapack in use: \($0)" } ?? "Create and edit datapacks")
                     }
                     .buttonStyle(.gfOutline)
                     .accessibilityLabel("Editor. Create and edit datapacks")
@@ -183,10 +209,13 @@ public struct MainMenuView: View {
                     }) {
                         DatapackListView()
                     }
-                    Button("Settings & Saves") { gameState.currentScreen = .settings }
-                        .buttonStyle(.gfOutline)
+                    Button { gameState.currentScreen = .settings } label: {
+                        MenuRowLabel(icon: "gearshape.fill", title: "Settings & Saves", detail: nil)
+                    }
+                    .buttonStyle(.gfOutline)
+                    .accessibilityLabel("Settings & Saves")
                 }
-                .padding(.horizontal, 26)
+                .padding(.horizontal, 4)
 
                 Text("An offline football management simulation. Player and club names are used for identification only; all badges and faces are procedurally generated.")
                     .font(.caption2)
