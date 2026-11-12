@@ -227,7 +227,12 @@ function loadOld(raw) {
     const built = [];
 
     for (const club of clubs) {
-      const squadHtml = await get(`${HOST}/${club.slug}/kader/verein/${club.id}/saison_id/${SEASON_ID}/plus/1`);
+      let squadHtml = await get(`${HOST}/${club.slug}/kader/verein/${club.id}/saison_id/${SEASON_ID}/plus/1`);
+      // Calendar-year leagues (South America, Scandinavia, Asia, MLS) file the
+      // current campaign under the previous season id.
+      if (parseSquad(squadHtml).length < 14) {
+        squadHtml = await get(`${HOST}/${club.slug}/kader/verein/${club.id}/saison_id/${Number(SEASON_ID) - 1}/plus/1`);
+      }
       const factsHtml = await get(`${HOST}/${club.slug}/datenfakten/verein/${club.id}`);
       const facts = parseFacts(factsHtml);
       const squad = parseSquad(squadHtml)

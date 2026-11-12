@@ -127,7 +127,8 @@ public enum TabDestination: String, CaseIterable, Identifiable {
 public struct InGameTabView: View {
     @Environment(GameState.self) private var gameState
     @Binding var selectedTab: TabDestination
-    
+    @State private var showingKitDesigner = false
+
     public var body: some View {
         TabView(selection: $selectedTab) {
             DashboardView()
@@ -210,6 +211,13 @@ public struct InGameTabView: View {
                         } label: {
                             Label("Finances", systemImage: "sterlingsign.circle")
                         }
+                        if gameState.userClub != nil {
+                            Button {
+                                showingKitDesigner = true
+                            } label: {
+                                Label("Kit Designer", systemImage: "tshirt")
+                            }
+                        }
                         Button {
                             gameState.currentScreen = .managerProfile
                         } label: {
@@ -236,8 +244,14 @@ public struct InGameTabView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingKitDesigner) { kitSheet }
     }
     
+    @ViewBuilder
+    private var kitSheet: some View {
+        if let club = gameState.userClub { KitDesignerView(club: club).environment(gameState) }
+    }
+
     private func navigationTitleForTab(_ tab: TabDestination) -> String {
         if let club = gameState.userClub {
             return "\(club.name) • \(tab.rawValue)"
@@ -1369,9 +1383,33 @@ public struct OwnerFacilitiesView: View {
 
 public struct OwnerClubView: View {
     @Environment(GameState.self) private var gameState
+    @State private var showingKitDesigner = false
     public var body: some View {
         List {
             if let club = gameState.userClub {
+                Section("Club Kit") {
+                    HStack(spacing: 16) {
+                        KitView(kit: club.effectiveKit, sponsor: gameState.shirtSponsorName, monogram: club.shortName, height: 150)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(club.kit == nil ? "Traditional home kit" : "Custom home kit")
+                                .font(.headline)
+                            Text(gameState.shirtSponsorName.map { "Shirt sponsor: \($0)" } ?? "No shirt sponsor yet")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button {
+                                showingKitDesigner = true
+                            } label: {
+                                Label("Design Kit", systemImage: "paintbrush.fill")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brand)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+                .sheet(isPresented: $showingKitDesigner) {
+                    KitDesignerView(club: club).environment(gameState)
+                }
                 Section("Club Identity") {
                     LabeledContent("City", value: club.city)
                     LabeledContent("Division", value: club.leagueTier.displayName)
@@ -2717,7 +2755,11 @@ public struct MatchDayView: View {
 
     private func teamColumn(_ club: Club, label: String) -> some View {
         VStack(spacing: 8) {
-            CrestView(club: club, size: 72)
+            ZStack(alignment: .bottomTrailing) {
+                KitView(kit: club.effectiveKit, sponsor: club.isUserClub ? gameState.shirtSponsorName : nil, monogram: club.shortName, height: 110)
+                CrestView(club: club, size: 34)
+                    .offset(x: 10, y: 4)
+            }
             Text(club.name)
                 .font(.headline)
                 .multilineTextAlignment(.center)

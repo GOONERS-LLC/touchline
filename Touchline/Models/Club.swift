@@ -46,6 +46,8 @@ public struct Club: Codable, Identifiable, Hashable {
     
     // Completed Match Logs
     public var seasonResults: [MatchResult]
+    /// A custom home kit. nil means the club wears its traditional kit.
+    public var kit: KitDesign? = nil
     
     // MARK: - Initializer
     
@@ -507,7 +509,7 @@ public struct Club: Codable, Identifiable, Hashable {
         case primaryColor, secondaryColor, leagueTier, reputation, isUserClub
         case players, manager, academyProspects, finances, staff
         case trainingFacilityLevel, youthAcademyLevel, medicalFacilityLevel
-        case tactics, seasonResults
+        case tactics, seasonResults, kit
     }
 
     public init(from decoder: Decoder) throws {
@@ -533,6 +535,7 @@ public struct Club: Codable, Identifiable, Hashable {
         medicalFacilityLevel = try c.decode(Int.self, forKey: .medicalFacilityLevel)
         tactics = try c.decode(Tactics.self, forKey: .tactics)
         seasonResults = try c.decode([MatchResult].self, forKey: .seasonResults)
+        kit = try c.decodeIfPresent(KitDesign.self, forKey: .kit)
 
         // Repair stale derived values from older saves: the gate model and wage
         // headroom must reflect the club's real stadium and current squad.
