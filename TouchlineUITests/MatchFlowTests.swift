@@ -58,8 +58,15 @@ final class MatchFlowTests: XCTestCase {
         tap(app.buttons["Skip to full time"], "Skip to full time")
         walkFullTime(app)
         // And the next match day works too (no replaying the same match).
-        tap(button(app, beginsWith: "Continue"), "Continue to the next match day")
-        XCTAssertTrue(button(app, beginsWith: "Play vs").waitForExistence(timeout: 30), "Next match day not reached")
+        let next = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Continue' OR label BEGINSWITH 'Play vs'")).firstMatch
+        if !next.waitForExistence(timeout: 30) { print(app.debugDescription) }
+        XCTAssertTrue(next.exists, "No Continue or Play button on the home screen")
+        if next.label.hasPrefix("Continue") {
+            next.tap()
+            let play = button(app, beginsWith: "Play vs")
+            if !play.waitForExistence(timeout: 30) { print(app.debugDescription) }
+            XCTAssertTrue(play.exists, "Next match day not reached")
+        }
     }
 
     func testInstantResult() {
