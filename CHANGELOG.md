@@ -5,6 +5,19 @@ All notable changes to Touchline are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-11-12
+
+- After every match the day finishes where it was played: home offers
+  Continue to the next match day instead of jumping straight to Play.
+- Full time is three screens: the report (a new scoreboard with each side's
+  scorers, Match Facts with goals, cards, injuries and substitutions in order,
+  ratings and stats), then Player of the Match, then the other results and
+  the table. The press conference and momentum chart are gone.
+- The crowd cheers a win and boos a defeat after simulated matches too.
+- Full club names everywhere: no three-letter codes on screens, in
+  commentary or on crests, and club creation no longer asks for one.
+- Much smaller home tiles, five to a row.
+
 ## [2.1.0] - 2026-11-12
 
 Touchline is GridironFC 1.6.0, unchanged in play, with:
