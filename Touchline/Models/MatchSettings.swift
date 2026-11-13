@@ -52,12 +52,13 @@ public struct MatchSettings: Codable, Hashable {
         public var id: String { rawValue }
         public var displayName: String { rawValue }
 
-        /// Fatigue percentage above which a tired player is replaced.
+        /// In-match tiredness (0-100; a full ninety minutes at a normal
+        /// press leaves a player around 30) above which he is replaced.
         public var fatigueThreshold: Double {
             switch self {
-            case .conservative: return 78
-            case .balanced: return 68
-            case .aggressive: return 58
+            case .conservative: return 24
+            case .balanced: return 18
+            case .aggressive: return 13
             }
         }
 
@@ -87,15 +88,19 @@ public struct MatchSettings: Codable, Hashable {
     public var animateCalendar: Bool
     /// The animated calendar stops to show important new mail.
     public var pauseCalendarForMail: Bool
+    /// A live match stops when one of your players is hurt, so you choose
+    /// his replacement.
+    public var stopForInjuries: Bool
 
     public init(
         speed: Speed = .normal,
         stopAtHalfTime: Bool = true,
-        autoSubTiming: AutoSubTiming = .secondHalf,
+        autoSubTiming: AutoSubTiming = .off,
         autoSubAggression: AutoSubAggression = .balanced,
         assistantRotatesTiredPlayers: Bool = false,
         animateCalendar: Bool = true,
-        pauseCalendarForMail: Bool = true
+        pauseCalendarForMail: Bool = true,
+        stopForInjuries: Bool = true
     ) {
         self.speed = speed
         self.stopAtHalfTime = stopAtHalfTime
@@ -104,10 +109,30 @@ public struct MatchSettings: Codable, Hashable {
         self.assistantRotatesTiredPlayers = assistantRotatesTiredPlayers
         self.animateCalendar = animateCalendar
         self.pauseCalendarForMail = pauseCalendarForMail
+        self.stopForInjuries = stopForInjuries
     }
 
     private enum CodingKeys: String, CodingKey {
         case speed, stopAtHalfTime, autoSubTiming, autoSubAggression, assistantRotatesTiredPlayers, animateCalendar, pauseCalendarForMail
+        case stopForInjuries, controlVersion
+    }
+
+    /// Version 2: the manager makes his own substitutions unless he hands
+    /// them to the assistant. Older settings had the assistant subbing by
+    /// default, so that is switched off once on upgrade.
+    private static let currentControlVersion = 2
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(speed, forKey: .speed)
+        try c.encode(stopAtHalfTime, forKey: .stopAtHalfTime)
+        try c.encode(autoSubTiming, forKey: .autoSubTiming)
+        try c.encode(autoSubAggression, forKey: .autoSubAggression)
+        try c.encode(assistantRotatesTiredPlayers, forKey: .assistantRotatesTiredPlayers)
+        try c.encode(animateCalendar, forKey: .animateCalendar)
+        try c.encode(pauseCalendarForMail, forKey: .pauseCalendarForMail)
+        try c.encode(stopForInjuries, forKey: .stopForInjuries)
+        try c.encode(MatchSettings.currentControlVersion, forKey: .controlVersion)
     }
 
     /// Tolerant decoding so settings saved by older versions still load.
@@ -120,5 +145,11 @@ public struct MatchSettings: Codable, Hashable {
         assistantRotatesTiredPlayers = try c.decodeIfPresent(Bool.self, forKey: .assistantRotatesTiredPlayers) ?? false
         animateCalendar = try c.decodeIfPresent(Bool.self, forKey: .animateCalendar) ?? true
         pauseCalendarForMail = try c.decodeIfPresent(Bool.self, forKey: .pauseCalendarForMail) ?? true
+        stopForInjuries = try c.decodeIfPresent(Bool.self, forKey: .stopForInjuries) ?? true
+        let version = try c.decodeIfPresent(Int.self, forKey: .controlVersion) ?? 1
+        if version < MatchSettings.currentControlVersion {
+            autoSubTiming = .off
+            assistantRotatesTiredPlayers = false
+        }
     }
 }

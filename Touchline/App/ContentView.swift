@@ -1110,7 +1110,8 @@ public struct SquadView: View {
                     Button(formation.rawValue) {
                         if let idx = gameState.clubs.firstIndex(where: { $0.isUserClub }) {
                             gameState.clubs[idx].tactics.formation = formation
-                            gameState.clubs[idx].autoPickStartingXI()
+                            // Your eleven, rearranged for the new shape.
+                            gameState.clubs[idx].fitLineupToFormation(repair: gameState.liveMatch == nil)
                         }
                     }
                 }
@@ -1335,7 +1336,9 @@ public struct TacticsView: View {
                    current: club.tactics.formation) { preset in
                 guard let idx = gameState.clubs.firstIndex(where: { $0.isUserClub }) else { return }
                 gameState.clubs[idx].tactics.formation = preset
-                gameState.clubs[idx].autoPickStartingXI()
+                // Same players, rearranged for the new shape (no one is
+                // dropped). During a live match the bench stays as named.
+                gameState.clubs[idx].fitLineupToFormation(repair: gameState.liveMatch == nil)
             }
             cycler("Mentality", value: club.tactics.mentality.displayName, options: Mentality.allCases,
                    current: club.tactics.mentality) { m in updateTactics { $0.mentality = m } }
@@ -1347,14 +1350,17 @@ public struct TacticsView: View {
                      name: { $0.displayName }) { w in updateTactics { $0.width = w } }
             chipGrid("Tempo", options: Tempo.allCases, selected: club.tactics.tempo,
                      name: { $0.displayName }) { t in updateTactics { $0.tempo = t } }
-            chipGrid("Subs Strategy", options: MatchSettings.AutoSubTiming.allCases, selected: gameState.matchSettings.autoSubTiming,
-                     name: { $0 == .off ? "Never" : $0 == .halfTime ? "Half-time" : $0 == .secondHalf ? "Late" : "Early" }) { t in
+            chipGrid("Assistant's Subs", options: MatchSettings.AutoSubTiming.allCases, selected: gameState.matchSettings.autoSubTiming,
+                     name: { $0 == .off ? "None: I decide" : $0 == .halfTime ? "Half-time" : $0 == .secondHalf ? "From 60'" : "Throughout" }) { t in
                 gameState.matchSettings.autoSubTiming = t
             }
-            chipGrid("Lineup Strategy", options: [true, false], selected: gameState.matchSettings.assistantRotatesTiredPlayers,
-                     name: { $0 ? "Rotate tired" : "Manual" }) { v in
+            chipGrid("Team Selection", options: [false, true], selected: gameState.matchSettings.assistantRotatesTiredPlayers,
+                     name: { $0 ? "Assistant rests tired" : "I pick the team" }) { v in
                 gameState.matchSettings.assistantRotatesTiredPlayers = v
             }
+            Text("Every choice is a trade-off. Attacking mentality makes chances and leaves gaps for counter-attacks; a high press wins the ball high but tires legs and leaves space behind; a low block concedes shots, but few good ones; short passing keeps the ball, direct play makes more (poorer) chances. Players are rated for the position they play, so a player out of position is a weakness.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .gfCard(padding: 18)
     }
@@ -3920,8 +3926,16 @@ public struct SettingsView: View {
                     Label("Stop at Half-Time", systemImage: "pause.circle")
                 }
                 .accessibilityHint("Pauses the replay at half-time so you can make substitutions")
+
+                Toggle(isOn: Binding(
+                    get: { gameState.matchSettings.stopForInjuries },
+                    set: { gameState.matchSettings.stopForInjuries = $0 }
+                )) {
+                    Label("Stop When a Player Is Hurt", systemImage: "cross.case")
+                }
+                .accessibilityHint("A live match stops when one of your players cannot carry on, so you choose his replacement")
             }
-            
+
             Section(header: Text("Assistant Manager")) {
                 Picker("Auto-Substitutions", selection: Binding(
                     get: { gameState.matchSettings.autoSubTiming },

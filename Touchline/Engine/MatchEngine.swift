@@ -2,17 +2,31 @@
 //  MatchEngine.swift
 //  Touchline
 //
-//  Created for Touchline - iOS Football Manager Game.
-//  Core match simulation engine simulating minute-by-minute action, tactical duels,
-//  set pieces, fatigue progression, substitutions, extra time, and penalty shootouts.
+//  Minute-by-minute match simulation.
+//
+//  Each minute one side has the ball. Who has it depends on the strength of
+//  the two midfields (and how each side wants to play); what that side does
+//  with it depends on its attack against the other side's defence. Players
+//  are rated for the position they are actually playing, so a centre-back
+//  up front or a winger at left-back is a real weakness. Tactics trade one
+//  thing for another: going for it creates chances and leaves gaps, a low
+//  block concedes shots but few good ones, a high press wins the ball high
+//  and tires legs.
+//
+//  The match can stop at any minute (for the manager's changes, or when one
+//  of the manager's players is hurt) and pick up exactly where it left off.
+//  The manager's side is never changed by the engine unless the manager has
+//  asked the assistant to make substitutions; an injured player who cannot
+//  carry on is the one exception, and even then a live match stops first so
+//  the manager can choose who comes on.
 //
 
 import Foundation
 
 public struct MatchEngine {
-    
+
     // MARK: - Match Configuration
-    
+
     public struct SimulationConfig {
         public var neutralVenue: Bool
         public var matchWeek: Int
@@ -24,7 +38,17 @@ public struct MatchEngine {
         /// Coaching influence on each side (1.0 = neutral; a few percent either way).
         public var homeCoachingMultiplier: Double
         public var awayCoachingMultiplier: Double
-        
+        /// The club whose manager is the user in this match. The engine never
+        /// makes changes to this side on its own (see `userAutoSubs`).
+        public var userClubId: UUID?
+        /// Live match: stop when one of the user's players cannot carry on, so
+        /// the manager picks the replacement.
+        public var pauseForUserDecisions: Bool
+        /// When (if ever) the assistant manager may make substitutions for
+        /// the user's side.
+        public var userAutoSubs: MatchSettings.AutoSubTiming
+        public var userAutoSubAggression: MatchSettings.AutoSubAggression
+
         public init(
             neutralVenue: Bool = false,
             matchWeek: Int = 1,
@@ -33,7 +57,11 @@ public struct MatchEngine {
             isKnockout: Bool = false,
             derbyIntensity: Int = 0,
             homeCoachingMultiplier: Double = 1.0,
-            awayCoachingMultiplier: Double = 1.0
+            awayCoachingMultiplier: Double = 1.0,
+            userClubId: UUID? = nil,
+            pauseForUserDecisions: Bool = false,
+            userAutoSubs: MatchSettings.AutoSubTiming = .off,
+            userAutoSubAggression: MatchSettings.AutoSubAggression = .balanced
         ) {
             self.neutralVenue = neutralVenue
             self.matchWeek = matchWeek
@@ -43,114 +71,246 @@ public struct MatchEngine {
             self.derbyIntensity = max(0, min(3, derbyIntensity))
             self.homeCoachingMultiplier = max(0.9, min(1.1, homeCoachingMultiplier))
             self.awayCoachingMultiplier = max(0.9, min(1.1, awayCoachingMultiplier))
+            self.userClubId = userClubId
+            self.pauseForUserDecisions = pauseForUserDecisions
+            self.userAutoSubs = userAutoSubs
+            self.userAutoSubAggression = userAutoSubAggression
         }
     }
-    
-    // MARK: - In-Match Active Player State
-    
+
+    // MARK: - Tuning
+
+    /// Calibrated by simulating tens of thousands of matches: two equal sides
+    /// produce about 2.6 goals, 11-12 shots, 4-5 on target, 4-5 corners and 11
+    /// fouls each, with home/draw/away close to 45/25/30. A side five rating
+    /// points better wins about 60% at home; a gulf of twenty still loses or
+    /// draws about one match in ten.
+    enum Tuning {
+        static let shotBase = 0.215
+        static let shotExponent = 2.4
+        static let possessionExponent = 3.6
+        /// Soft caps (in log space) so huge mismatches stay football, not cricket.
+        static let threatCap = 0.22
+        static let possessionCap = 0.9
+        static let cornerPerMinute = 0.062
+        static let foulPerMinute = 0.235
+        static let cardPerFoul = 0.165
+        static let straightRedPerFoul = 0.0018
+        static let penaltyPerFoul = 0.0125
+        static let directFreeKickPerFoul = 0.07
+        static let offsidePerMinute = 0.042
+        static let counterBase = 0.010
+        static let homeAdvantage = 1.035
+        static let xgMedian = 0.066
+        static let xgSpread = 0.95
+        static let blockRate = 0.23
+        /// Chance per player per minute of something going wrong physically.
+        static let injuryHazard = 0.00026
+        static let maxSubs = 5
+        static let maxWindows = 3
+    }
+
+    // MARK: - In-Match Player State
+
     struct ActiveMatchPlayer {
         var player: Player
-        var currentFatigue: Double = 0.0 // 0 to 100% fatigue during the game
+        /// The position he is playing in this match.
+        var slot: Position
+        /// His ability in that position, before condition.
+        var slotRating: Double
+        var currentFatigue: Double = 0.0   // 0-100 during the game
         var currentRating: Double = 6.0
-        var goals: Int = 0
-        var assists: Int = 0
-        var yellowCards: Int = 0
-        var isSentOff: Bool = false
-        var isSubstitutedOut: Bool = false
-        var minutesPlayed: Int = 0
-        
-        /// Dynamic effective performance level accounting for base attributes, form, morale, and in-game fatigue.
-        func effectiveSkill(for roleCategory: PositionCategory) -> Double {
-            guard !isSentOff else { return 0.0 }
-            
-            // Base skill
-            var skill = Double(player.overall)
-            
-            // Form modifier (±10%)
-            let avgForm = player.averageForm // 1.0 - 10.0 scale, average ~6.5
-            let formModifier = 1.0 + ((avgForm - 6.5) * 0.02)
-            skill *= min(1.10, max(0.90, formModifier))
-            
-            // Morale modifier (±10%)
-            skill *= player.morale.performanceMultiplier
+        var goals = 0
+        var assists = 0
+        var yellowCards = 0
+        var isSentOff = false
+        /// Matches banned for a red card (1 for a second yellow).
+        var redCardBan = 0
+        var isSubstitutedOut = false
+        /// Went off hurt with no substitutions left: his side plays a man down.
+        var leftInjured = false
+        var minutesPlayed = 0
+        /// Playing on through a knock: a little slower and more at risk.
+        var carryingKnock = false
+        /// Hurt and cannot carry on.
+        var mustComeOff = false
+        /// The manager has been told (live matches).
+        var managerTold = false
 
-            // Persistent condition: a player arriving short of match fitness or
-            // sharpness (e.g. after injury or a long lay-off) is below their best.
-            let fitnessModifier = 0.85 + (min(100.0, max(0.0, player.matchFitness)) / 100.0) * 0.15
-            let sharpnessModifier = 0.92 + (min(100.0, max(0.0, player.sharpness)) / 100.0) * 0.08
-            skill *= fitnessModifier * sharpnessModifier
-            
-            // In-match fatigue penalty (up to -25% when completely exhausted)
-            let fatiguePenalty = (currentFatigue / 100.0) * 0.25
-            skill *= (1.0 - fatiguePenalty)
-            
+        init(player: Player, slot: Position) {
+            self.player = player
+            self.slot = slot
+            self.slotRating = MatchEngine.rating(of: player, in: slot)
+        }
+
+        var isOnPitch: Bool { !isSentOff && !leftInjured && !isSubstitutedOut }
+
+        /// Ability right now: position, form, morale, fitness, sharpness,
+        /// tiredness and any knock he is carrying.
+        func effectiveSkill() -> Double {
+            guard isOnPitch else { return 0 }
+            var skill = slotRating
+            let formModifier = 1.0 + ((player.averageForm - 6.5) * 0.02)
+            skill *= min(1.08, max(0.92, formModifier))
+            skill *= player.morale.performanceMultiplier
+            let fitness = min(100.0, max(0.0, player.matchFitness))
+            skill *= 0.82 + fitness / 100.0 * 0.18
+            let sharpness = min(100.0, max(0.0, player.sharpness))
+            skill *= 0.92 + sharpness / 100.0 * 0.08
+            skill *= 1.0 - (currentFatigue / 100.0) * 0.30
+            if carryingKnock { skill *= 0.90 }
+            if mustComeOff { skill *= 0.55 }
             return skill
         }
     }
-    
+
+    /// A player's level in a given position: his overall, adjusted by how his
+    /// attributes suit the role, and by how used to it he is.
+    static func rating(of player: Player, in slot: Position) -> Double {
+        let primary = player.primaryPosition
+        if slot == primary { return Double(player.overall) }
+        let attrs = player.attributes
+        let shift = Double(attrs.calculateOverall(for: slot) - attrs.calculateOverall(for: primary))
+        var value = Double(player.overall) + shift
+        let familiarity: Double
+        if player.positions.contains(slot) {
+            familiarity = 0.985
+        } else if slot == .GK || primary == .GK {
+            familiarity = 0.75
+        } else if adjacent(primary, slot) {
+            familiarity = 0.95
+        } else if primary.category == slot.category {
+            familiarity = 0.92
+        } else {
+            familiarity = 0.86
+        }
+        value *= familiarity
+        return max(15, min(Double(player.overall), value))
+    }
+
+    private static func adjacent(_ a: Position, _ b: Position) -> Bool {
+        let pairs: [Set<Position>] = [
+            [.LB, .LWB], [.RB, .RWB], [.LB, .CB], [.RB, .CB], [.CB, .CDM], [.CDM, .CM], [.CM, .CAM],
+            [.LM, .LW], [.RM, .RW], [.LM, .LWB], [.RM, .RWB], [.CAM, .CF], [.CF, .ST], [.LW, .ST], [.RW, .ST],
+            [.LM, .CM], [.RM, .CM], [.LW, .RW], [.LM, .RM], [.LB, .RB], [.LWB, .RWB], [.CAM, .LW], [.CAM, .RW]
+        ]
+        return pairs.contains([a, b])
+    }
+
+    // MARK: - Side State
+
+    struct SideState {
+        var active: [ActiveMatchPlayer]
+        var departed: [ActiveMatchPlayer] = []
+        var bench: [Player]
+        var subsUsed = 0
+        var subWindowsUsed = 0
+        var lastSubMinute = -1
+        var goals = 0
+        var shots = 0
+        var shotsOnTarget = 0
+        var corners = 0
+        var fouls = 0
+        var offsides = 0
+        var saves = 0
+        var tackles = 0
+        var xG = 0.0
+        var possessionMinutes = 0.0
+        var defendingMinutes = 0.0
+
+        init(club: Club) {
+            let positions = club.tactics.formation.defaultPositions
+            active = club.startingXIPlayers.enumerated().map { idx, player in
+                ActiveMatchPlayer(player: player, slot: idx < positions.count ? positions[idx] : player.primaryPosition)
+            }
+            bench = club.substitutePlayers
+        }
+
+        var onPitchCount: Int { active.filter { $0.isOnPitch }.count }
+
+        /// Substitutions are limited in number and in "windows": changes made
+        /// at the same stoppage, or at half-time, count as one.
+        func canSubstitute(atMinute minute: Int, extraTime: Bool) -> Bool {
+            let maxSubs = Tuning.maxSubs + (extraTime ? 1 : 0)
+            let maxWindows = Tuning.maxWindows + (extraTime ? 1 : 0)
+            guard subsUsed < maxSubs else { return false }
+            if minute == lastSubMinute || minute == 46 { return true }
+            return subWindowsUsed < maxWindows
+        }
+
+        func subsRemaining(atMinute minute: Int, extraTime: Bool) -> Int {
+            guard canSubstitute(atMinute: minute, extraTime: extraTime) else { return 0 }
+            return max(0, Tuning.maxSubs + (extraTime ? 1 : 0) - subsUsed)
+        }
+
+        mutating func registerSubstitution(atMinute minute: Int) {
+            if minute != lastSubMinute && minute != 46 { subWindowsUsed += 1 }
+            lastSubMinute = minute
+            subsUsed += 1
+        }
+
+        var allPlayers: [ActiveMatchPlayer] { active + departed }
+    }
+
     // MARK: - Public API
-    
-    /// Standard convenience signature conforming to specification.
-    public static func simulateMatch(
-        home: Club,
-        away: Club,
-        neutralVenue: Bool = false
-    ) -> MatchResult {
+
+    /// Standard convenience signature.
+    public static func simulateMatch(home: Club, away: Club, neutralVenue: Bool = false) -> MatchResult {
         var mutableHome = home
         var mutableAway = away
-        let config = SimulationConfig(
-            neutralVenue: neutralVenue,
-            matchWeek: 1,
-            competition: "League Match",
-            date: "2024-09-01",
-            isKnockout: false
-        )
-        return simulate(homeClub: &mutableHome, awayClub: &mutableAway, config: config)
-    }
-    
-    /// Full match simulation returning updated club rosters (with fatigue, cards, injuries applied) and MatchResult.
-    public static func simulateFullMatch(
-        home: inout Club,
-        away: inout Club,
-        config: SimulationConfig
-    ) -> MatchResult {
-        return simulate(homeClub: &home, awayClub: &away, config: config)
+        let config = SimulationConfig(neutralVenue: neutralVenue)
+        return simulateCore(homeClub: &mutableHome, awayClub: &mutableAway, config: config, resume: nil, pauseAfter: nil).0
     }
 
-    /// A match stopped at half-time: everything the engine needs to play
-    /// the second half, plus the story so far.
+    /// Full match simulation returning updated club rosters (with fatigue, cards, injuries applied) and MatchResult.
+    public static func simulateFullMatch(home: inout Club, away: inout Club, config: SimulationConfig) -> MatchResult {
+        simulateCore(homeClub: &home, awayClub: &away, config: config, resume: nil, pauseAfter: nil).0
+    }
+
+    /// A match stopped part-way: everything the engine needs to carry on,
+    /// plus the story so far.
     public struct PausedMatch {
-        var homeActive: [ActiveMatchPlayer]
-        var awayActive: [ActiveMatchPlayer]
-        var homeDeparted: [ActiveMatchPlayer]
-        var awayDeparted: [ActiveMatchPlayer]
-        var homeBench: [Player]
-        var awayBench: [Player]
-        var homeSubsUsed: Int
-        var awaySubsUsed: Int
-        var homeGoals: Int
-        var awayGoals: Int
+        var home: SideState
+        var away: SideState
         var events: [MatchEvent]
-        var counters: [Double]
         var secondHalfStoppage: Int
         var maxMinute: Int
+        /// The next minute to be played.
         var minute: Int
-        /// The first half as a result: score, events and stats so far.
+        /// The match so far: score, events and stats.
         public var snapshot: MatchResult
+        /// Set when play stopped because one of the manager's players is hurt.
+        public var stopReason: String?
+        public var injuredUserPlayerId: UUID?
 
-        public var homeOnPitch: [UUID] { homeActive.map { $0.player.id } }
-        public var awayOnPitch: [UUID] { awayActive.map { $0.player.id } }
-        public var homeBenchIds: [UUID] { homeBench.map { $0.id } }
-        public var awayBenchIds: [UUID] { awayBench.map { $0.id } }
-        public var homeSubsRemaining: Int { max(0, 5 - homeSubsUsed) }
-        public var awaySubsRemaining: Int { max(0, 5 - awaySubsUsed) }
-        /// Players who have already gone off (or been sent off) and cannot return.
+        /// The last minute played.
+        public var minutePlayed: Int { max(0, minute - 1) }
+        public var isExtraTime: Bool { maxMinute > 100 }
+        public var homeOnPitch: [UUID] { home.active.map { $0.player.id } }
+        public var awayOnPitch: [UUID] { away.active.map { $0.player.id } }
+        public var homeBenchIds: [UUID] { home.bench.map { $0.id } }
+        public var awayBenchIds: [UUID] { away.bench.map { $0.id } }
+        public var homeSubsRemaining: Int { home.subsRemaining(atMinute: minute, extraTime: isExtraTime) }
+        public var awaySubsRemaining: Int { away.subsRemaining(atMinute: minute, extraTime: isExtraTime) }
+        public var homeWindowsRemaining: Int { max(0, Tuning.maxWindows + (isExtraTime ? 1 : 0) - home.subWindowsUsed) }
+        public var awayWindowsRemaining: Int { max(0, Tuning.maxWindows + (isExtraTime ? 1 : 0) - away.subWindowsUsed) }
+        /// Players who have gone off (or been sent off) and cannot return.
         public var unavailableIds: Set<UUID> {
-            Set((homeDeparted + awayDeparted).map { $0.player.id })
-                .union((homeActive + awayActive).filter { $0.isSentOff }.map { $0.player.id })
+            Set((home.departed + away.departed).map { $0.player.id })
+                .union((home.active + away.active).filter { !$0.isOnPitch }.map { $0.player.id })
         }
         public var sentOffIds: Set<UUID> {
-            Set((homeActive + awayActive).filter { $0.isSentOff }.map { $0.player.id })
+            Set((home.active + away.active).filter { $0.isSentOff }.map { $0.player.id })
+        }
+        /// Players hurt but still on the pitch.
+        public var hurtIds: Set<UUID> {
+            Set((home.active + away.active).filter { $0.isOnPitch && ($0.mustComeOff || $0.carryingKnock) }.map { $0.player.id })
+        }
+        /// In-match tiredness (0-100) of everyone on the pitch.
+        public var fatigue: [UUID: Double] {
+            var map: [UUID: Double] = [:]
+            for p in home.active + away.active { map[p.player.id] = p.currentFatigue }
+            return map
         }
     }
 
@@ -159,68 +319,113 @@ public struct MatchEngine {
         simulateCore(homeClub: &home, awayClub: &away, config: config, resume: nil, pauseAfter: 45).1
     }
 
-    /// Plays the rest of a paused match. The clubs' current tactics and
-    /// starting elevens are used, so half-time changes take effect.
+    /// Kicks off and stops at once (before the first minute), for a match
+    /// that will be played live a few minutes at a time.
+    public static func kickOff(home: inout Club, away: inout Club, config: SimulationConfig) -> PausedMatch? {
+        simulateCore(homeClub: &home, awayClub: &away, config: config, resume: nil, pauseAfter: 0).1
+    }
+
+    /// Plays a paused match on to `minute` (inclusive) and stops again; or to
+    /// the end, writing everything back to the clubs, when the match finishes
+    /// first. The clubs' current tactics and elevens are used, so changes made
+    /// while paused take effect.
+    public static func play(_ paused: PausedMatch, until minute: Int?, home: inout Club, away: inout Club,
+                            config: SimulationConfig) -> (MatchResult, PausedMatch?) {
+        simulateCore(homeClub: &home, awayClub: &away, config: config, resume: paused, pauseAfter: minute)
+    }
+
+    /// Plays the rest of a paused match.
     public static func resume(_ paused: PausedMatch, home: inout Club, away: inout Club, config: SimulationConfig) -> MatchResult {
         simulateCore(homeClub: &home, awayClub: &away, config: config, resume: paused, pauseAfter: nil).0
     }
 
-    /// Brings the players on the pitch into line with the club's chosen
-    /// eleven: new names come on for those left out (while substitutions
-    /// remain), and the order follows the lineup so players take their
-    /// new positions.
+    // MARK: - Manager's Changes
+
+    /// Brings the side on the pitch into line with the club's chosen eleven:
+    /// bench players named in the eleven come on for those left out (while
+    /// substitutions remain), and everyone takes the position of his place in
+    /// the eleven, so a change of formation or a swap of positions counts.
     private static func applyLineupChanges(
         club: Club,
-        active: inout [ActiveMatchPlayer],
-        bench: inout [Player],
-        departed: inout [ActiveMatchPlayer],
-        subsUsed: inout Int,
+        side: inout SideState,
         isHome: Bool,
         minute: Int,
+        extraTime: Bool,
         events: inout [MatchEvent]
     ) {
         let wanted = club.tactics.startingXI
-        let onPitch = Set(active.map { $0.player.id })
-        let gone = Set(departed.map { $0.player.id })
-        var incoming = wanted.filter { !onPitch.contains($0) && !gone.contains($0) }
-            .compactMap { id in club.players.first { $0.id == id } }
-            .filter { $0.injury == nil && $0.suspendedMatches == 0 }
-        let outgoingIdx = active.indices.filter { !wanted.contains(active[$0].player.id) && !active[$0].isSentOff }
-        for idx in outgoingIdx {
-            guard subsUsed < 5, !incoming.isEmpty else { break }
-            let playerIn = incoming.removeFirst()
-            let out = active[idx]
-            var marked = out
-            marked.isSubstitutedOut = true
-            departed.append(marked)
-            active[idx] = ActiveMatchPlayer(player: playerIn, currentFatigue: 0.0, currentRating: 6.0)
-            bench.removeAll { $0.id == playerIn.id }
-            subsUsed += 1
-            let commentary = Commentary.substitution(playerIn: playerIn, playerOut: out.player, club: club, minute: minute)
-            events.append(MatchEvent(minute: minute, type: .substitution, clubId: club.id, playerId: playerIn.id,
-                                     shortText: commentary.short, detailText: commentary.detail, isHomeTeam: isHome))
+        let onPitch = Set(side.active.map { $0.player.id })
+        let gone = Set(side.departed.map { $0.player.id })
+        let benchIds = Set(side.bench.map { $0.id })
+        var incoming = wanted.filter { !onPitch.contains($0) && !gone.contains($0) && benchIds.contains($0) }
+            .compactMap { id in side.bench.first { $0.id == id } }
+        let outgoing = side.active.indices.filter {
+            !wanted.contains(side.active[$0].player.id) && side.active[$0].isOnPitch
         }
-        // Positions follow the order of the chosen eleven.
-        let order = Dictionary(uniqueKeysWithValues: wanted.enumerated().map { ($1, $0) })
-        active = active.enumerated().sorted { a, b in
-            (order[a.element.player.id] ?? 100 + a.offset) < (order[b.element.player.id] ?? 100 + b.offset)
-        }.map { $0.element }
-        // The bench is whoever is still available and not on the pitch.
-        let nowOn = Set(active.map { $0.player.id })
-        let nowGone = Set(departed.map { $0.player.id })
-        bench = club.substitutePlayers.filter { !nowOn.contains($0.id) && !nowGone.contains($0.id) }
-            + bench.filter { b in !nowOn.contains(b.id) && !nowGone.contains(b.id) && !club.substitutePlayers.contains { $0.id == b.id } }
+        for idx in outgoing {
+            guard !incoming.isEmpty, side.canSubstitute(atMinute: minute, extraTime: extraTime) else { break }
+            let playerIn = incoming.removeFirst()
+            let reason: SubReason = side.active[idx].mustComeOff ? .injury : .manager
+            substitute(&side, outIndex: idx, incoming: playerIn, club: club, isHome: isHome,
+                       minute: minute, reason: reason, events: &events)
+        }
+        // Everyone takes the position of his place in the chosen eleven. A
+        // player who is no longer in it but still out there (sent off, or
+        // with no change left to replace him) keeps the place he had.
+        var arranged = [ActiveMatchPlayer?](repeating: nil, count: max(side.active.count, wanted.count))
+        var leftovers: [ActiveMatchPlayer] = []
+        for p in side.active {
+            if let i = wanted.firstIndex(of: p.player.id), i < arranged.count, arranged[i] == nil {
+                arranged[i] = p
+            } else {
+                leftovers.append(p)
+            }
+        }
+        for i in arranged.indices where arranged[i] == nil && !leftovers.isEmpty {
+            arranged[i] = leftovers.removeFirst()
+        }
+        side.active = arranged.compactMap { $0 } + leftovers
+        assignSlots(&side, formation: club.tactics.formation)
     }
-    
+
+    /// Gives each player on the pitch the position of his place in the eleven.
+    private static func assignSlots(_ side: inout SideState, formation: FormationPreset) {
+        let positions = formation.defaultPositions
+        for idx in side.active.indices {
+            let slot = idx < positions.count ? positions[idx] : side.active[idx].player.primaryPosition
+            if side.active[idx].slot != slot {
+                side.active[idx].slot = slot
+                side.active[idx].slotRating = rating(of: side.active[idx].player, in: slot)
+            }
+        }
+    }
+
+    enum SubReason { case manager, injury, fatigue, chasing, protecting, booked, poorForm, tactical }
+
+    private static func substitute(
+        _ side: inout SideState,
+        outIndex: Int,
+        incoming: Player,
+        club: Club,
+        isHome: Bool,
+        minute: Int,
+        reason: SubReason,
+        events: inout [MatchEvent]
+    ) {
+        var out = side.active[outIndex]
+        out.isSubstitutedOut = true
+        side.departed.append(out)
+        var fresh = ActiveMatchPlayer(player: incoming, slot: out.slot)
+        fresh.currentRating = 6.0
+        side.active[outIndex] = fresh
+        side.bench.removeAll { $0.id == incoming.id }
+        side.registerSubstitution(atMinute: minute)
+        let text = Commentary.substitution(playerIn: incoming, playerOut: out.player, club: club, minute: minute, reason: reason)
+        events.append(MatchEvent(minute: minute, type: .substitution, clubId: club.id, playerId: incoming.id,
+                                 assistPlayerId: out.player.id, shortText: text.short, detailText: text.detail, isHomeTeam: isHome))
+    }
+
     // MARK: - Core Simulation Loop
-    
-    private static func simulate(
-        homeClub: inout Club,
-        awayClub: inout Club,
-        config: SimulationConfig
-    ) -> MatchResult {
-        simulateCore(homeClub: &homeClub, awayClub: &awayClub, config: config, resume: nil, pauseAfter: nil).0
-    }
 
     private static func simulateCore(
         homeClub: inout Club,
@@ -229,43 +434,26 @@ public struct MatchEngine {
         resume: PausedMatch?,
         pauseAfter: Int?
     ) -> (MatchResult, PausedMatch?) {
-        homeClub.ensureTacticalIntegrity()
-        awayClub.ensureTacticalIntegrity()
-        
-        // 1. Prepare active rosters
-        var homeActive = homeClub.startingXIPlayers.map { ActiveMatchPlayer(player: $0) }
-        var awayActive = awayClub.startingXIPlayers.map { ActiveMatchPlayer(player: $0) }
-        var homeDeparted: [ActiveMatchPlayer] = []
-        var awayDeparted: [ActiveMatchPlayer] = []
-        var homeBench = homeClub.substitutePlayers
-        var awayBench = awayClub.substitutePlayers
-        
-        var homeSubsUsed = 0
-        var awaySubsUsed = 0
-        let maxSubs = 5
-        
-        var homeGoals = 0
-        var awayGoals = 0
-        var events: [MatchEvent] = []
-        
-        var homeShots = 0
-        var awayShots = 0
-        var homeShotsOnTarget = 0
-        var awayShotsOnTarget = 0
-        var homeCorners = 0
-        var awayCorners = 0
-        var homeFouls = 0
-        var awayFouls = 0
-        var homeXG = 0.0
-        var awayXG = 0.0
-        var homeSaves = 0
-        var awaySaves = 0
-        var homePossessionSeconds = 0.0
-        var awayPossessionSeconds = 0.0
-        
-        // Kickoff event
-        if resume == nil { events.append(
-            MatchEvent(
+        var state: PausedMatch
+        if var r = resume {
+            r.stopReason = nil
+            r.injuredUserPlayerId = nil
+            let extra = r.isExtraTime
+            // Only the manager's own side changes while the match is stopped;
+            // the other side's changes are the engine's.
+            if homeClub.id == config.userClubId {
+                applyLineupChanges(club: homeClub, side: &r.home, isHome: true, minute: r.minute, extraTime: extra, events: &r.events)
+            }
+            if awayClub.id == config.userClubId {
+                applyLineupChanges(club: awayClub, side: &r.away, isHome: false, minute: r.minute, extraTime: extra, events: &r.events)
+            }
+            state = r
+        } else {
+            homeClub.ensureTacticalIntegrity()
+            awayClub.ensureTacticalIntegrity()
+            let stoppage = Int.random(in: 2...6)
+            var events: [MatchEvent] = []
+            events.append(MatchEvent(
                 minute: 1,
                 type: .kickOff,
                 shortText: config.derbyIntensity > 0
@@ -275,1451 +463,1160 @@ public struct MatchEngine {
                     ? "A ferocious atmosphere at \(homeClub.stadium) as the referee gets the derby underway. Bragging rights are on the line."
                     : "The referee blows the whistle and the match begins at \(homeClub.stadium).",
                 isHomeTeam: true
-            )
-        ) }
-        
-        // Second-half stoppage time (first-half added time is folded into
-        // the minute-by-minute flow rather than extending the clock).
-        var secondHalfStoppage = Int.random(in: 2...6)
-        
-        // Determine total minutes (90 + stoppage, or 120 if knockout & draw)
-        var maxMinute = 90 + secondHalfStoppage
-        
-        // Minute-by-minute simulation
-        var minute = 1
-
-        // Picking a paused match back up: restore the state at the whistle
-        // and apply any half-time changes to either side.
-        if let r = resume {
-            homeActive = r.homeActive; awayActive = r.awayActive
-            homeDeparted = r.homeDeparted; awayDeparted = r.awayDeparted
-            homeBench = r.homeBench; awayBench = r.awayBench
-            homeSubsUsed = r.homeSubsUsed; awaySubsUsed = r.awaySubsUsed
-            homeGoals = r.homeGoals; awayGoals = r.awayGoals
-            events = r.events
-            homeShots = Int(r.counters[0]); awayShots = Int(r.counters[1])
-            homeShotsOnTarget = Int(r.counters[2]); awayShotsOnTarget = Int(r.counters[3])
-            homeCorners = Int(r.counters[4]); awayCorners = Int(r.counters[5])
-            homeFouls = Int(r.counters[6]); awayFouls = Int(r.counters[7])
-            homeXG = r.counters[8]; awayXG = r.counters[9]
-            homeSaves = Int(r.counters[10]); awaySaves = Int(r.counters[11])
-            homePossessionSeconds = r.counters[12]; awayPossessionSeconds = r.counters[13]
-            secondHalfStoppage = r.secondHalfStoppage
-            maxMinute = r.maxMinute
-            minute = r.minute
-            applyLineupChanges(club: homeClub, active: &homeActive, bench: &homeBench, departed: &homeDeparted,
-                               subsUsed: &homeSubsUsed, isHome: true, minute: minute, events: &events)
-            applyLineupChanges(club: awayClub, active: &awayActive, bench: &awayBench, departed: &awayDeparted,
-                               subsUsed: &awaySubsUsed, isHome: false, minute: minute, events: &events)
+            ))
+            let empty = MatchResult(homeClubId: homeClub.id, awayClubId: awayClub.id, homeGoals: 0, awayGoals: 0,
+                                    matchWeek: config.matchWeek, competition: config.competition, date: config.date, attendance: 0)
+            state = PausedMatch(home: SideState(club: homeClub), away: SideState(club: awayClub), events: events,
+                                secondHalfStoppage: stoppage, maxMinute: 90 + stoppage, minute: 1, snapshot: empty)
         }
 
-        while minute <= maxMinute {
-            
-            // Half-time whistle
+        var minute = state.minute
+        if let pauseAfter, pauseAfter < minute {
+            state.snapshot = makeResult(state, homeClub: homeClub, awayClub: awayClub, config: config, motm: nil)
+            return (state.snapshot, state)
+        }
+
+        while minute <= state.maxMinute {
+            playMinute(minute, state: &state, homeClub: homeClub, awayClub: awayClub, config: config)
+
             if minute == 45 {
-                let ht = Commentary.halfTimeSummary(
-                    home: homeClub,
-                    away: awayClub,
-                    homeGoals: homeGoals,
-                    awayGoals: awayGoals
-                )
-                events.append(
-                    MatchEvent(
-                        minute: 45,
-                        type: .halfTime,
-                        shortText: ht.short,
-                        detailText: ht.detail,
-                        isHomeTeam: true
-                    )
-                )
-            }
-            
-            // Atmospheric commentary check (~every 15-20 mins)
-            if minute == 15 || minute == 32 || minute == 62 || minute == 80 {
-                let atmos = Commentary.atmosphere(
-                    homeClub: homeClub,
-                    awayClub: awayClub,
-                    minute: minute,
-                    homeGoals: homeGoals,
-                    awayGoals: awayGoals
-                )
-                events.append(
-                    MatchEvent(
-                        minute: minute,
-                        type: .commentary,
-                        shortText: atmos.short,
-                        detailText: atmos.detail,
-                        isHomeTeam: true
-                    )
-                )
-            }
-            
-            // 2. Increment minutes & fatigue
-            updateFatigue(activePlayers: &homeActive, tactics: homeClub.tactics)
-            updateFatigue(activePlayers: &awayActive, tactics: awayClub.tactics)
-            
-            // 3. AI / Tactical Substitutions (Between 58' and 82')
-            if minute >= 58 && minute <= 82 {
-                tryPerformSubstitution(
-                    activePlayers: &homeActive,
-                    bench: &homeBench,
-                    subsUsed: &homeSubsUsed,
-                    maxSubs: maxSubs,
-                    club: homeClub,
-                    isHome: true,
-                    minute: minute,
-                    events: &events,
-                    departed: &homeDeparted
-                )
-                tryPerformSubstitution(
-                    activePlayers: &awayActive,
-                    bench: &awayBench,
-                    subsUsed: &awaySubsUsed,
-                    maxSubs: maxSubs,
-                    club: awayClub,
-                    isHome: false,
-                    minute: minute,
-                    events: &events,
-                    departed: &awayDeparted
-                )
-            }
-            
-            // 4. Calculate relative team strengths for this minute
-            let homeStrength = calculateTeamStrength(
-                activePlayers: homeActive,
-                tactics: homeClub.tactics,
-                isHome: true,
-                neutralVenue: config.neutralVenue
-            ) * config.homeCoachingMultiplier
-            let awayStrength = calculateTeamStrength(
-                activePlayers: awayActive,
-                tactics: awayClub.tactics,
-                isHome: false,
-                neutralVenue: config.neutralVenue
-            ) * config.awayCoachingMultiplier
-            
-            // Possession allocation for this minute. Clamp so a stronger side cannot
-            // monopolise every chance; real matches rarely exceed ~70/30 possession.
-            // Tactics shift the possession battle: pressing/compact shape and a short
-            // passing game retain the ball for the side employing them.
-            let homePossessionFactor = homeClub.tactics.passingStyle.possessionMultiplier
-                * homeClub.tactics.pressing.defensiveMultiplier
-            let awayPossessionFactor = awayClub.tactics.passingStyle.possessionMultiplier
-                * awayClub.tactics.pressing.defensiveMultiplier
-            // Quality differences are amplified (a power curve rather than a
-            // straight ratio): with a linear split an 80-rated side facing a
-            // 70-rated one won only 53% of the match's events, so favourites
-            // won barely more often than underdogs.
-            // In a derby the form book counts for less.
-            let sensitivity = strengthSensitivity - Double(config.derbyIntensity) * 1.2
-            let homeWeight = pow(max(1.0, homeStrength * homePossessionFactor), sensitivity)
-            let awayWeight = pow(max(1.0, awayStrength * awayPossessionFactor), sensitivity)
-            let rawPossessionChance = homeWeight / (homeWeight + awayWeight)
-            let homePossessionChance = min(0.78, max(0.22, rawPossessionChance))
-            let isHomeInPossession = Double.random(in: 0...1) < homePossessionChance
-            if isHomeInPossession {
-                homePossessionSeconds += 60.0
-            } else {
-                awayPossessionSeconds += 60.0
-            }
-            
-            // 5. Roll for minute events (Tempo influences event frequency)
-            let attackingTactics = isHomeInPossession ? homeClub.tactics : awayClub.tactics
-            let tempoChanceModifier: Double
-            switch attackingTactics.tempo {
-            case .fast: tempoChanceModifier = 1.25
-            case .normal: tempoChanceModifier = 1.00
-            case .slow: tempoChanceModifier = 0.80
-            }
-            
-            // Game-state modifier: as the goal margin grows, both sides create fewer
-            // clear chances — the leading team eases off and the trailing side tightens.
-            // This keeps individual scorelines realistic while still allowing the odd
-            // heavy win without routine cricket scores.
-            let margin = abs(homeGoals - awayGoals)
-            let marginModifier: Double
-            switch margin {
-            case 0, 1: marginModifier = 1.0
-            case 2: marginModifier = 0.78
-            case 3: marginModifier = 0.60
-            default: marginModifier = 0.45
-            }
-            
-            let eventRoll = Double.random(in: 0...100)
-            
-            // The defending side's tactical solidity reduces the chance of events.
-            let defendingTactics = isHomeInPossession ? awayClub.tactics : homeClub.tactics
-            let defenceModifier = 1.0 / defensiveFactor(tactics: defendingTactics)
-
-            // Cumulative thresholds for each event band. Each band starts where
-            // the previous one ends, so a fast tempo widens the attacking bands
-            // without swallowing the foul and injury bands (previously a fast
-            // tempo pushed the free-kick band past the fixed foul ceiling of 18,
-            // so sides facing a fast-tempo team never committed a foul or
-            // received a card).
-            let chanceCeiling = 10.5 * tempoChanceModifier * marginModifier * defenceModifier
-            let cornerCeiling = max(chanceCeiling, 13.0 * tempoChanceModifier)
-            let freeKickCeiling = max(cornerCeiling, 14.5 * tempoChanceModifier)
-            // Derbies are fiercer: more fouls and, through them, more cards.
-            let foulCeiling = freeKickCeiling + 3.5 + Double(config.derbyIntensity) * 1.2
-            let injuryCeiling = foulCeiling + 1.5
-            
-            if eventRoll < chanceCeiling {
-                // Open play chance
-                resolveChance(
-                    isHomeAttacking: isHomeInPossession,
-                    homeActive: &homeActive,
-                    awayActive: &awayActive,
-                    homeClub: homeClub,
-                    awayClub: awayClub,
-                    homeGoals: &homeGoals,
-                    awayGoals: &awayGoals,
-                    homeShots: &homeShots,
-                    awayShots: &awayShots,
-                    homeShotsOnTarget: &homeShotsOnTarget,
-                    awayShotsOnTarget: &awayShotsOnTarget,
-                    homeSaves: &homeSaves,
-                    awaySaves: &awaySaves,
-                    homeXG: &homeXG,
-                    awayXG: &awayXG,
-                    minute: minute,
-                    events: &events
-                )
-            } else if eventRoll < cornerCeiling {
-                // Corner Kick
-                resolveCorner(
-                    isHomeAttacking: isHomeInPossession,
-                    homeActive: &homeActive,
-                    awayActive: &awayActive,
-                    homeClub: homeClub,
-                    awayClub: awayClub,
-                    homeGoals: &homeGoals,
-                    awayGoals: &awayGoals,
-                    homeCorners: &homeCorners,
-                    awayCorners: &awayCorners,
-                    homeShots: &homeShots,
-                    awayShots: &awayShots,
-                    homeShotsOnTarget: &homeShotsOnTarget,
-                    awayShotsOnTarget: &awayShotsOnTarget,
-                    homeXG: &homeXG,
-                    awayXG: &awayXG,
-                    minute: minute,
-                    events: &events
-                )
-            } else if eventRoll < freeKickCeiling {
-                // Dangerous Free Kick
-                resolveFreeKick(
-                    isHomeAttacking: isHomeInPossession,
-                    homeActive: &homeActive,
-                    awayActive: &awayActive,
-                    homeClub: homeClub,
-                    awayClub: awayClub,
-                    homeGoals: &homeGoals,
-                    awayGoals: &awayGoals,
-                    homeShots: &homeShots,
-                    awayShots: &awayShots,
-                    homeShotsOnTarget: &homeShotsOnTarget,
-                    awayShotsOnTarget: &awayShotsOnTarget,
-                    homeXG: &homeXG,
-                    awayXG: &awayXG,
-                    minute: minute,
-                    events: &events
-                )
-            } else if eventRoll < foulCeiling {
-                // Foul and Disciplinary check
-                resolveFoul(
-                    isHomeTeamFouling: !isHomeInPossession,
-                    homeActive: &homeActive,
-                    awayActive: &awayActive,
-                    homeClub: homeClub,
-                    awayClub: awayClub,
-                    homeFouls: &homeFouls,
-                    awayFouls: &awayFouls,
-                    homeGoals: &homeGoals,
-                    awayGoals: &awayGoals,
-                    homeShots: &homeShots,
-                    awayShots: &awayShots,
-                    homeShotsOnTarget: &homeShotsOnTarget,
-                    awayShotsOnTarget: &awayShotsOnTarget,
-                    homeSaves: &homeSaves,
-                    awaySaves: &awaySaves,
-                    homeXG: &homeXG,
-                    awayXG: &awayXG,
-                    minute: minute,
-                    events: &events
-                )
-            } else if eventRoll < injuryCeiling {
-                // In-match injury roll
-                checkInMatchInjury(
-                    homeActive: &homeActive,
-                    awayActive: &awayActive,
-                    homeClub: homeClub,
-                    awayClub: awayClub,
-                    minute: minute,
-                    events: &events
-                )
-            }
-            
-            // Minor, unpunished fouls that break up play. They feed the match
-            // stats (real matches see ~20 fouls) without triggering cards or set
-            // pieces; only the disciplinary fouls above can be booked.
-            if Double.random(in: 0..<1) < 0.17 {
-                if isHomeInPossession { awayFouls += 1 } else { homeFouls += 1 }
-            }
-            
-            // Check if knockout match reached full time tied -> Trigger Extra Time (91-120)
-            if minute == (90 + secondHalfStoppage) && config.isKnockout && homeGoals == awayGoals && maxMinute < 120 {
-                events.append(
-                    MatchEvent(
-                        minute: 90,
-                        type: .extraTimeStart,
-                        shortText: "EXTRA TIME! Scores tied at \(homeGoals)-\(awayGoals)",
-                        detailText: "90 minutes could not separate these sides. We head into 30 minutes of extra time!",
-                        isHomeTeam: true
-                    )
-                )
-                maxMinute = 120
+                let ht = Commentary.halfTimeSummary(home: homeClub, away: awayClub,
+                                                    homeGoals: state.home.goals, awayGoals: state.away.goals)
+                state.events.append(MatchEvent(minute: 45, type: .halfTime, shortText: ht.short, detailText: ht.detail, isHomeTeam: true))
             }
 
-            // Half-time: hand the match back so changes can be made.
-            if let pauseAfter, minute == pauseAfter {
-                let total = max(1.0, homePossessionSeconds + awayPossessionSeconds)
-                let homePoss = ((homePossessionSeconds / total) * 1000.0).rounded() / 10.0
-                func stats(_ poss: Double, _ shots: Int, _ onTarget: Int, _ corners: Int, _ fouls: Int, _ saves: Int, _ xg: Double) -> MatchStats {
-                    MatchStats(possession: poss, shots: shots, shotsOnTarget: onTarget, corners: corners, fouls: fouls,
-                               offsides: 0, passAccuracy: 82, tacklesWon: 8, saves: saves, xG: (xg * 100).rounded() / 100)
-                }
-                var ratings: [UUID: Double] = [:]
-                for ap in homeActive + homeDeparted + awayActive + awayDeparted { ratings[ap.player.id] = (ap.currentRating * 10).rounded() / 10 }
-                let snapshot = MatchResult(
-                    homeClubId: homeClub.id, awayClubId: awayClub.id, homeGoals: homeGoals, awayGoals: awayGoals,
-                    events: events, matchWeek: config.matchWeek, competition: config.competition, date: config.date,
-                    attendance: homeClub.finances.expectedAttendance(opponentReputation: awayClub.reputation),
-                    homeStats: stats(homePoss, homeShots, homeShotsOnTarget, homeCorners, homeFouls, homeSaves, homeXG),
-                    awayStats: stats(((100.0 - homePoss) * 10).rounded() / 10, awayShots, awayShotsOnTarget, awayCorners, awayFouls, awaySaves, awayXG),
-                    playerRatings: ratings, manOfTheMatch: nil)
-                let paused = PausedMatch(
-                    homeActive: homeActive, awayActive: awayActive, homeDeparted: homeDeparted, awayDeparted: awayDeparted,
-                    homeBench: homeBench, awayBench: awayBench, homeSubsUsed: homeSubsUsed, awaySubsUsed: awaySubsUsed,
-                    homeGoals: homeGoals, awayGoals: awayGoals, events: events,
-                    counters: [Double(homeShots), Double(awayShots), Double(homeShotsOnTarget), Double(awayShotsOnTarget),
-                               Double(homeCorners), Double(awayCorners), Double(homeFouls), Double(awayFouls), homeXG, awayXG,
-                               Double(homeSaves), Double(awaySaves), homePossessionSeconds, awayPossessionSeconds],
-                    secondHalfStoppage: secondHalfStoppage, maxMinute: maxMinute, minute: minute + 1, snapshot: snapshot)
-                return (snapshot, paused)
+            // A knockout tie level after 90 minutes goes to extra time.
+            if minute == 90 + state.secondHalfStoppage && config.isKnockout
+                && state.home.goals == state.away.goals && state.maxMinute < 120 {
+                state.events.append(MatchEvent(
+                    minute: minute,
+                    type: .extraTimeStart,
+                    shortText: "EXTRA TIME! Scores tied at \(state.home.goals)-\(state.away.goals)",
+                    detailText: "Ninety minutes could not separate these sides. Thirty more to come, and one more substitution each.",
+                    isHomeTeam: true
+                ))
+                state.maxMinute = 120
             }
-            
+
+            let stopForManager = config.pauseForUserDecisions && state.injuredUserPlayerId != nil
+            var reachedStop = false
+            if let pauseAfter, minute >= pauseAfter, minute < state.maxMinute { reachedStop = true }
+            if reachedStop || stopForManager {
+                state.minute = minute + 1
+                state.snapshot = makeResult(state, homeClub: homeClub, awayClub: awayClub, config: config, motm: nil)
+                return (state.snapshot, state)
+            }
             minute += 1
         }
-        
-        // 6. Penalty Shootout if tied after 120 minutes in knockout match
-        if config.isKnockout && homeGoals == awayGoals {
-            resolvePenaltyShootout(
-                homeClub: homeClub,
-                awayClub: awayClub,
-                homeActive: homeActive,
-                awayActive: awayActive,
-                homeGoals: &homeGoals,
-                awayGoals: &awayGoals,
-                events: &events
-            )
+        state.minute = minute
+
+        // Penalty shootout if still level after extra time.
+        var shootout: (Int, Int)? = nil
+        if config.isKnockout && state.home.goals == state.away.goals {
+            shootout = resolvePenaltyShootout(homeClub: homeClub, awayClub: awayClub, state: &state)
         }
-        
-        // 7. Full-time whistle event
-        let homeAll = homeActive + homeDeparted
-        let awayAll = awayActive + awayDeparted
-        let motm = determineManOfTheMatch(homeActive: homeAll, awayActive: awayAll)
-        let ftSummary = Commentary.fullTimeSummary(
-            home: homeClub,
-            away: awayClub,
-            homeGoals: homeGoals,
-            awayGoals: awayGoals,
-            motm: motm?.player
-        )
-        events.append(
-            MatchEvent(
-                minute: max(1, minute - 1),
-                type: .fullTime,
-                shortText: ftSummary.short,
-                detailText: ftSummary.detail,
-                isHomeTeam: true
-            )
-        )
-        
-        // 8. Compile Match Statistics
-        let totalSeconds = max(1.0, homePossessionSeconds + awayPossessionSeconds)
-        let homePossession = ((homePossessionSeconds / totalSeconds) * 1000.0).rounded() / 10.0
-        let awayPossession = ((100.0 - homePossession) * 10.0).rounded() / 10.0
-        
-        let homeStats = MatchStats(
-            possession: homePossession,
-            shots: homeShots,
-            shotsOnTarget: homeShotsOnTarget,
-            corners: homeCorners,
-            fouls: homeFouls,
-            offsides: Int.random(in: 1...4),
-            passAccuracy: round(Double.random(in: 78...88) * 10) / 10,
-            tacklesWon: Int.random(in: 12...22),
-            saves: homeSaves,
-            xG: (homeXG * 100).rounded() / 100
-        )
-        
-        let awayStats = MatchStats(
-            possession: awayPossession,
-            shots: awayShots,
-            shotsOnTarget: awayShotsOnTarget,
-            corners: awayCorners,
-            fouls: awayFouls,
-            offsides: Int.random(in: 1...4),
-            passAccuracy: round(Double.random(in: 76...87) * 10) / 10,
-            tacklesWon: Int.random(in: 12...22),
-            saves: awaySaves,
-            xG: (awayXG * 100).rounded() / 100
-        )
-        
-        // Player ratings map
-        var ratingsMap: [UUID: Double] = [:]
-        for ap in homeAll { ratingsMap[ap.player.id] = (ap.currentRating * 10).rounded() / 10 }
-        for ap in awayAll { ratingsMap[ap.player.id] = (ap.currentRating * 10).rounded() / 10 }
-        
-        // Gate size reflects the home club's usual pull and the appeal of the
-        // visiting side, rather than a flat random fill of the stadium.
-        let attendance = homeClub.finances.expectedAttendance(opponentReputation: awayClub.reputation)
-        
-        let matchResult = MatchResult(
-            homeClubId: homeClub.id,
-            awayClubId: awayClub.id,
-            homeGoals: homeGoals,
-            awayGoals: awayGoals,
-            events: events,
-            matchWeek: config.matchWeek,
-            competition: config.competition,
-            date: config.date,
-            attendance: attendance,
-            homeStats: homeStats,
-            awayStats: awayStats,
-            playerRatings: ratingsMap,
-            manOfTheMatch: motm?.player.id
-        )
-        
-        // 9. Sync results back to clubs and update players' persistent models
-        applyMatchToClub(club: &homeClub, activePlayers: homeAll, opponentGoals: awayGoals, motmId: motm?.player.id)
-        applyMatchToClub(club: &awayClub, activePlayers: awayAll, opponentGoals: homeGoals, motmId: motm?.player.id)
-        
-        homeClub.seasonResults.append(matchResult)
-        awayClub.seasonResults.append(matchResult)
-        
-        return (matchResult, nil)
+
+        // Final whistle: result-based adjustments to ratings and a little
+        // individual variation.
+        let finalHome = state.home.goals
+        let finalAway = state.away.goals
+        finaliseRatings(&state.home, goalsFor: finalHome, goalsAgainst: finalAway)
+        finaliseRatings(&state.away, goalsFor: finalAway, goalsAgainst: finalHome)
+
+        let all = state.home.allPlayers + state.away.allPlayers
+        let motm = all.filter { $0.minutesPlayed >= 20 || $0.goals > 0 }.max { $0.currentRating < $1.currentRating }
+        var homeGoals = state.home.goals
+        var awayGoals = state.away.goals
+        if let shootout {
+            // Recorded as a one-goal win, as elsewhere in the game.
+            if shootout.0 > shootout.1 { homeGoals += 1 } else { awayGoals += 1 }
+        }
+        let ft = Commentary.fullTimeSummary(home: homeClub, away: awayClub, homeGoals: homeGoals, awayGoals: awayGoals, motm: motm?.player)
+        state.events.append(MatchEvent(minute: max(1, minute - 1), type: .fullTime, shortText: ft.short, detailText: ft.detail, isHomeTeam: true))
+
+        var result = makeResult(state, homeClub: homeClub, awayClub: awayClub, config: config, motm: motm?.player.id)
+        result.homeGoals = homeGoals
+        result.awayGoals = awayGoals
+
+        applyMatchToClub(club: &homeClub, players: state.home.allPlayers, opponentGoals: state.away.goals, motmId: motm?.player.id)
+        applyMatchToClub(club: &awayClub, players: state.away.allPlayers, opponentGoals: state.home.goals, motmId: motm?.player.id)
+        homeClub.seasonResults.append(result)
+        awayClub.seasonResults.append(result)
+        return (result, nil)
     }
-    
-    // MARK: - Chance Resolution
-    
-    private static func resolveChance(
-        isHomeAttacking: Bool,
-        homeActive: inout [ActiveMatchPlayer],
-        awayActive: inout [ActiveMatchPlayer],
-        homeClub: Club,
-        awayClub: Club,
-        homeGoals: inout Int,
-        awayGoals: inout Int,
-        homeShots: inout Int,
-        awayShots: inout Int,
-        homeShotsOnTarget: inout Int,
-        awayShotsOnTarget: inout Int,
-        homeSaves: inout Int,
-        awaySaves: inout Int,
-        homeXG: inout Double,
-        awayXG: inout Double,
-        minute: Int,
-        events: inout [MatchEvent]
-    ) {
-        if isHomeAttacking { homeShots += 1 } else { awayShots += 1 }
-        
-        let attackingClub = isHomeAttacking ? homeClub : awayClub
-        let defendingClub = isHomeAttacking ? awayClub : homeClub
-        
-        // Pick shooter and assister
-        let attackingSquad = isHomeAttacking ? homeActive : awayActive
-        let availableShooters = attackingSquad.filter { !$0.isSentOff }
-        guard !availableShooters.isEmpty else { return }
-        
-        // Weight forwards and attacking midfielders higher for shots
-        let weightedShooters = availableShooters.sorted { p1, p2 in
-            let score1 = p1.player.attributes.shooting + (p1.player.primaryPosition.isAttacking ? 30 : 0)
-            let score2 = p2.player.attributes.shooting + (p2.player.primaryPosition.isAttacking ? 30 : 0)
-            return score1 > score2
+
+    /// The match so far as a result: score, events, stats and ratings.
+    private static func makeResult(_ state: PausedMatch, homeClub: Club, awayClub: Club, config: SimulationConfig, motm: UUID?) -> MatchResult {
+        let total = max(1.0, state.home.possessionMinutes + state.away.possessionMinutes)
+        let homePoss = ((state.home.possessionMinutes / total) * 1000.0).rounded() / 10.0
+        func stats(_ side: SideState, _ club: Club, possession: Double) -> MatchStats {
+            MatchStats(
+                possession: possession,
+                shots: side.shots,
+                shotsOnTarget: side.shotsOnTarget,
+                corners: side.corners,
+                fouls: side.fouls,
+                offsides: side.offsides,
+                passAccuracy: passAccuracy(side, tactics: club.tactics, possession: possession),
+                tacklesWon: side.tackles,
+                saves: side.saves,
+                xG: (side.xG * 100).rounded() / 100
+            )
         }
-        let shooterIdxInAvailable = Int.random(in: 0..<min(4, weightedShooters.count))
-        let shooter = weightedShooters[shooterIdxInAvailable]
-        
-        let assisterCandidates = availableShooters.filter { $0.player.id != shooter.player.id }
-        let assister = Double.random(in: 0...1) < 0.75 ? assisterCandidates.randomElement() : nil
-        
-        // Calculate shot quality and xG
-        let shootingSkill = Double(shooter.player.attributes.shooting)
-        let composureSkill = Double(shooter.player.attributes.composure)
-        let baseChanceQuality = (shootingSkill * 0.6 + composureSkill * 0.4) / 100.0
-        
-        let chanceXG = min(0.50, max(0.03, baseChanceQuality * Double.random(in: 0.25...0.70)))
-        // Reported xG is the chance's real scoring probability against an
-        // average keeper (the raw chance quality used to be reported, which
-        // overstated xG nearly twofold: 11 shots could show 3.8 xG).
-        let reportedXG = chanceXG * 0.78 * (1.20 - 0.70 * 0.55)
-        if isHomeAttacking { homeXG += reportedXG } else { awayXG += reportedXG }
-        
-        // Opposition goalkeeper
-        let defendingSquad = isHomeAttacking ? awayActive : homeActive
-        guard let gk = defendingSquad.first(where: { $0.player.primaryPosition == .GK && !$0.isSentOff }) ??
-            defendingSquad.first(where: { !$0.isSentOff }) ?? defendingSquad.first else { return }
-        let gkReflexes = Double(gk.player.attributes.reflexes)
-        let gkPositioning = Double(gk.player.attributes.gkPositioning)
-        let gkSkill = (gkReflexes * 0.6 + gkPositioning * 0.4) / 100.0
-        
-        // Realistic finishing: a single open-play chance converts ~15-18% of the time
-        // before goalkeeper quality is factored in. A strong keeper suppresses this further.
-        let conversionProbability = chanceXG * 0.78 * (1.20 - (gkSkill * 0.55))
-        let roll = Double.random(in: 0...1)
-        
-        if roll < conversionProbability {
-            // GOAL SCORED!
-            if isHomeAttacking {
-                homeGoals += 1
-                homeShotsOnTarget += 1
-            } else {
-                awayGoals += 1
-                awayShotsOnTarget += 1
+        var ratings: [UUID: Double] = [:]
+        for p in state.home.allPlayers + state.away.allPlayers {
+            ratings[p.player.id] = (min(10, max(3, p.currentRating)) * 10).rounded() / 10
+        }
+        return MatchResult(
+            homeClubId: homeClub.id, awayClubId: awayClub.id,
+            homeGoals: state.home.goals, awayGoals: state.away.goals,
+            events: state.events, matchWeek: config.matchWeek, competition: config.competition, date: config.date,
+            attendance: homeClub.finances.expectedAttendance(opponentReputation: awayClub.reputation),
+            homeStats: stats(state.home, homeClub, possession: homePoss),
+            awayStats: stats(state.away, awayClub, possession: ((100.0 - homePoss) * 10).rounded() / 10),
+            playerRatings: ratings,
+            manOfTheMatch: motm
+        )
+    }
+
+    /// Pass completion follows the passers and the style: short passing keeps
+    /// it tidy, long balls go astray, and the side with the ball passes better.
+    private static func passAccuracy(_ side: SideState, tactics: Tactics, possession: Double) -> Double {
+        let outfield = side.active.filter { $0.slot != .GK && $0.minutesPlayed > 0 }
+        guard !outfield.isEmpty else { return 0 }
+        let passing = outfield.reduce(0.0) { $0 + Double($1.player.attributes.passing) } / Double(outfield.count)
+        var value = 70.0 + (passing - 60.0) * 0.45
+        switch tactics.passingStyle {
+        case .short: value += 4
+        case .mixed: break
+        case .long: value -= 8
+        case .direct: value -= 6
+        }
+        value += (possession - 50.0) * 0.25
+        // A fixed figure per match so it does not flicker while paused.
+        return (min(93.0, max(58.0, value)) * 10).rounded() / 10
+    }
+
+    // MARK: - One Minute of Football
+
+    /// How a side is set up this minute, after the manager's (or for the AI,
+    /// the game state's) tactics.
+    private struct Setup {
+        var attack: Double      // creating chances
+        var midfield: Double    // keeping the ball
+        var defence: Double     // stopping chances
+        var keeper: Double
+        var mentality: Int      // 0 defensive ... 4 all-out attack
+        var tactics: Tactics
+        var pace: Double        // of the forwards, for counter-attacks
+    }
+
+    private static func setup(_ side: SideState, club: Club, isHome: Bool, config: SimulationConfig,
+                              minute: Int, goalDiff: Int, isUserSide: Bool) -> Setup {
+        let coaching = isHome ? config.homeCoachingMultiplier : config.awayCoachingMultiplier
+        let venue = (isHome && !config.neutralVenue) ? Tuning.homeAdvantage : 1.0
+        let boost = coaching * venue
+
+        var defSum = 0.0, defW = 0.0, midSum = 0.0, midW = 0.0, attSum = 0.0, attW = 0.0
+        var allSum = 0.0, allN = 0.0
+        var keeper = 30.0
+        var defenders = 0.0, midfielders = 0.0, forwards = 0.0
+        var paceSum = 0.0, paceN = 0.0
+        for p in side.active where p.isOnPitch {
+            let skill = p.effectiveSkill() * boost
+            switch p.slot {
+            case .GK:
+                keeper = skill
+            case .CB, .LB, .RB, .LWB, .RWB:
+                defSum += skill; defW += 1; defenders += 1
+                if p.slot == .LWB || p.slot == .RWB { midSum += skill * 0.4; midW += 0.4; attSum += skill * 0.2; attW += 0.2 }
+            case .CDM:
+                midSum += skill; midW += 1; defSum += skill * 0.5; defW += 0.5; midfielders += 1; defenders += 0.4
+            case .CM:
+                midSum += skill; midW += 1; midfielders += 1
+                attSum += skill * 0.3; attW += 0.3
+            case .CAM:
+                midSum += skill * 0.7; midW += 0.7; attSum += skill * 0.7; attW += 0.7; midfielders += 0.7; forwards += 0.4
+            case .LM, .RM:
+                midSum += skill * 0.8; midW += 0.8; attSum += skill * 0.5; attW += 0.5; midfielders += 0.8; forwards += 0.2
+            case .LW, .RW:
+                attSum += skill; attW += 1; midSum += skill * 0.3; midW += 0.3; forwards += 0.8
+                paceSum += Double(p.player.attributes.pace); paceN += 1
+            case .ST, .CF:
+                attSum += skill; attW += 1; forwards += 1
+                paceSum += Double(p.player.attributes.pace); paceN += 1
             }
-            
-            // Update shooter stats & rating
-            if let idx = (isHomeAttacking ? homeActive : awayActive).firstIndex(where: { $0.player.id == shooter.player.id }) {
-                if isHomeAttacking {
-                    homeActive[idx].goals += 1
-                    homeActive[idx].currentRating = min(10.0, homeActive[idx].currentRating + 1.2)
-                } else {
-                    awayActive[idx].goals += 1
-                    awayActive[idx].currentRating = min(10.0, awayActive[idx].currentRating + 1.2)
-                }
-            }
-            // Update assister stats
-            if let a = assister, let aIdx = (isHomeAttacking ? homeActive : awayActive).firstIndex(where: { $0.player.id == a.player.id }) {
-                if isHomeAttacking {
-                    homeActive[aIdx].assists += 1
-                    homeActive[aIdx].currentRating = min(10.0, homeActive[aIdx].currentRating + 0.6)
-                } else {
-                    awayActive[aIdx].assists += 1
-                    awayActive[aIdx].currentRating = min(10.0, awayActive[aIdx].currentRating + 0.6)
-                }
-            }
-            
-            let commentary = Commentary.goal(
-                scorer: shooter.player,
-                assister: assister?.player,
-                club: attackingClub,
-                opponent: defendingClub,
-                minute: minute,
-                homeGoals: homeGoals,
-                awayGoals: awayGoals,
-                isHome: isHomeAttacking
-            )
-            
-            events.append(
-                MatchEvent(
-                    minute: minute,
-                    type: .goal,
-                    clubId: attackingClub.id,
-                    playerId: shooter.player.id,
-                    assistPlayerId: assister?.player.id,
-                    shortText: commentary.short,
-                    detailText: commentary.detail,
-                    isHomeTeam: isHomeAttacking
-                )
-            )
-        } else if roll < conversionProbability + 0.35 {
-            // Shot on target saved by Goalkeeper
-            if isHomeAttacking {
-                homeShotsOnTarget += 1
-                awaySaves += 1
-            } else {
-                awayShotsOnTarget += 1
-                homeSaves += 1
-            }
-            
-            if isHomeAttacking {
-                if let gkIdx = awayActive.firstIndex(where: { $0.player.id == gk.player.id }) {
-                    awayActive[gkIdx].currentRating = min(10.0, awayActive[gkIdx].currentRating + 0.3)
-                }
-            } else {
-                if let gkIdx = homeActive.firstIndex(where: { $0.player.id == gk.player.id }) {
-                    homeActive[gkIdx].currentRating = min(10.0, homeActive[gkIdx].currentRating + 0.3)
-                }
-            }
-            
-            let commentary = Commentary.save(
-                keeper: gk.player,
-                shooter: shooter.player,
-                keeperClub: defendingClub,
-                minute: minute,
-                isHome: !isHomeAttacking
-            )
-            events.append(
-                MatchEvent(
-                    minute: minute,
-                    type: .shotOnTarget,
-                    clubId: attackingClub.id,
-                    playerId: shooter.player.id,
-                    shortText: commentary.short,
-                    detailText: commentary.detail,
-                    isHomeTeam: isHomeAttacking
-                )
-            )
-        } else if roll < conversionProbability + 0.45 {
-            // Hit woodwork
-            let commentary = Commentary.miss(
-                shooter: shooter.player,
-                club: attackingClub,
-                minute: minute,
-                isWoodwork: true
-            )
-            events.append(
-                MatchEvent(
-                    minute: minute,
-                    type: .woodwork,
-                    clubId: attackingClub.id,
-                    playerId: shooter.player.id,
-                    shortText: commentary.short,
-                    detailText: commentary.detail,
-                    isHomeTeam: isHomeAttacking
-                )
-            )
+            if p.slot != .GK { allSum += skill; allN += 1 }
+        }
+        let all = allN > 0 ? allSum / allN : 30
+        var defence = defW > 0 ? defSum / defW : all * 0.8
+        var midfield = midW > 0 ? midSum / midW : all * 0.8
+        var attack = attW > 0 ? attSum / attW : all * 0.8
+        // Numbers in each line matter as well as quality.
+        defence *= 1.0 + 0.035 * (defenders - 4.4)
+        midfield *= 1.0 + 0.035 * (midfielders - 3.6)
+        attack *= 1.0 + 0.045 * (forwards - 2.0)
+        // A man down hurts everywhere, most of all in keeping the ball.
+        let numbers = Double(side.onPitchCount) / 11.0
+        defence *= pow(numbers, 0.9)
+        midfield *= pow(numbers, 1.3)
+        attack *= pow(numbers, 1.1)
+
+        // An AI side manages the game: chasing it late, sitting on a lead.
+        // The user's side plays exactly as the manager set it up.
+        var mentality = mentalityIndex(club.tactics.mentality)
+        if !isUserSide {
+            if goalDiff < 0 && minute >= 82 { mentality += 2 }
+            else if goalDiff < 0 && minute >= 65 { mentality += 1 }
+            else if goalDiff >= 2 && minute >= 60 { mentality -= 1 }
+            else if goalDiff == 1 && minute >= 78 { mentality -= 1 }
+            mentality = max(0, min(4, mentality))
+        }
+        return Setup(attack: attack, midfield: midfield, defence: defence, keeper: keeper, mentality: mentality,
+                     tactics: club.tactics, pace: paceN > 0 ? paceSum / paceN : 60)
+    }
+
+    private static func mentalityIndex(_ m: Mentality) -> Int {
+        switch m {
+        case .defensive: return 0
+        case .cautious: return 1
+        case .balanced: return 2
+        case .attacking: return 3
+        case .allOutAttack: return 4
+        }
+    }
+
+    /// (chances made, chances conceded, exposure to counter-attacks)
+    private static let mentalityEffects: [(make: Double, concede: Double, exposure: Double)] = [
+        (0.72, 0.80, 0.45), (0.86, 0.90, 0.72), (1.0, 1.0, 1.0), (1.13, 1.10, 1.35), (1.27, 1.24, 1.8)
+    ]
+
+    private static func softCap(_ ratio: Double, _ cap: Double) -> Double {
+        exp(cap * tanh(log(max(0.01, ratio)) / cap))
+    }
+
+    private static func playMinute(_ minute: Int, state: inout PausedMatch, homeClub: Club, awayClub: Club, config: SimulationConfig) {
+        let userIsHome = homeClub.id == config.userClubId
+        let userIsAway = awayClub.id == config.userClubId
+
+        // Legs tire.
+        updateFatigue(&state.home, tactics: homeClub.tactics)
+        updateFatigue(&state.away, tactics: awayClub.tactics)
+
+        // Injuries that cannot wait, and substitutions.
+        handleForcedChanges(&state, homeClub: homeClub, awayClub: awayClub, minute: minute, config: config)
+        let extraTime = state.isExtraTime
+        let homeGoalsNow = state.home.goals
+        let awayGoalsNow = state.away.goals
+        if !userIsHome || autoSubsAllowed(config, minute: minute) {
+            aiSubstitutions(&state.home, opponentGoals: awayGoalsNow, club: homeClub, isHome: true, minute: minute,
+                            extraTime: extraTime, aggression: userIsHome ? config.userAutoSubAggression : .balanced,
+                            events: &state.events)
+        }
+        if !userIsAway || autoSubsAllowed(config, minute: minute) {
+            aiSubstitutions(&state.away, opponentGoals: homeGoalsNow, club: awayClub, isHome: false, minute: minute,
+                            extraTime: extraTime, aggression: userIsAway ? config.userAutoSubAggression : .balanced,
+                            events: &state.events)
+        }
+
+        let home = setup(state.home, club: homeClub, isHome: true, config: config, minute: minute,
+                         goalDiff: state.home.goals - state.away.goals, isUserSide: userIsHome)
+        let away = setup(state.away, club: awayClub, isHome: false, config: config, minute: minute,
+                         goalDiff: state.away.goals - state.home.goals, isUserSide: userIsAway)
+
+        // Who has the ball.
+        func possessionStrength(_ s: Setup) -> Double {
+            var v = s.midfield * s.tactics.passingStyle.possessionMultiplier
+            switch s.tactics.pressing { case .low: v *= 0.95; case .medium: break; case .high: v *= 1.04 }
+            switch s.tactics.tempo { case .slow: v *= 1.03; case .normal: break; case .fast: v *= 0.97 }
+            v *= 1.0 + 0.01 * Double(s.mentality - 2)   // attacking sides commit more men forward on the ball
+            return max(1, v)
+        }
+        let ratio = pow(possessionStrength(home) / possessionStrength(away), Tuning.possessionExponent)
+        let logit = Tuning.possessionCap * tanh(log(ratio) / Tuning.possessionCap)
+        let homeShare = min(0.72, max(0.28, 1.0 / (1.0 + exp(-logit))))
+        let homeHasBall = Double.random(in: 0..<1) < homeShare
+        if homeHasBall {
+            state.home.possessionMinutes += 1; state.away.defendingMinutes += 1
         } else {
-            // Chance missed off-target
-            let commentary = Commentary.miss(
-                shooter: shooter.player,
-                club: attackingClub,
-                minute: minute,
-                isWoodwork: false
-            )
-            events.append(
-                MatchEvent(
-                    minute: minute,
-                    type: .chanceMissed,
-                    clubId: attackingClub.id,
-                    playerId: shooter.player.id,
-                    shortText: commentary.short,
-                    detailText: commentary.detail,
-                    isHomeTeam: isHomeAttacking
-                )
-            )
+            state.away.possessionMinutes += 1; state.home.defendingMinutes += 1
         }
-    }
-    
-    // MARK: - Corner Resolution
-    
-    private static func resolveCorner(
-        isHomeAttacking: Bool,
-        homeActive: inout [ActiveMatchPlayer],
-        awayActive: inout [ActiveMatchPlayer],
-        homeClub: Club,
-        awayClub: Club,
-        homeGoals: inout Int,
-        awayGoals: inout Int,
-        homeCorners: inout Int,
-        awayCorners: inout Int,
-        homeShots: inout Int,
-        awayShots: inout Int,
-        homeShotsOnTarget: inout Int,
-        awayShotsOnTarget: inout Int,
-        homeXG: inout Double,
-        awayXG: inout Double,
-        minute: Int,
-        events: inout [MatchEvent]
-    ) {
-        if isHomeAttacking { homeCorners += 1 } else { awayCorners += 1 }
-        
-        let attackingClub = isHomeAttacking ? homeClub : awayClub
-        let defendingClub = isHomeAttacking ? awayClub : homeClub
-        let attackingSquad = isHomeAttacking ? homeActive : awayActive
-        
-        // Find designated or best corner taker
-        let cornerTakerId = attackingClub.tactics.cornerTaker
-        let available = attackingSquad.filter { !$0.isSentOff && !$0.isSubstitutedOut }
-        guard let taker = available.first(where: { $0.player.id == cornerTakerId }) ??
-            available.max(by: { $0.player.attributes.crossing < $1.player.attributes.crossing }) ??
-            available.first else { return }
-        
-        // Find top aerial threat
-        let aerialTargets = available.filter { $0.player.id != taker.player.id }
-        let headerTarget = aerialTargets.max(by: { ($0.player.attributes.heading + $0.player.attributes.jumping) < ($1.player.attributes.heading + $1.player.attributes.jumping) }) ?? taker
-        
-        // Goal chance (~4% for high quality set-pieces)
-        let headingSkill = Double(headerTarget.player.attributes.heading)
-        let goalChance = (Double(taker.player.attributes.crossing) * 0.02 + headingSkill * 0.035) / 100.0
 
-        // xG for the header is its real scoring chance.
-        if isHomeAttacking { homeXG += goalChance } else { awayXG += goalChance }
-        if isHomeAttacking { homeShots += 1 } else { awayShots += 1 }
-        
-        if Double.random(in: 0...1) < goalChance {
-            if isHomeAttacking {
-                homeGoals += 1
-                homeShotsOnTarget += 1
-            } else {
-                awayGoals += 1
-                awayShotsOnTarget += 1
-            }
-            
-            if let idx = (isHomeAttacking ? homeActive : awayActive).firstIndex(where: { $0.player.id == headerTarget.player.id }) {
-                if isHomeAttacking {
-                    homeActive[idx].goals += 1
-                    homeActive[idx].currentRating += 1.2
-                } else {
-                    awayActive[idx].goals += 1
-                    awayActive[idx].currentRating += 1.2
-                }
-            }
-            if let tIdx = (isHomeAttacking ? homeActive : awayActive).firstIndex(where: { $0.player.id == taker.player.id }) {
-                if isHomeAttacking {
-                    homeActive[tIdx].assists += 1
-                    homeActive[tIdx].currentRating += 0.6
-                } else {
-                    awayActive[tIdx].assists += 1
-                    awayActive[tIdx].currentRating += 0.6
-                }
-            }
-            
-            let commentary = Commentary.goal(
-                scorer: headerTarget.player,
-                assister: taker.player,
-                club: attackingClub,
-                opponent: defendingClub,
-                minute: minute,
-                homeGoals: homeGoals,
-                awayGoals: awayGoals,
-                isHome: isHomeAttacking,
-                goalType: .glancingCornerHeader
-            )
-            
-            events.append(
-                MatchEvent(
-                    minute: minute,
-                    type: .goal,
-                    clubId: attackingClub.id,
-                    playerId: headerTarget.player.id,
-                    assistPlayerId: taker.player.id,
-                    shortText: commentary.short,
-                    detailText: commentary.detail,
-                    isHomeTeam: isHomeAttacking
-                )
-            )
-        }
-    }
-    
-    // MARK: - Free Kick Resolution
-    
-    private static func resolveFreeKick(
-        isHomeAttacking: Bool,
-        homeActive: inout [ActiveMatchPlayer],
-        awayActive: inout [ActiveMatchPlayer],
-        homeClub: Club,
-        awayClub: Club,
-        homeGoals: inout Int,
-        awayGoals: inout Int,
-        homeShots: inout Int,
-        awayShots: inout Int,
-        homeShotsOnTarget: inout Int,
-        awayShotsOnTarget: inout Int,
-        homeXG: inout Double,
-        awayXG: inout Double,
-        minute: Int,
-        events: inout [MatchEvent]
-    ) {
-        let attackingClub = isHomeAttacking ? homeClub : awayClub
-        let defendingClub = isHomeAttacking ? awayClub : homeClub
-        let attackingSquad = isHomeAttacking ? homeActive : awayActive
-        
-        let freeKickTakerId = attackingClub.tactics.freeKickTaker
-        let available = attackingSquad.filter { !$0.isSentOff && !$0.isSubstitutedOut }
-        guard let taker = available.first(where: { $0.player.id == freeKickTakerId }) ??
-            available.max(by: { $0.player.attributes.freeKicks < $1.player.attributes.freeKicks }) ??
-            available.first else { return }
-        
-        let fkSkill = Double(taker.player.attributes.freeKicks)
-        let conversionChance = (fkSkill * 0.05) / 100.0
-        // A direct free kick's xG is its real conversion chance (~3-5%).
-        if isHomeAttacking {
-            homeShots += 1
-            homeXG += conversionChance
+        let margin = abs(state.home.goals - state.away.goals)
+        let marginModifier: Double = margin >= 4 ? 0.5 : margin == 3 ? 0.62 : margin == 2 ? 0.8 : 1.0
+
+        if homeHasBall {
+            attackingMinute(attackerIsHome: true, att: home, def: away, state: &state, homeClub: homeClub, awayClub: awayClub,
+                            minute: minute, config: config, marginModifier: marginModifier)
         } else {
-            awayShots += 1
-            awayXG += conversionChance
+            attackingMinute(attackerIsHome: false, att: away, def: home, state: &state, homeClub: homeClub, awayClub: awayClub,
+                            minute: minute, config: config, marginModifier: marginModifier)
         }
 
-        if Double.random(in: 0...1) < conversionChance {
-            if isHomeAttacking {
-                homeGoals += 1
-                homeShotsOnTarget += 1
+        // Knocks and strains.
+        checkInjuries(&state.home, club: homeClub, isHome: true, minute: minute, config: config, events: &state.events)
+        checkInjuries(&state.away, club: awayClub, isHome: false, minute: minute, config: config, events: &state.events)
+
+        // A late lead brings out the time-wasting (and the odd booking for it).
+        if minute >= 75 && margin >= 1 && Double.random(in: 0..<1) < 0.004 {
+            if state.home.goals > state.away.goals {
+                bookForTimeWasting(&state.home, club: homeClub, isHome: true, minute: minute, events: &state.events)
             } else {
-                awayGoals += 1
-                awayShotsOnTarget += 1
+                bookForTimeWasting(&state.away, club: awayClub, isHome: false, minute: minute, events: &state.events)
             }
-            
-            if let idx = (isHomeAttacking ? homeActive : awayActive).firstIndex(where: { $0.player.id == taker.player.id }) {
-                if isHomeAttacking {
-                    homeActive[idx].goals += 1
-                    homeActive[idx].currentRating += 1.3
-                } else {
-                    awayActive[idx].goals += 1
-                    awayActive[idx].currentRating += 1.3
+        }
+
+        // Did the manager's player just get hurt? Stop for him (live matches).
+        if config.pauseForUserDecisions {
+            let userSide: SideState? = userIsHome ? state.home : (userIsAway ? state.away : nil)
+            if let side = userSide, let hurt = side.active.first(where: { $0.isOnPitch && $0.mustComeOff && !$0.managerTold }) {
+                state.injuredUserPlayerId = hurt.player.id
+                state.stopReason = "\(hurt.player.fullName) can't carry on. Choose who replaces him."
+                if userIsHome {
+                    if let i = state.home.active.firstIndex(where: { $0.player.id == hurt.player.id }) { state.home.active[i].managerTold = true }
+                } else if let i = state.away.active.firstIndex(where: { $0.player.id == hurt.player.id }) {
+                    state.away.active[i].managerTold = true
                 }
             }
-            
-            let commentary = Commentary.goal(
-                scorer: taker.player,
-                assister: nil,
-                club: attackingClub,
-                opponent: defendingClub,
-                minute: minute,
-                homeGoals: homeGoals,
-                awayGoals: awayGoals,
-                isHome: isHomeAttacking,
-                goalType: .curlingFreeKick
-            )
-            
-            events.append(
-                MatchEvent(
-                    minute: minute,
-                    type: .goal,
-                    clubId: attackingClub.id,
-                    playerId: taker.player.id,
-                    shortText: commentary.short,
-                    detailText: commentary.detail,
-                    isHomeTeam: isHomeAttacking
-                )
-            )
         }
     }
-    
-    // MARK: - Foul & Penalty Resolution
-    
-    private static func resolveFoul(
-        isHomeTeamFouling: Bool,
-        homeActive: inout [ActiveMatchPlayer],
-        awayActive: inout [ActiveMatchPlayer],
+
+    private static func autoSubsAllowed(_ config: SimulationConfig, minute: Int) -> Bool {
+        switch config.userAutoSubs {
+        case .off: return false
+        case .halfTime: return minute == 46
+        case .secondHalf: return minute >= 60
+        case .throughout: return minute >= 46
+        }
+    }
+
+    private static func attackingMinute(
+        attackerIsHome: Bool,
+        att: Setup,
+        def: Setup,
+        state: inout PausedMatch,
         homeClub: Club,
         awayClub: Club,
-        homeFouls: inout Int,
-        awayFouls: inout Int,
-        homeGoals: inout Int,
-        awayGoals: inout Int,
-        homeShots: inout Int,
-        awayShots: inout Int,
-        homeShotsOnTarget: inout Int,
-        awayShotsOnTarget: inout Int,
-        homeSaves: inout Int,
-        awaySaves: inout Int,
-        homeXG: inout Double,
-        awayXG: inout Double,
         minute: Int,
-        events: inout [MatchEvent]
+        config: SimulationConfig,
+        marginModifier: Double
     ) {
-        if isHomeTeamFouling { homeFouls += 1 } else { awayFouls += 1 }
+        let attTactics = att.tactics
+        let defTactics = def.tactics
+        let attM = mentalityEffects[att.mentality]
+        let defM = mentalityEffects[def.mentality]
 
-        let foulingClub = isHomeTeamFouling ? homeClub : awayClub
-        let foulingSquad = isHomeTeamFouling ? homeActive : awayActive
+        let threat = att.attack * 0.6 + att.midfield * 0.4
+        let resist = def.defence * 0.7 + def.midfield * 0.3
+        let r = softCap(threat / max(1, resist), Tuning.threatCap)
 
-        let activeFoulers = foulingSquad.filter { !$0.isSentOff && !$0.isSubstitutedOut }
-        guard let fouler = activeFoulers.randomElement() else { return }
-        guard let foulerIdx = (isHomeTeamFouling ? homeActive : awayActive).firstIndex(where: { $0.player.id == fouler.player.id }) else { return }
+        // Tactical shape of the attack and of the defence.
+        var shotMod = 1.0, xgShift = 0.0, cornerMod = 1.0, offsideMod = 1.0
+        switch attTactics.tempo {
+        case .fast: shotMod *= 1.10; xgShift -= 0.05; offsideMod *= 1.2
+        case .normal: break
+        case .slow: shotMod *= 0.88; xgShift += 0.06; offsideMod *= 0.8
+        }
+        switch attTactics.width {
+        case .wide: shotMod *= 1.04; cornerMod *= 1.25; xgShift -= 0.04
+        case .normal: break
+        case .narrow: shotMod *= 0.97; cornerMod *= 0.8; xgShift += 0.04
+        }
+        switch attTactics.passingStyle {
+        case .short: shotMod *= 0.95; xgShift += 0.08
+        case .mixed: break
+        case .long: shotMod *= 1.03; xgShift -= 0.10; cornerMod *= 1.1
+        case .direct: shotMod *= 1.08; xgShift -= 0.05; offsideMod *= 1.25
+        }
+        switch defTactics.pressing {
+        case .low: shotMod *= 1.06; xgShift -= 0.12; offsideMod *= 0.7
+        case .medium: break
+        case .high: shotMod *= 0.93; xgShift += 0.12; offsideMod *= 1.35
+        }
+        switch defTactics.width {
+        case .wide: shotMod *= 1.04
+        case .normal: break
+        case .narrow: shotMod *= 0.95; cornerMod *= 1.1
+        }
 
+        let pShot = Tuning.shotBase * pow(r, Tuning.shotExponent) * attM.make * defM.concede * shotMod * marginModifier
+        if Double.random(in: 0..<1) < pShot {
+            openPlayShot(attackerIsHome: attackerIsHome, ratio: r, xgShift: xgShift, isCounter: false,
+                         state: &state, homeClub: homeClub, awayClub: awayClub, minute: minute, keeper: def.keeper)
+        } else {
+            // Possession won back: a little credit to a defender or midfielder.
+            if attackerIsHome { creditDefensiveAction(&state.away) } else { creditDefensiveAction(&state.home) }
+        }
+
+        // Corners from pressure.
+        if Double.random(in: 0..<1) < Tuning.cornerPerMinute * cornerMod {
+            corner(attackerIsHome: attackerIsHome, state: &state, homeClub: homeClub, awayClub: awayClub, minute: minute,
+                   keeper: def.keeper)
+        }
+
+        if Double.random(in: 0..<1) < Tuning.offsidePerMinute * offsideMod {
+            if attackerIsHome { state.home.offsides += 1 } else { state.away.offsides += 1 }
+        }
+
+        // Counter-attack: a side committed forward leaves space behind.
+        var counter = Tuning.counterBase * attM.exposure
+        counter *= pow(max(40, def.pace) / 70.0, 2)
+        if def.mentality <= 1 { counter *= 1.2 }
+        if defTactics.passingStyle == .direct { counter *= 1.2 }
+        if defTactics.pressing == .low { counter *= 1.1 }
+        if Double.random(in: 0..<1) < counter * marginModifier {
+            let counterRatio = softCap((def.attack * 0.7 + def.midfield * 0.3) / max(1, att.defence * 0.8 + att.midfield * 0.2), Tuning.threatCap)
+            openPlayShot(attackerIsHome: !attackerIsHome, ratio: counterRatio, xgShift: 0.45, isCounter: true,
+                         state: &state, homeClub: homeClub, awayClub: awayClub, minute: minute, keeper: att.keeper)
+        }
+
+        // Fouls by the side without the ball.
+        var foulChance = Tuning.foulPerMinute
+        switch defTactics.pressing { case .low: foulChance *= 0.85; case .medium: break; case .high: foulChance *= 1.15 }
+        foulChance += Double(config.derbyIntensity) * 0.03
+        if Double.random(in: 0..<1) < foulChance {
+            foul(defendingIsHome: !attackerIsHome, state: &state, homeClub: homeClub, awayClub: awayClub, minute: minute,
+                 keeper: def.keeper, config: config)
+        }
+    }
+
+    private static func creditDefensiveAction(_ side: inout SideState) {
+        guard Double.random(in: 0..<1) < 0.36 else { return }
+        side.tackles += 1
+        let candidates = side.active.indices.filter {
+            side.active[$0].isOnPitch && [.defender, .midfielder].contains(side.active[$0].slot.category)
+        }
+        guard let idx = candidates.randomElement() else { return }
+        side.active[idx].currentRating += 0.03
+    }
+
+    // MARK: Shots
+
+    /// Weighted by position and finishing: strikers take most of the shots,
+    /// midfielders some, defenders few, the goalkeeper none.
+    private static func pickShooter(_ side: SideState, header: Bool = false) -> Int? {
+        let candidates = side.active.indices.filter { side.active[$0].isOnPitch && side.active[$0].slot != .GK }
+        guard !candidates.isEmpty else { return nil }
+        func weight(_ p: ActiveMatchPlayer) -> Double {
+            let positionWeight: Double
+            switch p.slot {
+            case .ST, .CF: positionWeight = 5
+            case .LW, .RW, .CAM: positionWeight = 3
+            case .LM, .RM, .CM: positionWeight = 1.5
+            case .CDM: positionWeight = 0.7
+            case .LWB, .RWB: positionWeight = 0.6
+            case .CB: positionWeight = header ? 2.5 : 0.35
+            case .LB, .RB: positionWeight = 0.4
+            case .GK: positionWeight = 0
+            }
+            let skill = header
+                ? Double(p.player.attributes.heading + p.player.attributes.jumping) / 140.0
+                : Double(p.player.attributes.shooting + p.player.attributes.offTheBall) / 140.0
+            return positionWeight * pow(max(0.3, skill), 2) * (1 - p.currentFatigue / 250)
+        }
+        let weights = candidates.map { weight(side.active[$0]) }
+        let total = weights.reduce(0, +)
+        guard total > 0 else { return candidates.randomElement() }
+        var roll = Double.random(in: 0..<total)
+        for (i, w) in zip(candidates, weights) {
+            roll -= w
+            if roll < 0 { return i }
+        }
+        return candidates.last
+    }
+
+    private static func pickCreator(_ side: SideState, excluding shooter: Int) -> Int? {
+        let candidates = side.active.indices.filter { $0 != shooter && side.active[$0].isOnPitch && side.active[$0].slot != .GK }
+        guard !candidates.isEmpty else { return nil }
+        func weight(_ p: ActiveMatchPlayer) -> Double {
+            let positionWeight: Double
+            switch p.slot {
+            case .CAM, .LW, .RW: positionWeight = 3
+            case .LM, .RM, .CM, .LWB, .RWB: positionWeight = 2
+            case .ST, .CF: positionWeight = 1.5
+            case .LB, .RB, .CDM: positionWeight = 1
+            case .CB: positionWeight = 0.3
+            case .GK: positionWeight = 0
+            }
+            let skill = Double(p.player.attributes.passing + p.player.attributes.vision + p.player.attributes.crossing) / 210.0
+            return positionWeight * pow(max(0.3, skill), 2)
+        }
+        let weights = candidates.map { weight(side.active[$0]) }
+        let total = weights.reduce(0, +)
+        guard total > 0 else { return candidates.randomElement() }
+        var roll = Double.random(in: 0..<total)
+        for (i, w) in zip(candidates, weights) {
+            roll -= w
+            if roll < 0 { return i }
+        }
+        return candidates.last
+    }
+
+    private static func gaussian() -> Double {
+        let u = max(1e-9, Double.random(in: 0..<1))
+        let v = Double.random(in: 0..<1)
+        return sqrt(-2 * log(u)) * cos(2 * .pi * v)
+    }
+
+    private static func keeperIndex(_ side: SideState) -> Int? {
+        side.active.firstIndex { $0.isOnPitch && $0.slot == .GK } ?? side.active.firstIndex { $0.isOnPitch }
+    }
+
+    private static func openPlayShot(
+        attackerIsHome: Bool,
+        ratio: Double,
+        xgShift: Double,
+        isCounter: Bool,
+        state: inout PausedMatch,
+        homeClub: Club,
+        awayClub: Club,
+        minute: Int,
+        keeper: Double
+    ) {
+        let attackingClub = attackerIsHome ? homeClub : awayClub
+        let defendingClub = attackerIsHome ? awayClub : homeClub
+        var attSide = attackerIsHome ? state.home : state.away
+        var defSide = attackerIsHome ? state.away : state.home
+        defer {
+            if attackerIsHome { state.home = attSide; state.away = defSide } else { state.away = attSide; state.home = defSide }
+        }
+        guard let shooterIdx = pickShooter(attSide) else { return }
+        let creatorIdx = Double.random(in: 0..<1) < 0.78 ? pickCreator(attSide, excluding: shooterIdx) : nil
+        let shooter = attSide.active[shooterIdx].player
+
+        var xg = exp(log(Tuning.xgMedian) + 0.9 * log(ratio) + xgShift + gaussian() * Tuning.xgSpread)
+        // Defenders and deep midfielders mostly shoot from distance.
+        if [.defender, .midfielder].contains(attSide.active[shooterIdx].slot.category) && attSide.active[shooterIdx].slot != .CAM {
+            xg *= 0.7
+        }
+        xg = min(0.75, max(0.01, xg))
+        attSide.shots += 1
+        attSide.xG += xg
+        attSide.active[shooterIdx].currentRating += 0.05
+        if let c = creatorIdx { attSide.active[c].currentRating += 0.06 }
+
+        // Blocked by a defender.
+        let blockRate = Tuning.blockRate * (isCounter ? 0.5 : 1.0)
+        if Double.random(in: 0..<1) < blockRate {
+            if let blocker = defSide.active.indices.filter({ defSide.active[$0].isOnPitch && defSide.active[$0].slot.category == .defender }).randomElement() {
+                defSide.active[blocker].currentRating += 0.12
+            }
+            if Double.random(in: 0..<1) < 0.4 {
+                attSide.corners += 1
+            }
+            if xg > 0.15 {
+                let text = Commentary.blockedShot(shooter: shooter, club: attackingClub, defending: defendingClub, minute: minute)
+                state.events.append(MatchEvent(minute: minute, type: .chance, clubId: attackingClub.id, playerId: shooter.id,
+                                               shortText: text.short, detailText: text.detail, isHomeTeam: attackerIsHome))
+            }
+            return
+        }
+
+        let finishing = Double(shooter.attributes.shooting) * 0.6 + Double(shooter.attributes.composure) * 0.4
+        let finish = min(1.3, max(0.7, 1.0 + (finishing - 65.0) * 0.01))
+        let keeperFactor = min(1.3, max(0.72, 1.0 - (keeper - 65.0) * 0.01))
+        let pGoal = min(0.95, xg / (1.0 - Tuning.blockRate) * finish * keeperFactor)
+        let gkIdx = keeperIndex(defSide)
+
+        if Double.random(in: 0..<1) < pGoal {
+            attSide.goals += 1
+            attSide.shotsOnTarget += 1
+            attSide.active[shooterIdx].goals += 1
+            attSide.active[shooterIdx].currentRating += 1.0
+            var assister: Player? = nil
+            if let c = creatorIdx {
+                attSide.active[c].assists += 1
+                attSide.active[c].currentRating += 0.6
+                assister = attSide.active[c].player
+            }
+            concede(&defSide, keeperIdx: gkIdx)
+            let homeGoals = attackerIsHome ? attSide.goals : defSide.goals
+            let awayGoals = attackerIsHome ? defSide.goals : attSide.goals
+            let text = Commentary.goal(scorer: shooter, assister: assister, club: attackingClub, opponent: defendingClub,
+                                       minute: minute, homeGoals: homeGoals, awayGoals: awayGoals, isHome: attackerIsHome,
+                                       goalType: isCounter ? .counterAttackBreakaway : nil)
+            state.events.append(MatchEvent(minute: minute, type: .goal, clubId: attackingClub.id, playerId: shooter.id,
+                                           assistPlayerId: assister?.id, shortText: text.short, detailText: text.detail,
+                                           isHomeTeam: attackerIsHome))
+            return
+        }
+
+        if Double.random(in: 0..<1) < 0.36 * finish {
+            // On target, saved.
+            attSide.shotsOnTarget += 1
+            attSide.active[shooterIdx].currentRating += 0.08
+            defSide.saves += 1
+            if let g = gkIdx {
+                defSide.active[g].currentRating += xg > 0.25 ? 0.45 : 0.18
+            }
+            if Double.random(in: 0..<1) < 0.3 { attSide.corners += 1 }
+            if xg > 0.12 || Double.random(in: 0..<1) < 0.35 {
+                let keeperPlayer = gkIdx.map { defSide.active[$0].player } ?? shooter
+                let text = Commentary.save(keeper: keeperPlayer, shooter: shooter, keeperClub: defendingClub, minute: minute,
+                                           isHome: !attackerIsHome, quality: xg)
+                state.events.append(MatchEvent(minute: minute, type: .shotOnTarget, clubId: attackingClub.id, playerId: shooter.id,
+                                               shortText: text.short, detailText: text.detail, isHomeTeam: attackerIsHome))
+            }
+            return
+        }
+
+        // Off target.
+        let woodwork = Double.random(in: 0..<1) < 0.05
+        if xg > 0.3 { attSide.active[shooterIdx].currentRating -= 0.25 }
+        if woodwork || xg > 0.12 || Double.random(in: 0..<1) < 0.25 {
+            let text = Commentary.miss(shooter: shooter, club: attackingClub, minute: minute, isWoodwork: woodwork, quality: xg)
+            state.events.append(MatchEvent(minute: minute, type: woodwork ? .woodwork : .chanceMissed, clubId: attackingClub.id,
+                                           playerId: shooter.id, shortText: text.short, detailText: text.detail,
+                                           isHomeTeam: attackerIsHome))
+        }
+    }
+
+    /// A goal against: the keeper and the back line take the blame.
+    private static func concede(_ side: inout SideState, keeperIdx: Int?) {
+        if let g = keeperIdx { side.active[g].currentRating -= 0.3 }
+        for i in side.active.indices where side.active[i].isOnPitch {
+            switch side.active[i].slot.category {
+            case .defender: side.active[i].currentRating -= 0.2
+            case .midfielder where side.active[i].slot == .CDM: side.active[i].currentRating -= 0.1
+            default: break
+            }
+        }
+    }
+
+    // MARK: Set Pieces
+
+    private static func corner(attackerIsHome: Bool, state: inout PausedMatch, homeClub: Club, awayClub: Club, minute: Int, keeper: Double) {
+        let attackingClub = attackerIsHome ? homeClub : awayClub
+        let defendingClub = attackerIsHome ? awayClub : homeClub
+        var attSide = attackerIsHome ? state.home : state.away
+        var defSide = attackerIsHome ? state.away : state.home
+        defer {
+            if attackerIsHome { state.home = attSide; state.away = defSide } else { state.away = attSide; state.home = defSide }
+        }
+        attSide.corners += 1
+        let onPitch = attSide.active.indices.filter { attSide.active[$0].isOnPitch }
+        guard let takerIdx = onPitch.first(where: { attSide.active[$0].player.id == attackingClub.tactics.cornerTaker })
+                ?? onPitch.max(by: { attSide.active[$0].player.attributes.crossing < attSide.active[$1].player.attributes.crossing }) else { return }
+        // Most corners come to nothing; about three in ten produce a shot.
+        guard Double.random(in: 0..<1) < 0.30, let headerIdx = pickShooter(attSide, header: true), headerIdx != takerIdx else { return }
+        let taker = attSide.active[takerIdx].player
+        let target = attSide.active[headerIdx].player
+        let delivery = Double(taker.attributes.crossing) / 70.0
+        let aerial = Double(target.attributes.heading + target.attributes.jumping) / 140.0
+        var defAerial = 0.0, n = 0.0
+        for p in defSide.active where p.isOnPitch && p.slot.category == .defender {
+            defAerial += Double(p.player.attributes.heading + p.player.attributes.jumping) / 140.0; n += 1
+        }
+        let defenders = n > 0 ? defAerial / n : 0.65
+        let xg = min(0.45, max(0.02, 0.07 * delivery * aerial / max(0.4, defenders) * exp(gaussian() * 0.6)))
+        attSide.shots += 1
+        attSide.xG += xg
+        let keeperFactor = min(1.25, max(0.75, 1.0 - (keeper - 65.0) * 0.008))
+        if Double.random(in: 0..<1) < xg * keeperFactor {
+            attSide.goals += 1
+            attSide.shotsOnTarget += 1
+            attSide.active[headerIdx].goals += 1
+            attSide.active[headerIdx].currentRating += 1.0
+            attSide.active[takerIdx].assists += 1
+            attSide.active[takerIdx].currentRating += 0.6
+            concede(&defSide, keeperIdx: keeperIndex(defSide))
+            let text = Commentary.goal(scorer: target, assister: taker, club: attackingClub, opponent: defendingClub, minute: minute,
+                                       homeGoals: attackerIsHome ? attSide.goals : defSide.goals,
+                                       awayGoals: attackerIsHome ? defSide.goals : attSide.goals,
+                                       isHome: attackerIsHome, goalType: .glancingCornerHeader)
+            state.events.append(MatchEvent(minute: minute, type: .goal, clubId: attackingClub.id, playerId: target.id,
+                                           assistPlayerId: taker.id, shortText: text.short, detailText: text.detail, isHomeTeam: attackerIsHome))
+        } else if Double.random(in: 0..<1) < 0.3 {
+            attSide.shotsOnTarget += 1
+            defSide.saves += 1
+            if let g = keeperIndex(defSide) { defSide.active[g].currentRating += 0.15 }
+        }
+    }
+
+    private static func directFreeKick(attackerIsHome: Bool, state: inout PausedMatch, homeClub: Club, awayClub: Club, minute: Int, keeper: Double) {
+        let attackingClub = attackerIsHome ? homeClub : awayClub
+        let defendingClub = attackerIsHome ? awayClub : homeClub
+        var attSide = attackerIsHome ? state.home : state.away
+        var defSide = attackerIsHome ? state.away : state.home
+        defer {
+            if attackerIsHome { state.home = attSide; state.away = defSide } else { state.away = attSide; state.home = defSide }
+        }
+        let onPitch = attSide.active.indices.filter { attSide.active[$0].isOnPitch && attSide.active[$0].slot != .GK }
+        guard let takerIdx = onPitch.first(where: { attSide.active[$0].player.id == attackingClub.tactics.freeKickTaker })
+                ?? onPitch.max(by: { attSide.active[$0].player.attributes.freeKicks < attSide.active[$1].player.attributes.freeKicks }) else { return }
+        let taker = attSide.active[takerIdx].player
+        let xg = min(0.12, max(0.02, 0.06 * Double(taker.attributes.freeKicks) / 70.0))
+        attSide.shots += 1
+        attSide.xG += xg
+        let keeperFactor = min(1.25, max(0.75, 1.0 - (keeper - 65.0) * 0.008))
+        if Double.random(in: 0..<1) < xg * keeperFactor {
+            attSide.goals += 1
+            attSide.shotsOnTarget += 1
+            attSide.active[takerIdx].goals += 1
+            attSide.active[takerIdx].currentRating += 1.2
+            concede(&defSide, keeperIdx: keeperIndex(defSide))
+            let text = Commentary.goal(scorer: taker, assister: nil, club: attackingClub, opponent: defendingClub, minute: minute,
+                                       homeGoals: attackerIsHome ? attSide.goals : defSide.goals,
+                                       awayGoals: attackerIsHome ? defSide.goals : attSide.goals,
+                                       isHome: attackerIsHome, goalType: .curlingFreeKick)
+            state.events.append(MatchEvent(minute: minute, type: .goal, clubId: attackingClub.id, playerId: taker.id,
+                                           shortText: text.short, detailText: text.detail, isHomeTeam: attackerIsHome))
+        } else if Double.random(in: 0..<1) < 0.33 {
+            attSide.shotsOnTarget += 1
+            defSide.saves += 1
+            if let g = keeperIndex(defSide) { defSide.active[g].currentRating += 0.15 }
+            let text = Commentary.freeKickSaved(taker: taker, club: attackingClub, minute: minute)
+            state.events.append(MatchEvent(minute: minute, type: .freeKick, clubId: attackingClub.id, playerId: taker.id,
+                                           shortText: text.short, detailText: text.detail, isHomeTeam: attackerIsHome))
+        }
+    }
+
+    // MARK: Fouls, Cards & Penalties
+
+    private static func foul(defendingIsHome: Bool, state: inout PausedMatch, homeClub: Club, awayClub: Club, minute: Int,
+                             keeper: Double, config: SimulationConfig) {
+        let foulingClub = defendingIsHome ? homeClub : awayClub
+        var side = defendingIsHome ? state.home : state.away
+        side.fouls += 1
+        // Who commits it: defenders and holding midfielders, the aggressive more so.
+        let candidates = side.active.indices.filter { side.active[$0].isOnPitch }
+        guard !candidates.isEmpty else { return }
+        func weight(_ p: ActiveMatchPlayer) -> Double {
+            let positionWeight: Double
+            switch p.slot.category {
+            case .defender: positionWeight = 1.3
+            case .midfielder: positionWeight = p.slot == .CDM ? 1.6 : 1.0
+            case .forward: positionWeight = 0.7
+            case .goalkeeper: positionWeight = 0.05
+            }
+            let booked = p.yellowCards > 0 ? 0.6 : 1.0
+            return positionWeight * booked * (0.6 + Double(p.player.attributes.aggression) / 100.0)
+        }
+        let weights = candidates.map { weight(side.active[$0]) }
+        var roll = Double.random(in: 0..<max(0.001, weights.reduce(0, +)))
+        var foulerIdx = candidates[0]
+        for (i, w) in zip(candidates, weights) {
+            roll -= w
+            if roll < 0 { foulerIdx = i; break }
+        }
+        let fouler = side.active[foulerIdx]
+        side.active[foulerIdx].currentRating -= 0.05
+
+        // Some fouls hurt the man fouled.
+        if Double.random(in: 0..<1) < 0.012 + Double(config.derbyIntensity) * 0.004 {
+            var victimSide = defendingIsHome ? state.away : state.home
+            let victims = victimSide.active.indices.filter { victimSide.active[$0].isOnPitch && victimSide.active[$0].slot != .GK }
+            if let v = victims.randomElement() {
+                injure(&victimSide, index: v, club: defendingIsHome ? awayClub : homeClub, isHome: !defendingIsHome,
+                       minute: minute, contact: true, events: &state.events)
+                if defendingIsHome { state.away = victimSide } else { state.home = victimSide }
+            }
+        }
+
+        // Where it happened.
+        let roll2 = Double.random(in: 0..<1)
+        let isPenalty = roll2 < Tuning.penaltyPerFoul
+        let isDangerousFreeKick = !isPenalty && roll2 < Tuning.penaltyPerFoul + Tuning.directFreeKickPerFoul
+
+        // The referee's decision.
         let aggression = Double(fouler.player.attributes.aggression)
         let tackling = Double(fouler.player.attributes.tackling)
+        var cardChance = Tuning.cardPerFoul * (0.55 + aggression / 110.0) * (1.25 - tackling / 200.0)
+        if fouler.yellowCards > 0 { cardChance *= 0.55 }   // a booked man is careful
+        if isPenalty { cardChance += 0.25 }
+        cardChance += Double(config.derbyIntensity) * 0.03
+        let straightRed = Double.random(in: 0..<1) < Tuning.straightRedPerFoul * (isPenalty ? 4 : 1) * (0.6 + aggression / 100.0)
 
-        // The spot-kick decision is independent of the card roll: a clear box
-        // offence can be a penalty without also producing a booking (and vice
-        // versa). Previously penalties only existed inside the card branch, so
-        // most box fouls were silently ignored.
-        let isPenalty = Double.random(in: 0...1) < 0.12
+        if straightRed {
+            sendOff(&side, index: foulerIdx, club: foulingClub, isHome: defendingIsHome, minute: minute, secondYellow: false,
+                    ban: isPenalty ? 1 : (Double.random(in: 0..<1) < 0.6 ? 3 : 1), events: &state.events)
+        } else if Double.random(in: 0..<1) < cardChance {
+            book(&side, index: foulerIdx, club: foulingClub, isHome: defendingIsHome, minute: minute, events: &state.events)
+        }
+        if defendingIsHome { state.home = side } else { state.away = side }
+
         if isPenalty {
-            resolveInMatchPenalty(
-                isHomeKicking: !isHomeTeamFouling,
-                homeActive: &homeActive,
-                awayActive: &awayActive,
-                homeClub: homeClub,
-                awayClub: awayClub,
-                homeGoals: &homeGoals,
-                awayGoals: &awayGoals,
-                homeShots: &homeShots,
-                awayShots: &awayShots,
-                homeShotsOnTarget: &homeShotsOnTarget,
-                awayShotsOnTarget: &awayShotsOnTarget,
-                homeSaves: &homeSaves,
-                awaySaves: &awaySaves,
-                homeXG: &homeXG,
-                awayXG: &awayXG,
-                minute: minute,
-                events: &events
-            )
-        }
-
-        // Probability of a card given foul. Penalty-box offences are more likely
-        // to be punished, but still depend on the challenge.
-        // Scaled so a typical match produces around three bookings, in line
-        // with real top-flight football (it previously averaged just over one).
-        var cardProbability = min(0.9, (aggression * 0.45 + (100.0 - tackling) * 0.3) / 100.0 * 2.0)
-        if isPenalty { cardProbability = min(0.92, cardProbability + 0.30) }
-
-        guard Double.random(in: 0...1) < cardProbability else { return }
-
-        // Card roll: yellow or straight red
-        let isStraightRed = Double.random(in: 0...1) < 0.03
-
-        if isStraightRed {
-            if isHomeTeamFouling {
-                homeActive[foulerIdx].isSentOff = true
-                homeActive[foulerIdx].currentRating = max(4.0, homeActive[foulerIdx].currentRating - 1.5)
-            } else {
-                awayActive[foulerIdx].isSentOff = true
-                awayActive[foulerIdx].currentRating = max(4.0, awayActive[foulerIdx].currentRating - 1.5)
-            }
-
-            let commentary = Commentary.card(
-                player: fouler.player,
-                club: foulingClub,
-                isRed: true,
-                isSecondYellow: false,
-                minute: minute
-            )
-            events.append(
-                MatchEvent(
-                    minute: minute,
-                    type: .redCard,
-                    clubId: foulingClub.id,
-                    playerId: fouler.player.id,
-                    shortText: commentary.short,
-                    detailText: commentary.detail,
-                    isHomeTeam: isHomeTeamFouling
-                )
-            )
-        } else {
-            // Yellow card
-            let currentYellows = isHomeTeamFouling ? homeActive[foulerIdx].yellowCards : awayActive[foulerIdx].yellowCards
-            if currentYellows >= 1 {
-                // Second yellow -> Red
-                if isHomeTeamFouling {
-                    homeActive[foulerIdx].yellowCards += 1
-                    homeActive[foulerIdx].isSentOff = true
-                    homeActive[foulerIdx].currentRating = max(4.0, homeActive[foulerIdx].currentRating - 1.2)
-                } else {
-                    awayActive[foulerIdx].yellowCards += 1
-                    awayActive[foulerIdx].isSentOff = true
-                    awayActive[foulerIdx].currentRating = max(4.0, awayActive[foulerIdx].currentRating - 1.2)
-                }
-
-                let commentary = Commentary.card(
-                    player: fouler.player,
-                    club: foulingClub,
-                    isRed: true,
-                    isSecondYellow: true,
-                    minute: minute
-                )
-                events.append(
-                    MatchEvent(
-                        minute: minute,
-                        type: .secondYellow,
-                        clubId: foulingClub.id,
-                        playerId: fouler.player.id,
-                        shortText: commentary.short,
-                        detailText: commentary.detail,
-                        isHomeTeam: isHomeTeamFouling
-                    )
-                )
-            } else {
-                // First yellow
-                if isHomeTeamFouling {
-                    homeActive[foulerIdx].yellowCards = 1
-                    homeActive[foulerIdx].currentRating = max(4.0, homeActive[foulerIdx].currentRating - 0.4)
-                } else {
-                    awayActive[foulerIdx].yellowCards = 1
-                    awayActive[foulerIdx].currentRating = max(4.0, awayActive[foulerIdx].currentRating - 0.4)
-                }
-
-                let commentary = Commentary.card(
-                    player: fouler.player,
-                    club: foulingClub,
-                    isRed: false,
-                    minute: minute
-                )
-                events.append(
-                    MatchEvent(
-                        minute: minute,
-                        type: .yellowCard,
-                        clubId: foulingClub.id,
-                        playerId: fouler.player.id,
-                        shortText: commentary.short,
-                        detailText: commentary.detail,
-                        isHomeTeam: isHomeTeamFouling
-                    )
-                )
-            }
+            penalty(kickerIsHome: !defendingIsHome, state: &state, homeClub: homeClub, awayClub: awayClub, minute: minute)
+        } else if isDangerousFreeKick {
+            directFreeKick(attackerIsHome: !defendingIsHome, state: &state, homeClub: homeClub, awayClub: awayClub, minute: minute, keeper: keeper)
         }
     }
-    
-    // MARK: - In-Match Penalty Kick
-    
-    private static func resolveInMatchPenalty(
-        isHomeKicking: Bool,
-        homeActive: inout [ActiveMatchPlayer],
-        awayActive: inout [ActiveMatchPlayer],
-        homeClub: Club,
-        awayClub: Club,
-        homeGoals: inout Int,
-        awayGoals: inout Int,
-        homeShots: inout Int,
-        awayShots: inout Int,
-        homeShotsOnTarget: inout Int,
-        awayShotsOnTarget: inout Int,
-        homeSaves: inout Int,
-        awaySaves: inout Int,
-        homeXG: inout Double,
-        awayXG: inout Double,
-        minute: Int,
-        events: inout [MatchEvent]
-    ) {
-        let kickingClub = isHomeKicking ? homeClub : awayClub
-        let defendingClub = isHomeKicking ? awayClub : homeClub
-        let kickingSquad = isHomeKicking ? homeActive : awayActive
-        let defendingSquad = isHomeKicking ? awayActive : homeActive
-        
-        let availableTakers = kickingSquad.filter { !$0.isSentOff && !$0.isSubstitutedOut }
-        let penaltyTakerId = kickingClub.tactics.penaltyTaker
-        guard let taker = availableTakers.first(where: { $0.player.id == penaltyTakerId }) ??
-            availableTakers.max(by: { $0.player.attributes.penalties < $1.player.attributes.penalties }) ??
-            availableTakers.first else { return }
 
-        let availableDefenders = defendingSquad.filter { !$0.isSentOff && !$0.isSubstitutedOut }
-        guard let gk = availableDefenders.first(where: { $0.player.primaryPosition == .GK }) ??
-            availableDefenders.first else { return }
-
-        // A penalty is a shot with a fixed, high-quality expected-goal value.
-        if isHomeKicking {
-            homeShots += 1
-            homeXG += 0.76
-        } else {
-            awayShots += 1
-            awayXG += 0.76
+    private static func book(_ side: inout SideState, index: Int, club: Club, isHome: Bool, minute: Int, events: inout [MatchEvent]) {
+        let player = side.active[index].player
+        if side.active[index].yellowCards >= 1 {
+            side.active[index].yellowCards += 1
+            sendOff(&side, index: index, club: club, isHome: isHome, minute: minute, secondYellow: true, ban: 1, events: &events)
+            return
         }
-        
-        let penaltySkill = Double(taker.player.attributes.penalties)
-        let composure = Double(taker.player.attributes.composure)
-        let gkOneOnOnes = Double(gk.player.attributes.oneOnOnes)
-        let gkReflexes = Double(gk.player.attributes.reflexes)
-        
-        let conversionRate = 0.76 + ((penaltySkill + composure) - (gkOneOnOnes + gkReflexes)) * 0.0015
-        let isScored = Double.random(in: 0...1) < min(0.92, max(0.55, conversionRate))
-        
-        if isScored {
-            if isHomeKicking {
-                homeGoals += 1
-                homeShotsOnTarget += 1
-            } else {
-                awayGoals += 1
-                awayShotsOnTarget += 1
-            }
-            
-            if let idx = (isHomeKicking ? homeActive : awayActive).firstIndex(where: { $0.player.id == taker.player.id }) {
-                if isHomeKicking {
-                    homeActive[idx].goals += 1
-                    homeActive[idx].currentRating += 1.0
-                } else {
-                    awayActive[idx].goals += 1
-                    awayActive[idx].currentRating += 1.0
-                }
-            }
-            
-            let commentary = Commentary.goal(
-                scorer: taker.player,
-                assister: nil,
-                club: kickingClub,
-                opponent: defendingClub,
-                minute: minute,
-                homeGoals: homeGoals,
-                awayGoals: awayGoals,
-                isHome: isHomeKicking,
-                goalType: .clinicalPenalty
-            )
-            events.append(
-                MatchEvent(
-                    minute: minute,
-                    type: .goal,
-                    clubId: kickingClub.id,
-                    playerId: taker.player.id,
-                    shortText: commentary.short,
-                    detailText: commentary.detail,
-                    isHomeTeam: isHomeKicking
-                )
-            )
+        side.active[index].yellowCards = 1
+        side.active[index].currentRating -= 0.3
+        let text = Commentary.card(player: player, club: club, isRed: false, minute: minute)
+        events.append(MatchEvent(minute: minute, type: .yellowCard, clubId: club.id, playerId: player.id,
+                                 shortText: text.short, detailText: text.detail, isHomeTeam: isHome))
+    }
+
+    private static func sendOff(_ side: inout SideState, index: Int, club: Club, isHome: Bool, minute: Int, secondYellow: Bool,
+                                ban: Int, events: inout [MatchEvent]) {
+        let player = side.active[index].player
+        side.active[index].isSentOff = true
+        side.active[index].redCardBan = ban
+        side.active[index].currentRating -= secondYellow ? 1.2 : 1.5
+        let text = Commentary.card(player: player, club: club, isRed: !secondYellow, isSecondYellow: secondYellow, minute: minute)
+        events.append(MatchEvent(minute: minute, type: secondYellow ? .secondYellow : .redCard, clubId: club.id, playerId: player.id,
+                                 shortText: text.short, detailText: text.detail, isHomeTeam: isHome))
+    }
+
+    private static func bookForTimeWasting(_ side: inout SideState, club: Club, isHome: Bool, minute: Int, events: inout [MatchEvent]) {
+        let candidates = side.active.indices.filter { side.active[$0].isOnPitch && side.active[$0].yellowCards == 0 }
+        guard let idx = candidates.first(where: { side.active[$0].slot == .GK }) ?? candidates.randomElement() else { return }
+        let player = side.active[idx].player
+        side.active[idx].yellowCards = 1
+        side.active[idx].currentRating -= 0.2
+        let text = Commentary.timeWastingBooking(player: player, club: club, minute: minute)
+        events.append(MatchEvent(minute: minute, type: .yellowCard, clubId: club.id, playerId: player.id,
+                                 shortText: text.short, detailText: text.detail, isHomeTeam: isHome))
+    }
+
+    private static func penalty(kickerIsHome: Bool, state: inout PausedMatch, homeClub: Club, awayClub: Club, minute: Int) {
+        let kickingClub = kickerIsHome ? homeClub : awayClub
+        let defendingClub = kickerIsHome ? awayClub : homeClub
+        var attSide = kickerIsHome ? state.home : state.away
+        var defSide = kickerIsHome ? state.away : state.home
+        defer {
+            if kickerIsHome { state.home = attSide; state.away = defSide } else { state.away = attSide; state.home = defSide }
+        }
+        let onPitch = attSide.active.indices.filter { attSide.active[$0].isOnPitch && attSide.active[$0].slot != .GK }
+        guard let takerIdx = onPitch.first(where: { attSide.active[$0].player.id == kickingClub.tactics.penaltyTaker })
+                ?? onPitch.max(by: { attSide.active[$0].player.attributes.penalties < attSide.active[$1].player.attributes.penalties }),
+              let gkIdx = keeperIndex(defSide) else { return }
+        let taker = attSide.active[takerIdx].player
+        let gk = defSide.active[gkIdx].player
+        attSide.shots += 1
+        attSide.xG += 0.76
+        let skill = Double(taker.attributes.penalties + taker.attributes.composure)
+        let keeping = Double(gk.attributes.oneOnOnes + gk.attributes.reflexes)
+        let conversion = min(0.90, max(0.60, 0.76 + (skill - keeping) * 0.0015))
+        if Double.random(in: 0..<1) < conversion {
+            attSide.goals += 1
+            attSide.shotsOnTarget += 1
+            attSide.active[takerIdx].goals += 1
+            attSide.active[takerIdx].currentRating += 0.8
+            let text = Commentary.goal(scorer: taker, assister: nil, club: kickingClub, opponent: defendingClub, minute: minute,
+                                       homeGoals: kickerIsHome ? attSide.goals : defSide.goals,
+                                       awayGoals: kickerIsHome ? defSide.goals : attSide.goals,
+                                       isHome: kickerIsHome, goalType: .clinicalPenalty)
+            state.events.append(MatchEvent(minute: minute, type: .goal, clubId: kickingClub.id, playerId: taker.id,
+                                           shortText: text.short, detailText: text.detail, isHomeTeam: kickerIsHome))
         } else {
-            if isHomeKicking {
-                homeShotsOnTarget += 1
-                awaySaves += 1
-            } else {
-                awayShotsOnTarget += 1
-                homeSaves += 1
+            let saved = Double.random(in: 0..<1) < 0.7
+            attSide.active[takerIdx].currentRating -= 0.8
+            if saved {
+                attSide.shotsOnTarget += 1
+                defSide.saves += 1
+                defSide.active[gkIdx].currentRating += 0.9
             }
-            let shortText = "PENALTY SAVED! \(taker.player.displayName) misses! \(minute)'"
-            let detailText = "\(taker.player.fullName) struck it towards the bottom corner, but \(gk.player.fullName) guessed correctly and pulled off a stunning penalty save!"
-            events.append(
-                MatchEvent(
-                    minute: minute,
-                    type: .penaltyMissed,
-                    clubId: kickingClub.id,
-                    playerId: taker.player.id,
-                    shortText: shortText,
-                    detailText: detailText,
-                    isHomeTeam: isHomeKicking
-                )
-            )
+            let shortText = saved ? "PENALTY SAVED! \(gk.displayName) denies \(taker.displayName)! \(minute)'"
+                                  : "PENALTY MISSED! \(taker.displayName) puts it wide! \(minute)'"
+            let detail = saved
+                ? "\(taker.fullName) goes to the bottom corner, but \(gk.fullName) guesses right and keeps it out!"
+                : "\(taker.fullName) leans back and drags the spot kick past the post. A huge let-off for \(defendingClub.name)."
+            state.events.append(MatchEvent(minute: minute, type: .penaltyMissed, clubId: kickingClub.id, playerId: taker.id,
+                                           shortText: shortText, detailText: detail, isHomeTeam: kickerIsHome))
         }
     }
-    
+
     // MARK: - Penalty Shootout
-    
-    private static func resolvePenaltyShootout(
-        homeClub: Club,
-        awayClub: Club,
-        homeActive: [ActiveMatchPlayer],
-        awayActive: [ActiveMatchPlayer],
-        homeGoals: inout Int,
-        awayGoals: inout Int,
-        events: inout [MatchEvent]
-    ) {
-        events.append(
-            MatchEvent(
-                minute: 120,
-                type: .penaltyShootout,
-                            shortText: "PENALTY SHOOTOUT BEGINS!",
-                detailText: "All square after 120 minutes! The tie will be decided from twelve yards.",
-                isHomeTeam: true
-            )
-        )
-        
-        guard !homeActive.isEmpty, !awayActive.isEmpty else { return }
-        let homeOnPitch = homeActive.filter { !$0.isSentOff && !$0.isSubstitutedOut }
-        let awayOnPitch = awayActive.filter { !$0.isSentOff && !$0.isSubstitutedOut }
-        var homeTakers = homeOnPitch.sorted { $0.player.attributes.penalties > $1.player.attributes.penalties }
-        var awayTakers = awayOnPitch.sorted { $0.player.attributes.penalties > $1.player.attributes.penalties }
-        if homeTakers.isEmpty { homeTakers = homeActive }
-        if awayTakers.isEmpty { awayTakers = awayActive }
-        guard !homeTakers.isEmpty, !awayTakers.isEmpty else { return }
-        
-        guard let homeGk = homeOnPitch.first(where: { $0.player.primaryPosition == .GK }) ?? homeActive.first,
-              let awayGk = awayOnPitch.first(where: { $0.player.primaryPosition == .GK }) ?? awayActive.first else { return }
-        
-        var homeShootoutScore = 0
-        var awayShootoutScore = 0
 
-        func conversionChance(taker: ActiveMatchPlayer, keeper: ActiveMatchPlayer) -> Double {
-            let raw = 0.75 + Double(taker.player.attributes.penalties - keeper.player.attributes.reflexes) * 0.002
-            return min(0.95, max(0.55, raw))
+    /// Returns the shootout score (home, away).
+    private static func resolvePenaltyShootout(homeClub: Club, awayClub: Club, state: inout PausedMatch) -> (Int, Int) {
+        state.events.append(MatchEvent(minute: state.maxMinute, type: .penaltyShootout, shortText: "PENALTY SHOOTOUT BEGINS!",
+                                       detailText: "All square after extra time! The tie will be decided from twelve yards.", isHomeTeam: true))
+        func takers(_ side: SideState) -> [Player] {
+            let on = side.active.filter { $0.isOnPitch }.map { $0.player }
+            // The keeper goes last; the best penalty takers first.
+            return on.sorted { a, b in
+                if (a.primaryPosition == .GK) != (b.primaryPosition == .GK) { return b.primaryPosition == .GK }
+                return a.attributes.penalties + a.attributes.composure > b.attributes.penalties + b.attributes.composure
+            }
         }
-
-        // Best-of-five, with early clinching, followed by sudden death. Each
-        // round is one kick per side; the shootout ends as soon as one side can
-        // no longer be caught, or once the scores differ after round five.
+        let homeTakers = takers(state.home)
+        let awayTakers = takers(state.away)
+        guard !homeTakers.isEmpty, !awayTakers.isEmpty else { return Bool.random() ? (1, 0) : (0, 1) }
+        let homeGk = keeperIndex(state.home).map { state.home.active[$0].player }
+        let awayGk = keeperIndex(state.away).map { state.away.active[$0].player }
+        func chance(_ taker: Player, _ keeper: Player?) -> Double {
+            let k = keeper.map { Double($0.attributes.reflexes + $0.attributes.oneOnOnes) } ?? 100
+            return min(0.92, max(0.55, 0.75 + (Double(taker.attributes.penalties + taker.attributes.composure) - k) * 0.0015))
+        }
+        var h = 0, a = 0
         var round = 1
-        while round <= 50 {
-            let homeTaker = homeTakers[(round - 1) % homeTakers.count]
-            let awayTaker = awayTakers[(round - 1) % awayTakers.count]
-
-            if Double.random(in: 0...1) < conversionChance(taker: homeTaker, keeper: awayGk) {
-                homeShootoutScore += 1
-            }
-
-            // After the home kick, the away side may still have regulation kicks
-            // left. If they cannot mathematically catch up, the tie is over.
-            if round <= 5 {
-                let awayKicksRemaining = 6 - round
-                if homeShootoutScore > awayShootoutScore + awayKicksRemaining { break }
-            }
-
-            if Double.random(in: 0...1) < conversionChance(taker: awayTaker, keeper: homeGk) {
-                awayShootoutScore += 1
-            }
-
+        while round <= 30 {
+            if Double.random(in: 0..<1) < chance(homeTakers[(round - 1) % homeTakers.count], awayGk) { h += 1 }
+            if round <= 5 && h > a + (6 - round) { break }
+            if Double.random(in: 0..<1) < chance(awayTakers[(round - 1) % awayTakers.count], homeGk) { a += 1 }
             if round >= 5 {
-                if homeShootoutScore != awayShootoutScore { break }
-            } else {
-                let kicksRemaining = 5 - round
-                if abs(homeShootoutScore - awayShootoutScore) > kicksRemaining { break }
+                if h != a { break }
+            } else if abs(h - a) > 5 - round {
+                break
             }
-
             round += 1
         }
+        if h == a { if Bool.random() { h += 1 } else { a += 1 } }
+        let homeWin = h > a
+        let winner = homeWin ? homeClub : awayClub
+        state.events.append(MatchEvent(minute: state.maxMinute, type: .penaltyShootout,
+                                       shortText: "\(winner.name) win on penalties (\(max(h, a))-\(min(h, a)))!",
+                                       detailText: homeWin ? "Jubilation for \(homeClub.name) as they prevail in the shootout!"
+                                                           : "Heroics from the spot! \(awayClub.name) go through!",
+                                       isHomeTeam: homeWin))
+        return (h, a)
+    }
 
-        // Safeguard after 50 sudden-death rounds (practically impossible): always
-        // produce a winner rather than awarding the tie to the away side by default.
-        if homeShootoutScore == awayShootoutScore {
-            if Bool.random() {
-                homeShootoutScore += 1
-            } else {
-                awayShootoutScore += 1
+    // MARK: - Fatigue
+
+    private static func updateFatigue(_ side: inout SideState, tactics: Tactics) {
+        var drain = tactics.pressing.staminaDrainMultiplier
+        switch tactics.tempo { case .fast: drain *= 1.08; case .normal: break; case .slow: drain *= 0.94 }
+        for idx in side.active.indices where side.active[idx].isOnPitch {
+            side.active[idx].minutesPlayed += 1
+            let stamina = Double(side.active[idx].player.attributes.stamina)
+            // A keeper barely tires.
+            let positionDrain = side.active[idx].slot == .GK ? 0.3 : 1.0
+            // Arriving short of match fitness, a player tires sooner.
+            let fitness = side.active[idx].player.matchFitness
+            let fitnessDrain = 1.0 + max(0, 85 - fitness) / 100.0
+            let perMinute = max(0.08, 0.56 - stamina * 0.0031) * drain * positionDrain * fitnessDrain
+            side.active[idx].currentFatigue = min(100.0, side.active[idx].currentFatigue + perMinute)
+        }
+    }
+
+    // MARK: - Injuries
+
+    /// Each player on the pitch, each minute: fitness, tiredness, age and his
+    /// own body (some players break down more than others) set the risk.
+    private static func checkInjuries(_ side: inout SideState, club: Club, isHome: Bool, minute: Int, config: SimulationConfig,
+                                      events: inout [MatchEvent]) {
+        for idx in side.active.indices where side.active[idx].isOnPitch && !side.active[idx].mustComeOff {
+            let risk = InjuryEngine.matchInjuryRisk(player: side.active[idx].player,
+                                                    fatigue: side.active[idx].currentFatigue,
+                                                    minute: minute,
+                                                    pressing: club.tactics.pressing,
+                                                    carryingKnock: side.active[idx].carryingKnock)
+            if Double.random(in: 0..<1) < Tuning.injuryHazard * risk {
+                injure(&side, index: idx, club: club, isHome: isHome, minute: minute, contact: false, events: &events)
             }
         }
-        if homeShootoutScore > awayShootoutScore {
-            homeGoals += 1
-            events.append(
-                MatchEvent(
-                    minute: 120,
-                    type: .penaltyShootout,
-                                shortText: "\(homeClub.name) win on penalties (\(homeShootoutScore)-\(awayShootoutScore))!",
-                    detailText: "Jubilation for \(homeClub.name) as they prevail in the dramatic penalty shootout!",
-                    isHomeTeam: true
-                )
-            )
-        } else {
-            awayGoals += 1
-            events.append(
-                MatchEvent(
-                    minute: 120,
-                    type: .penaltyShootout,
-                                shortText: "\(awayClub.name) win on penalties (\(awayShootoutScore)-\(homeShootoutScore))!",
-                    detailText: "Heroics in the shootout! \(awayClub.name) triumph from the spot!",
-                    isHomeTeam: false
-                )
-            )
-        }
     }
-    
-    // MARK: - Tactical Strength Calculator
-    
-    /// Exponent applied to team strength when sharing out the match's events.
-    /// Tuned by simulating full seasons of every league so that home/draw/away
-    /// lands near 48/22/30 and a clearly stronger side (8+ rating points) wins
-    /// about three times in four, as in real football.
-    static let strengthSensitivity = 8.0
-    /// Strength multiplier for the home side.
-    static let homeAdvantage = 1.05
 
-    private static func calculateTeamStrength(
-        activePlayers: [ActiveMatchPlayer],
-        tactics: Tactics,
-        isHome: Bool,
-        neutralVenue: Bool
-    ) -> Double {
-        var baseStrength = 0.0
-        var count = 0
-        
-        for ap in activePlayers where !ap.isSentOff {
-            baseStrength += ap.effectiveSkill(for: ap.player.primaryPosition.category)
-            count += 1
-        }
-        
-        guard count > 0 else { return 30.0 }
-        let average = baseStrength / Double(count)
-        
-        // Red card handicap (playing with 10 or 9 men severely damages performance)
-        let redCardPenalty = Double(11 - count) * 4.5
-        var total = max(20.0, average - redCardPenalty)
-        
-        // Mentality modifier (attacking intent scales overall threat)
-        total *= tactics.mentality.attackingMultiplier
-        // Width shapes attacking intent (wide = more chance creation).
-        total *= tactics.width.attackingMultiplier
-        // Passing style slightly shifts threat (direct/long create more chances).
-        total *= tactics.passingStyle.chanceMultiplier
-        // Formation shape shapes threat (more forwards = more attacking bite).
-        total *= tactics.formation.attackingBias
-        
-        // Home advantage. Small, because it is amplified by the strength curve
-        // used to share out the match's events (see `strengthSensitivity`).
-        if isHome && !neutralVenue {
-            total *= homeAdvantage
-        }
-        
-        return total
-    }
-    
-    /// Defensive solidity factor derived from tactics: applied to reduce the
-    /// opponent's possession share and chance quality.
-    private static func defensiveFactor(tactics: Tactics) -> Double {
-        return tactics.mentality.defensiveMultiplier
-            * tactics.pressing.defensiveMultiplier
-            * tactics.width.defensiveMultiplier
-            * tactics.formation.defensiveBias
-    }
-    
-    // MARK: - Fatigue Progression
-    
-    private static func updateFatigue(
-        activePlayers: inout [ActiveMatchPlayer],
-        tactics: Tactics
-    ) {
-        let pressingDrain = tactics.pressing.staminaDrainMultiplier
-        
-        for idx in 0..<activePlayers.count {
-            guard !activePlayers[idx].isSentOff && !activePlayers[idx].isSubstitutedOut else { continue }
-            activePlayers[idx].minutesPlayed += 1
-            
-            let staminaStat = Double(activePlayers[idx].player.attributes.stamina)
-            let baseDrain = (0.28 - (staminaStat * 0.0015)) * pressingDrain
-            activePlayers[idx].currentFatigue = min(100.0, activePlayers[idx].currentFatigue + baseDrain)
+    private static func injure(_ side: inout SideState, index: Int, club: Club, isHome: Bool, minute: Int, contact: Bool,
+                               events: inout [MatchEvent]) {
+        let outcome = InjuryEngine.matchInjury(player: side.active[index].player, contact: contact)
+        let player = side.active[index].player
+        switch outcome {
+        case .knock:
+            // Treated on the pitch and carries on, a bit slower.
+            if side.active[index].carryingKnock { return }
+            side.active[index].carryingKnock = true
+            side.active[index].currentFatigue = min(100, side.active[index].currentFatigue + 8)
+            let text = Commentary.knock(player: player, club: club, minute: minute)
+            events.append(MatchEvent(minute: minute, type: .commentary, clubId: club.id, playerId: player.id,
+                                     shortText: text.short, detailText: text.detail, isHomeTeam: isHome))
+        case .playsOn(let injury):
+            // Hurt, but tries to run it off. He is worse for it and can be taken off.
+            side.active[index].player.injury = injury
+            side.active[index].carryingKnock = true
+            let text = Commentary.playingThroughInjury(player: player, club: club, minute: minute)
+            events.append(MatchEvent(minute: minute, type: .injury, clubId: club.id, playerId: player.id,
+                                     shortText: text.short, detailText: text.detail, isHomeTeam: isHome))
+        case .forcedOff(let injury):
+            side.active[index].player.injury = injury
+            side.active[index].mustComeOff = true
+            let text = Commentary.injury(player: player, club: club, minute: minute, injuryType: injury.type)
+            events.append(MatchEvent(minute: minute, type: .injury, clubId: club.id, playerId: player.id,
+                                     shortText: text.short, detailText: text.detail, isHomeTeam: isHome))
         }
     }
-    
-    // MARK: - Substitutions
-    
-    private static func tryPerformSubstitution(
-        activePlayers: inout [ActiveMatchPlayer],
-        bench: inout [Player],
-        subsUsed: inout Int,
-        maxSubs: Int,
+
+    /// Players who cannot carry on are replaced, unless they belong to the
+    /// manager and a live match will stop for him to choose (he gets one
+    /// minute's stop; if he does nothing, the physio's call stands).
+    private static func handleForcedChanges(_ state: inout PausedMatch, homeClub: Club, awayClub: Club, minute: Int, config: SimulationConfig) {
+        for isHome in [true, false] {
+            var side = isHome ? state.home : state.away
+            let club = isHome ? homeClub : awayClub
+            let isUser = club.id == config.userClubId
+            for idx in side.active.indices where side.active[idx].isOnPitch && side.active[idx].mustComeOff {
+                if isUser && config.pauseForUserDecisions && !side.active[idx].managerTold { continue }
+                if side.canSubstitute(atMinute: minute, extraTime: state.isExtraTime),
+                   let benchIdx = bestReplacement(for: side.active[idx].slot, bench: side.bench) {
+                    let incoming = side.bench[benchIdx]
+                    substitute(&side, outIndex: idx, incoming: incoming, club: club, isHome: isHome, minute: minute,
+                               reason: .injury, events: &state.events)
+                } else {
+                    // No changes left: down to ten.
+                    side.active[idx].leftInjured = true
+                    let player = side.active[idx].player
+                    state.events.append(MatchEvent(
+                        minute: minute, type: .commentary, clubId: club.id, playerId: player.id,
+                        shortText: "\(club.name) down to \(side.onPitchCount) men",
+                        detailText: "\(player.fullName) cannot continue and \(club.name) have no changes left. They will have to see it out a man light.",
+                        isHomeTeam: isHome))
+                    // An outfield player takes the gloves if the keeper went off.
+                    if side.active[idx].slot == .GK,
+                       let stand = side.active.indices.filter({ side.active[$0].isOnPitch }).max(by: {
+                           side.active[$0].player.attributes.calculateOverall(for: .GK) < side.active[$1].player.attributes.calculateOverall(for: .GK)
+                       }) {
+                        let oldSlot = side.active[stand].slot
+                        side.active[stand].slot = .GK
+                        side.active[stand].slotRating = rating(of: side.active[stand].player, in: .GK)
+                        side.active[idx].slot = oldSlot
+                    }
+                }
+            }
+            if isHome { state.home = side } else { state.away = side }
+        }
+    }
+
+    /// The bench player best suited to a position.
+    private static func bestReplacement(for slot: Position, bench: [Player]) -> Int? {
+        guard !bench.isEmpty else { return nil }
+        let candidates = bench.indices.filter { slot == .GK ? bench[$0].primaryPosition == .GK : bench[$0].primaryPosition != .GK }
+        let pool = candidates.isEmpty ? Array(bench.indices) : candidates
+        return pool.max { rating(of: bench[$0], in: slot) < rating(of: bench[$1], in: slot) }
+    }
+
+    // MARK: - AI Substitutions
+
+    /// How a computer manager (or the user's assistant, when allowed) uses
+    /// the bench: tired legs, a booked defender on the edge, a player having a
+    /// shocker, and the game state: an extra forward when chasing it, an extra
+    /// defender to see out a lead. Changes come in two or three windows, as
+    /// real managers make them.
+    private static func aiSubstitutions(
+        _ side: inout SideState,
+        opponentGoals: Int,
         club: Club,
         isHome: Bool,
         minute: Int,
-        events: inout [MatchEvent],
-        departed: inout [ActiveMatchPlayer]
-    ) {
-        guard subsUsed < maxSubs && !bench.isEmpty else { return }
-        
-        // Find most fatigued starter (excluding GK unless injured)
-        let candidates = activePlayers.enumerated().filter { _, ap in
-            !ap.isSentOff && !ap.isSubstitutedOut && ap.player.primaryPosition != .GK
-        }
-        guard let (outIdx, playerToSub) = candidates.max(by: { $0.1.currentFatigue < $1.1.currentFatigue }),
-              playerToSub.currentFatigue > 60.0 else { return }
-        
-        // Find compatible player on bench
-        let cat = playerToSub.player.primaryPosition.category
-        let benchMatchIdx = bench.firstIndex(where: { $0.primaryPosition.category == cat }) ?? 0
-        let incomingPlayer = bench.remove(at: benchMatchIdx)
-        
-        // Mark outgoing
-        activePlayers[outIdx].isSubstitutedOut = true
-        departed.append(playerToSub)
-        
-        // Insert fresh legs into active match players
-        let freshSub = ActiveMatchPlayer(player: incomingPlayer, currentFatigue: 0.0, currentRating: 6.0)
-        activePlayers[outIdx] = freshSub
-        subsUsed += 1
-        
-        let commentary = Commentary.substitution(
-            playerIn: incomingPlayer,
-            playerOut: playerToSub.player,
-            club: club,
-            minute: minute
-        )
-        events.append(
-            MatchEvent(
-                minute: minute,
-                type: .substitution,
-                clubId: club.id,
-                playerId: incomingPlayer.id,
-                shortText: commentary.short,
-                detailText: commentary.detail,
-                isHomeTeam: isHome
-            )
-        )
-    }
-    
-    // MARK: - In-Match Injury Check
-    
-    private static func checkInMatchInjury(
-        homeActive: inout [ActiveMatchPlayer],
-        awayActive: inout [ActiveMatchPlayer],
-        homeClub: Club,
-        awayClub: Club,
-        minute: Int,
+        extraTime: Bool,
+        aggression: MatchSettings.AutoSubAggression,
         events: inout [MatchEvent]
     ) {
-        let isHome = Double.random(in: 0...1) < 0.5
-        let intensity = isHome ? homeClub.tactics.pressing.staminaDrainMultiplier : awayClub.tactics.pressing.staminaDrainMultiplier
-        
-        if isHome {
-            let candidates = homeActive.indices.filter {
-                !homeActive[$0].isSentOff && !homeActive[$0].isSubstitutedOut
+        guard minute >= 46, !side.bench.isEmpty, side.canSubstitute(atMinute: minute, extraTime: extraTime) else { return }
+        // Decision points: rarely at the break, mostly from the hour.
+        let decideNow: Bool
+        if minute == 46 { decideNow = Double.random(in: 0..<1) < (side.goals < opponentGoals ? 0.35 : 0.12) }
+        else if minute < 55 { decideNow = Double.random(in: 0..<1) < 0.02 }
+        else if minute <= 88 { decideNow = Double.random(in: 0..<1) < 0.10 }
+        else { decideNow = false }
+        guard decideNow else { return }
+
+        let goalDiff = side.goals - opponentGoals
+        let threshold = aggression.fatigueThreshold
+        var changesThisWindow = 0
+        let maxThisWindow = minute >= 75 ? 3 : 2
+        let subsCap = min(aggression.maxSubs + (extraTime ? 1 : 0), Tuning.maxSubs + (extraTime ? 1 : 0))
+
+        while changesThisWindow < maxThisWindow, side.subsUsed < subsCap,
+              side.canSubstitute(atMinute: minute, extraTime: extraTime), !side.bench.isEmpty {
+            // Who should come off, and why.
+            var best: (idx: Int, score: Double, reason: SubReason)? = nil
+            for idx in side.active.indices where side.active[idx].isOnPitch && side.active[idx].slot != .GK {
+                let p = side.active[idx]
+                var score = (p.currentFatigue - threshold) / 10.0
+                var reason: SubReason = .fatigue
+                if p.carryingKnock { score += 1.2 }
+                if p.yellowCards > 0 && p.slot.category != .forward && minute >= 55 {
+                    score += 0.7
+                    if score > 0.6 { reason = .booked }
+                }
+                if p.currentRating < 5.8 && minute >= 55 {
+                    score += 0.6 + (5.8 - p.currentRating)
+                    reason = .poorForm
+                }
+                if goalDiff < 0 && minute >= 60 && (p.slot.category == .defender || p.slot == .CDM) {
+                    score += 0.9
+                    reason = .chasing
+                }
+                if goalDiff > 0 && minute >= 72 && p.slot.category == .forward {
+                    score += 0.8
+                    reason = .protecting
+                }
+                score += max(0, Double(minute - 55) / 30.0)   // fresh legs as the game wears on
+                if score > (best?.score ?? 0.9) { best = (idx, score, reason) }
             }
-            guard let idx = candidates.randomElement() else { return }
-            if let injury = InjuryEngine.checkForInjury(player: homeActive[idx].player, matchMinute: minute, intensity: intensity) {
-                homeActive[idx].player.injury = injury
-                let commentary = Commentary.injury(player: homeActive[idx].player, club: homeClub, minute: minute, injuryType: injury.type)
-                events.append(
-                    MatchEvent(
-                        minute: minute,
-                        type: .injury,
-                        clubId: homeClub.id,
-                        playerId: homeActive[idx].player.id,
-                        shortText: commentary.short,
-                        detailText: commentary.detail,
-                        isHomeTeam: true
-                    )
-                )
+            guard let choice = best else { break }
+            // Who comes on.
+            let outSlot = side.active[choice.idx].slot
+            let benchIdx: Int?
+            switch choice.reason {
+            case .chasing:
+                benchIdx = side.bench.indices.filter { side.bench[$0].primaryPosition.isAttacking }
+                    .max { side.bench[$0].overall < side.bench[$1].overall } ?? bestReplacement(for: outSlot, bench: side.bench)
+            case .protecting:
+                benchIdx = side.bench.indices.filter { side.bench[$0].primaryPosition.category == .defender || side.bench[$0].primaryPosition == .CDM }
+                    .max { side.bench[$0].overall < side.bench[$1].overall } ?? bestReplacement(for: outSlot, bench: side.bench)
+            default:
+                benchIdx = bestReplacement(for: outSlot, bench: side.bench)
             }
-        } else {
-            let candidates = awayActive.indices.filter {
-                !awayActive[$0].isSentOff && !awayActive[$0].isSubstitutedOut
+            guard let b = benchIdx else { break }
+            let incoming = side.bench[b]
+            // Not worth it if the replacement is much worse, unless he is spent.
+            let current = side.active[choice.idx].effectiveSkill()
+            let replacement = rating(of: incoming, in: outSlot)
+            if replacement < current * 0.85 && choice.reason != .chasing && choice.reason != .protecting && choice.score < 2.5 { break }
+            substitute(&side, outIndex: choice.idx, incoming: incoming, club: club, isHome: isHome,
+                       minute: minute, reason: choice.reason, events: &events)
+            // A tactical change reshapes the side: the newcomer plays his own
+            // position (an extra striker, an extra centre-back).
+            if choice.reason == .chasing || choice.reason == .protecting {
+                side.active[choice.idx].slot = incoming.primaryPosition
+                side.active[choice.idx].slotRating = Double(incoming.overall)
             }
-            guard let idx = candidates.randomElement() else { return }
-            if let injury = InjuryEngine.checkForInjury(player: awayActive[idx].player, matchMinute: minute, intensity: intensity) {
-                awayActive[idx].player.injury = injury
-                let commentary = Commentary.injury(player: awayActive[idx].player, club: awayClub, minute: minute, injuryType: injury.type)
-                events.append(
-                    MatchEvent(
-                        minute: minute,
-                        type: .injury,
-                        clubId: awayClub.id,
-                        playerId: awayActive[idx].player.id,
-                        shortText: commentary.short,
-                        detailText: commentary.detail,
-                        isHomeTeam: false
-                    )
-                )
-            }
+            changesThisWindow += 1
         }
     }
-    
-    // MARK: - Man of the Match
-    
-    private static func determineManOfTheMatch(
-        homeActive: [ActiveMatchPlayer],
-        awayActive: [ActiveMatchPlayer]
-    ) -> ActiveMatchPlayer? {
-        let all = homeActive + awayActive
-        return all.max(by: { $0.currentRating < $1.currentRating })
-    }
-    
-    // MARK: - Post-Match Club State Synchronization
-    
-    private static func applyMatchToClub(
-        club: inout Club,
-        activePlayers: [ActiveMatchPlayer],
-        opponentGoals: Int,
-        motmId: UUID?
-    ) {
-        let isCleanSheet = (opponentGoals == 0)
-        
-        for ap in activePlayers {
-            if var p = club.player(withId: ap.player.id) {
-                let isMotm = (p.id == motmId)
-                let gotYellow = (ap.yellowCards >= 1)
-                let gotRed = ap.isSentOff
-                
-                p.recordMatch(
-                    rating: (ap.currentRating * 10).rounded() / 10,
-                    minutes: ap.minutesPlayed,
-                    goals: ap.goals,
-                    assists: ap.assists,
-                    yellowCard: gotYellow,
-                    redCard: gotRed,
-                    cleanSheet: isCleanSheet,
-                    isMotm: isMotm
-                )
-                
-                if let inj = ap.player.injury {
-                    p.injury = inj
-                }
-                
-                club.updatePlayer(p)
+
+    // MARK: - Ratings
+
+    private static func finaliseRatings(_ side: inout SideState, goalsFor: Int, goalsAgainst: Int) {
+        let resultBonus = goalsFor > goalsAgainst ? 0.25 : (goalsFor < goalsAgainst ? -0.25 : 0)
+        func adjust(_ p: inout ActiveMatchPlayer) {
+            guard p.minutesPlayed > 0 else { return }
+            var r = p.currentRating + resultBonus + gaussian() * 0.3
+            if goalsAgainst == 0 && p.minutesPlayed >= 60 {
+                if p.slot == .GK { r += 0.6 } else if p.slot.category == .defender { r += 0.4 }
             }
+            // A short cameo stays close to average.
+            if p.minutesPlayed < 20 { r = 6.0 + (r - 6.0) * 0.5 }
+            p.currentRating = min(10.0, max(3.0, r))
+        }
+        for i in side.active.indices { adjust(&side.active[i]) }
+        for i in side.departed.indices { adjust(&side.departed[i]) }
+    }
+
+    // MARK: - Post-Match Club State Synchronization
+
+    private static func applyMatchToClub(club: inout Club, players: [ActiveMatchPlayer], opponentGoals: Int, motmId: UUID?) {
+        for ap in players {
+            guard var p = club.player(withId: ap.player.id) else { continue }
+            p.recordMatch(
+                rating: (min(10, max(3, ap.currentRating)) * 10).rounded() / 10,
+                minutes: ap.minutesPlayed,
+                goals: ap.goals,
+                assists: ap.assists,
+                yellowCard: ap.yellowCards == 1 && !ap.isSentOff,
+                redCard: ap.isSentOff,
+                cleanSheet: opponentGoals == 0 && ap.minutesPlayed >= 60,
+                isMotm: p.id == motmId,
+                redCardBan: ap.redCardBan,
+                matchFatigue: ap.currentFatigue
+            )
+            if let inj = ap.player.injury {
+                p.injury = inj
+            }
+            club.updatePlayer(p)
         }
     }
 }

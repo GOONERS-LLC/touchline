@@ -43,6 +43,8 @@ enum UITestHarness {
         state.matchSettings.speed = .veryFast
         state.matchSettings.stopAtHalfTime = true
         state.matchSettings.animateCalendar = false
+        // An injury stop would put "Resume" where the test expects the break.
+        state.matchSettings.stopForInjuries = false
 
         if args.contains("-uitest-season") {
             // Play nineteen rounds through the same code the buttons use.

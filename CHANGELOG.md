@@ -5,6 +5,47 @@ All notable changes to Touchline are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-11-13
+
+A much more realistic match day, injuries that behave like football, and
+the manager in charge of his own squad.
+
+- New match engine. Midfields fight for the ball, attacks against defences
+  make the chances, and every player is rated for the position he is
+  playing: a centre-back up front or a winger at left-back is a real weakness.
+- Tactics are trade-offs, not free bonuses: attacking mentality makes chances
+  and leaves you open to counter-attacks; a high press wins the ball high,
+  tires legs and invites balls in behind; a low block concedes shots but few
+  good ones; short passing keeps the ball, direct play makes more (poorer)
+  chances. Formation shape counts (numbers in each line).
+- Real match numbers: about 2.6 goals, 11-12 shots, 4-5 corners, 11 fouls,
+  two bookings and two offsides a side; possession, pass accuracy, tackles
+  and offsides come from the play, not a dice roll. Saves, misses and blocks
+  are described by how good the chance was.
+- Computer managers chase games late, sit on leads, take off booked
+  defenders and tired legs, and use five substitutions in three windows.
+- Live matches are played a minute at a time. Stop them whenever you like
+  (Changes) to make substitutions or change tactics; half-time and extra
+  time changes, and the five-subs-in-three-windows rule, work as in real
+  football. Players taken off cannot come back.
+- Your team is yours: the assistant no longer makes substitutions or picks
+  players unless you ask him to (Tactics, Assistant's Subs and Team
+  Selection). Changing formation keeps your eleven and moves them into the
+  new shape; an injury or ban fills only that player's place.
+- Injuries: an injured player no longer plays on. Most knocks are run off;
+  some players hobble on and can be replaced; the rest come off. A live
+  match stops so you can choose the replacement (Settings, Stop When a
+  Player Is Hurt). With no changes left, you play a man down.
+- Injury risk depends on match fitness, tiredness, age, the press and the
+  player's own body (some are injury-prone). Lay-offs are counted in days,
+  from a few days for a dead leg to most of a season for a torn ACL.
+  Recovery is faster with better medical facilities and a better physio, and
+  players come back short of fitness and sharpness. Long injuries carry over
+  the summer.
+- Fitness recovers day by day, so two games in a week wear a squad down and
+  rotation matters. A second yellow is a one-match ban; a straight red one
+  to three matches.
+
 ## [2.2.0] - 2026-11-12
 
 - After every match the day finishes where it was played: home offers
@@ -154,7 +195,7 @@ Touchline is GridironFC 1.6.0, unchanged in play, with:
 - **The Terrace** social feed, built from the season's results, transfers and
   awards (nothing extra is saved).
 
-## [Unreleased]
+## [2.3.0] - 2026-11-13
 
 ### Fixed
 
@@ -543,7 +584,7 @@ Touchline is GridironFC 1.6.0, unchanged in play, with:
 - **All emojis** — event icons now use SF Symbols and flags render as
   three-letter country codes.
 
-## [Unreleased]
+## [2.3.0] - 2026-11-13
 
 ### Added
 

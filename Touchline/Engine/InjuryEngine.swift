@@ -2,169 +2,169 @@
 //  InjuryEngine.swift
 //  Touchline
 //
-//  Created for Touchline - iOS Football Manager Game.
-//  Simulates match injury risk rolls, physiological fatigue, workload accumulation,
-//  and weekly physio-assisted rehabilitation.
+//  Injury risk, severity and recovery.
+//
+//  Modelled on the shape of elite football's injury data: most match
+//  incidents are knocks a player runs off, a few keep him out for days, a
+//  smaller share for weeks, and the odd one for months. Tired legs, a lack of
+//  match fitness, age, the press and a player's own body all raise the risk;
+//  a player who comes back too soon is the likeliest to break down again.
+//  Recovery runs day by day and is quicker with good medical facilities and
+//  a good physio.
 //
 
 import Foundation
 
 public struct InjuryEngine {
-    
-    // MARK: - In-Match Injury Assessment
-    
-    /// Evaluates probability of a matchday injury based on player fitness, age, fatigue, and tactical intensity.
-    public static func checkForInjury(
-        player: Player,
-        matchMinute: Int,
-        intensity: Double = 1.0
-    ) -> Injury? {
-        // Base chance per injury opportunity (about 1.5 per match). Tuned over
-        // full simulated seasons to roughly 0.7 match injuries per game; at
-        // 0.4% injuries were almost non-existent (0.01 per match).
-        var baseProbability = 0.25
-        
-        // 1. Match fitness factor (fatigued players run much higher injury risk)
-        if player.matchFitness < 50.0 {
-            baseProbability *= 3.5
-        } else if player.matchFitness < 70.0 {
-            baseProbability *= 2.2
-        } else if player.matchFitness < 85.0 {
-            baseProbability *= 1.3
-        }
-        
-        // 2. Age factor: older bodies are more susceptible to muscle strains
-        if player.age >= 34 {
-            baseProbability *= 2.0
-        } else if player.age >= 30 {
-            baseProbability *= 1.4
-        }
-        
-        // 3. Low stamina modifier (exhausted players lose physical stability)
-        let staminaDampener = max(0.6, Double(player.attributes.stamina) / 100.0)
-        baseProbability /= staminaDampener
-        
-        // 4. Minute fatigue multiplier (injuries spike in the final 20 minutes)
-        if matchMinute > 75 {
-            baseProbability *= 1.6
-        } else if matchMinute > 60 {
-            baseProbability *= 1.25
-        }
-        
-        // 5. Tactical pressing intensity multiplier
-        baseProbability *= intensity
-        
-        // Roll for injury
-        let roll = Double.random(in: 0.0...1.0)
-        guard roll < min(0.85, baseProbability) else { return nil }
-        
-        // Determine injury type based on weighted distribution
-        let typeRoll = Double.random(in: 0.0...100.0)
-        let injuryType: InjuryType
-        
-        switch typeRoll {
-        case 0..<40:
-            injuryType = .minorKnock
-        case 40..<68:
-            injuryType = .muscleStrain
-        case 68..<85:
-            injuryType = .hamstring
-        case 85..<93:
-            injuryType = .ankleLigament
-        case 93..<97:
-            injuryType = .brokenBone
-        case 97..<99:
-            injuryType = .kneeInjury
-        default:
-            injuryType = .aclTear
-        }
-        
-        // Pick weeks from the injury's recovery range
-        let range = injuryType.recoveryWeeksRange
-        let weeks = Int.random(in: range.lowerBound...range.upperBound)
-        
-        return Injury(type: injuryType, weeksRemaining: max(1, weeks))
+
+    /// What happens to a player who gets hurt during a match.
+    public enum MatchInjuryOutcome {
+        /// Treated on the pitch, carries on; no time lost.
+        case knock
+        /// Hurt and playing through it; he will miss time afterwards.
+        case playsOn(Injury)
+        /// Cannot carry on.
+        case forcedOff(Injury)
     }
-    
-    /// Occasional training-ground injury for a fit player (about one a
-    /// fortnight across a 25-man squad). Better medical facilities help.
-    public static func trainingInjury(player: Player, medicalLevel: Int) -> Injury? {
+
+    // MARK: - Player Traits
+
+    /// Some bodies break down more than others. A hidden, fixed trait from
+    /// 0.7 (rarely injured) to 1.5 (always in the treatment room).
+    public static func proneness(of player: Player) -> Double {
+        let seed = abs(player.id.uuidString.hashValueStable % 1000)
+        var value = 0.7 + Double(seed % 61) / 100.0
+        // A small share are genuinely injury-prone.
+        if seed % 13 == 0 { value += 0.2 }
+        return value
+    }
+
+    // MARK: - In-Match
+
+    /// Relative risk (1.0 = a fit, rested, mid-career player) of something
+    /// going wrong this minute.
+    public static func matchInjuryRisk(
+        player: Player,
+        fatigue: Double,
+        minute: Int,
+        pressing: PressingIntensity,
+        carryingKnock: Bool
+    ) -> Double {
+        var risk = proneness(of: player)
+        // Short of match fitness: the classic soft-tissue injury.
+        let fitness = player.matchFitness
+        if fitness < 55 { risk *= 2.6 } else if fitness < 70 { risk *= 1.8 } else if fitness < 85 { risk *= 1.25 }
+        // Tired legs in the closing stages.
+        risk *= 1.0 + fatigue / 60.0
+        if minute > 75 { risk *= 1.2 }
+        // Older bodies.
+        if player.age >= 33 { risk *= 1.6 } else if player.age >= 30 { risk *= 1.25 } else if player.age <= 19 { risk *= 1.1 }
+        // Conditioning.
+        risk *= 1.25 - Double(player.attributes.stamina + player.attributes.strength) / 400.0
+        switch pressing {
+        case .high: risk *= 1.2
+        case .medium: break
+        case .low: risk *= 0.9
+        }
+        if carryingKnock { risk *= 1.8 }
+        return risk
+    }
+
+    /// How bad it is. About two in five are knocks he runs off.
+    public static func matchInjury(player: Player, contact: Bool) -> MatchInjuryOutcome {
+        let roll = Double.random(in: 0..<1)
+        if roll < (contact ? 0.55 : 0.40) { return .knock }
+        let injury = severity(contact: contact, player: player)
+        // A minor strain or dead leg can be played through for a while.
+        if injury.daysRemaining <= 10 && Double.random(in: 0..<1) < 0.45 {
+            return .playsOn(injury)
+        }
+        return .forcedOff(injury)
+    }
+
+    /// A time-loss injury, roughly in elite football's proportions: about a
+    /// third out for under a week, most of the rest one to four weeks, about
+    /// one in ten over a month, and a few season-threatening.
+    static func severity(contact: Bool, player: Player) -> Injury {
+        let roll = Double.random(in: 0..<100)
+        let type: InjuryType
+        switch roll {
+        case ..<34: type = .minorKnock                       // bruising, dead leg: days
+        case ..<58: type = contact ? .ankleLigament : .muscleStrain
+        case ..<78: type = contact ? .muscleStrain : .hamstring
+        case ..<90: type = contact ? .ankleLigament : .hamstring
+        case ..<95.5: type = contact ? .brokenBone : .kneeInjury
+        case ..<98.5: type = .kneeInjury
+        default: type = .aclTear
+        }
+        let range = type.recoveryDaysRange
+        var days = Int.random(in: range.lowerBound...range.upperBound)
+        // Older players heal more slowly.
+        if player.age >= 31 { days = Int(Double(days) * 1.15) }
+        return Injury(type: type, days: days)
+    }
+
+    // MARK: - Training
+
+    /// A training-ground injury for a fit player. Over a season a typical
+    /// squad loses a handful of players this way; tired, unfit and
+    /// injury-prone players most of all. Better medical facilities help.
+    public static func trainingInjury(player: Player, medicalLevel: Int, days: Int = 7) -> Injury? {
         guard player.injury == nil else { return nil }
-        let chance = 0.002 * (1.2 - Double(max(1, min(5, medicalLevel))) * 0.08)
+        var chance = 0.0045 * Double(days) / 7.0
+        chance *= proneness(of: player)
+        if player.matchFitness < 60 { chance *= 1.6 }
+        if player.age >= 32 { chance *= 1.4 }
+        chance *= 1.2 - Double(max(1, min(5, medicalLevel))) * 0.08
         guard Double.random(in: 0..<1) < chance else { return nil }
-        let type: InjuryType = Double.random(in: 0..<1) < 0.7 ? .muscleStrain : .hamstring
-        let range = type.recoveryWeeksRange
-        return Injury(type: type, weeksRemaining: max(1, Int.random(in: range.lowerBound...range.upperBound)))
+        let roll = Double.random(in: 0..<1)
+        let type: InjuryType = roll < 0.45 ? .minorKnock : roll < 0.8 ? .muscleStrain : roll < 0.96 ? .hamstring : .ankleLigament
+        let range = type.recoveryDaysRange
+        return Injury(type: type, days: Int.random(in: range.lowerBound...range.upperBound))
     }
 
     // MARK: - Pre-Match Injury Risk Calculator
-    
-    /// Returns calculated percentage risk (0.0% to 100.0%) for squad management display.
-    public static func calculateInjuryRisk(
-        player: Player,
-        pressing: PressingIntensity
-    ) -> Double {
-        var risk = 2.0
-        
-        if player.matchFitness < 60 {
-            risk += 25.0
-        } else if player.matchFitness < 75 {
-            risk += 14.0
-        } else if player.matchFitness < 90 {
-            risk += 5.0
-        }
-        
-        if player.age > 32 {
-            risk += Double(player.age - 32) * 3.0
-        }
-        
-        if player.attributes.stamina < 60 {
-            risk += Double(60 - player.attributes.stamina) * 0.3
-        }
-        
+
+    /// Percentage risk (1-95) for squad management display.
+    public static func calculateInjuryRisk(player: Player, pressing: PressingIntensity) -> Double {
+        var risk = 3.0 * proneness(of: player)
+        if player.matchFitness < 60 { risk += 25.0 } else if player.matchFitness < 75 { risk += 14.0 } else if player.matchFitness < 90 { risk += 5.0 }
+        if player.age > 32 { risk += Double(player.age - 32) * 3.0 }
+        if player.attributes.stamina < 60 { risk += Double(60 - player.attributes.stamina) * 0.3 }
         switch pressing {
         case .high: risk *= 1.35
-        case .medium: risk *= 1.00
+        case .medium: break
         case .low: risk *= 0.80
         }
-        
         return min(95.0, max(1.0, risk))
     }
-    
-    // MARK: - Weekly Rehabilitation
-    
-    /// Decrements injury timers across all squad members and leverages club physio quality.
-    public static func processWeeklyRecovery(
-        players: inout [Player],
-        physioQuality: Int = 3
-    ) {
-        for idx in 0..<players.count {
-            guard let currentInjury = players[idx].injury else {
-                // Uninjured players regenerate match fitness naturally
-                let staminaBoost = Double(players[idx].attributes.stamina) * 0.18
-                players[idx].recoverFitness(amount: 25.0 + staminaBoost)
-                continue
-            }
-            
-            // Physio quality bonus: high quality physios (4-5 stars) occasionally accelerate recovery
-            var weeksToDeduct = 1
-            if physioQuality >= 4 && currentInjury.weeksRemaining > 2 {
-                let physioHealRoll = Double.random(in: 0.0...1.0)
-                let chance = physioQuality == 5 ? 0.35 : 0.20
-                if physioHealRoll < chance {
-                    weeksToDeduct = 2
-                }
-            }
-            
-            let updatedWeeks = currentInjury.weeksRemaining - weeksToDeduct
-            if updatedWeeks <= 0 {
-                // Player has recovered
-                players[idx].injury = nil
-                // Recovered players return with basic fitness ready to build sharpness
-                players[idx].matchFitness = 65.0 + Double(physioQuality * 3)
-            } else {
-                players[idx].injury = Injury(type: currentInjury.type, weeksRemaining: updatedWeeks)
-            }
+
+    // MARK: - Recovery
+
+    /// How fast injuries heal at a club: medical facilities (1-5) and the
+    /// best physio's quality (0 = none, 1-5).
+    public static func recoveryRate(medicalLevel: Int, physioQuality: Int) -> Double {
+        let facilities = 1.0 + Double(max(1, min(5, medicalLevel)) - 3) * 0.05
+        let physio = physioQuality == 0 ? 0.92 : 1.0 + Double(max(1, min(5, physioQuality)) - 3) * 0.05
+        return facilities * physio
+    }
+
+    /// Advances an injured player's recovery by some days. On return he is
+    /// short of match fitness and sharpness: the longer the lay-off, the more
+    /// he needs games (and the more likely he is to break down if rushed).
+    public static func recover(_ player: inout Player, days: Int, rate: Double) {
+        guard var injury = player.injury else { return }
+        let healed = Double(days) * rate + injury.carry
+        let whole = Int(healed)
+        injury.carry = healed - Double(whole)
+        injury.daysRemaining -= whole
+        if injury.daysRemaining <= 0 {
+            let layOff = injury.totalDays
+            player.injury = nil
+            player.matchFitness = layOff >= 60 ? 55 : layOff >= 21 ? 65 : layOff >= 8 ? 78 : 88
+            player.sharpness = min(player.sharpness, layOff >= 60 ? 35 : layOff >= 21 ? 50 : 70)
+        } else {
+            player.injury = injury
         }
     }
 }

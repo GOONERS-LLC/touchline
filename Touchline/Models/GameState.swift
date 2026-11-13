@@ -871,21 +871,38 @@ public final class GameState: Codable {
         // weekly income or training injuries.
         let isCupNight = SeasonCalendar.isMidweek(season.currentWeek) && thisWeek.allSatisfy { $0.cupRound != nil }
 
-        // 2. Weekly player fitness recovery & sharpness decay
-        for clubIdx in 0..<clubs.count where !isCupNight {
+        // 2. The days until the next match: fitness, injuries and sharpness.
+        // Runs for every slot, cup nights included, over the real number of
+        // days (four from Saturday to Wednesday, three back to Saturday), so
+        // two games in a week genuinely tire a squad.
+        let daysToNext = max(1, SeasonCalendar.dayOffset(forSlot: season.currentWeek + 1)
+                                 - SeasonCalendar.dayOffset(forSlot: season.currentWeek))
+        for clubIdx in clubs.indices {
             let medical = clubs[clubIdx].medicalFacilityLevel
-            for playerIdx in 0..<clubs[clubIdx].players.count {
-                clubs[clubIdx].players[playerIdx].advanceWeekRecovery()
-                if let injury = InjuryEngine.trainingInjury(player: clubs[clubIdx].players[playerIdx], medicalLevel: medical) {
+            let physio = clubs[clubIdx].staff.filter { $0.role == .physio }.map { $0.quality }.max() ?? 0
+            let rate = InjuryEngine.recoveryRate(medicalLevel: medical, physioQuality: physio)
+            for playerIdx in clubs[clubIdx].players.indices {
+                let wasInjured = clubs[clubIdx].players[playerIdx].injury
+                clubs[clubIdx].players[playerIdx].advanceDays(daysToNext, injuryRecoveryRate: rate)
+                if clubs[clubIdx].isUserClub, let old = wasInjured, clubs[clubIdx].players[playerIdx].injury == nil,
+                   old.totalDays >= 14 {
+                    let player = clubs[clubIdx].players[playerIdx]
+                    addNews(headline: "\(player.fullName) Back in Training",
+                            body: "\(player.fullName) has recovered from his \(old.type.displayName.lowercased()). He is at \(Int(player.matchFitness))% match fitness and will need games to get up to speed; rushing him back raises the risk of breaking down again.",
+                            category: .general, sender: "Medical Department")
+                }
+                if let injury = InjuryEngine.trainingInjury(player: clubs[clubIdx].players[playerIdx], medicalLevel: medical, days: daysToNext) {
                     clubs[clubIdx].players[playerIdx].injury = injury
                     if clubs[clubIdx].isUserClub {
                         let player = clubs[clubIdx].players[playerIdx]
                         addNews(headline: "\(player.fullName) Injured in Training",
-                                body: "\(player.fullName) has a \(injury.type.displayName.lowercased()) and is expected to miss \(injury.weeksRemaining) week\(injury.weeksRemaining == 1 ? "" : "s").",
+                                body: "\(player.fullName) has a \(injury.type.displayName.lowercased()) and is expected to be out for \(injury.timeOutText).",
                                 category: .general, sender: "Medical Department")
                     }
                 }
             }
+        }
+        for clubIdx in 0..<clubs.count where !isCupNight {
             // Weekly financial accounting. Home clubs bank gate receipts scaled
             // by the calibre of the visiting side.
             let opponentId = homeOpponentByClub[clubs[clubIdx].id]
@@ -2115,7 +2132,7 @@ public final class GameState: Codable {
             .filter { $0.suspendedMatches > 0 }
             .reduce(into: [UUID: Int]()) { $0[$1.id] = $1.suspendedMatches }
         
-        let config = MatchEngine.SimulationConfig(
+        var config = MatchEngine.SimulationConfig(
             neutralVenue: false,
             matchWeek: fixture.matchWeek,
             competition: fixture.competition,
@@ -2127,11 +2144,19 @@ public final class GameState: Codable {
             homeCoachingMultiplier: coachingMultiplier(for: fixture.homeClubId),
             awayCoachingMultiplier: coachingMultiplier(for: fixture.awayClubId)
         )
+        // The manager's own side is his: the engine leaves its tactics and
+        // substitutions alone unless he has handed subs to his assistant.
+        if gameMode == .manageClub, let uid = userClubId, fixture.involves(clubId: uid) {
+            config.userClubId = uid
+            config.userAutoSubs = matchSettings.autoSubTiming
+            config.userAutoSubAggression = matchSettings.autoSubAggression
+        }
         return (homeClub, awayClub, homeSuspensionsBefore, awaySuspensionsBefore, config)
     }
 
-    /// Kicks off a live match and plays it to half-time. The second half
-    /// runs when `simulateFixture(id:)` is called for the same fixture.
+    /// Kicks off a live match. It is then played a minute at a time with
+    /// `advanceLiveMatch(through:)`, and the manager can stop it whenever he
+    /// likes to make substitutions or change tactics.
     @discardableResult
     public func beginLiveMatch(fixtureId: UUID) -> Bool {
         guard let fixture = season.fixtures.first(where: { $0.id == fixtureId }), !fixture.isPlayed,
@@ -2139,26 +2164,76 @@ public final class GameState: Codable {
               let awayIdx = clubs.firstIndex(where: { $0.id == fixture.awayClubId }) else { return false }
         if liveMatch?.fixtureId == fixtureId { return true }
         var prepared = prepareMatch(fixture, homeIdx: homeIdx, awayIdx: awayIdx)
-        guard let paused = MatchEngine.playFirstHalf(home: &prepared.home, away: &prepared.away, config: prepared.config) else { return false }
+        // In a live match the manager is asked before an injured player of
+        // his is replaced.
+        if prepared.config.userClubId != nil { prepared.config.pauseForUserDecisions = matchSettings.stopForInjuries }
+        guard let paused = MatchEngine.kickOff(home: &prepared.home, away: &prepared.away, config: prepared.config) else { return false }
         liveMatch = LiveMatchSession(fixtureId: fixtureId, paused: paused, home: prepared.home, away: prepared.away,
                                      homeSuspensions: prepared.homeSuspensions, awaySuspensions: prepared.awaySuspensions,
                                      config: prepared.config)
-        // Show the manager who is actually on the pitch at the break. Changes
-        // are for this match only; the usual lineup returns afterwards.
-        if let uid = userClubId, gameMode == .manageClub, fixture.involves(clubId: uid),
-           let userIdx = clubs.firstIndex(where: { $0.id == uid }) {
+        // Changes during the match are for this match only; the usual lineup
+        // returns afterwards.
+        if prepared.config.userClubId != nil {
             beginMatchOnlyLineup()
-            let isHome = fixture.homeClubId == uid
-            clubs[userIdx].tactics.startingXI = isHome ? paused.homeOnPitch : paused.awayOnPitch
-            clubs[userIdx].tactics.substitutes = isHome ? paused.homeBenchIds : paused.awayBenchIds
+            syncUserLineupToPitch()
         }
         return true
+    }
+
+    /// Plays the live match on to `minute` (or until one of the manager's
+    /// players is hurt). Returns false once the match is over; the result is
+    /// then written by `simulateFixture(id:)` as for any other match.
+    @discardableResult
+    public func advanceLiveMatch(through minute: Int) -> Bool {
+        guard var session = liveMatch, session.finished == nil,
+              let fixture = season.fixtures.first(where: { $0.id == session.fixtureId }), !fixture.isPlayed else { return false }
+        var home = session.home
+        var away = session.away
+        if let uid = userClubId, gameMode == .manageClub, let current = club(withId: uid) {
+            if home.id == uid { home.tactics = current.tactics }
+            if away.id == uid { away.tactics = current.tactics }
+        }
+        let (result, paused) = MatchEngine.play(session.paused, until: minute, home: &home, away: &away, config: session.config)
+        session.home = home
+        session.away = away
+        if let paused {
+            session.paused = paused
+            liveMatch = session
+            syncUserLineupToPitch()
+            return true
+        }
+        session.finished = LiveMatchSession.Finished(result: result, home: home, away: away)
+        liveMatch = session
+        return false
+    }
+
+    /// The match so far (or the full result once finished).
+    public var liveMatchSoFar: MatchResult? {
+        guard let session = liveMatch else { return nil }
+        return session.finished?.result ?? session.paused.snapshot
+    }
+
+    /// The lineup screen shows who is really on the pitch and on the bench
+    /// (after injuries, red cards and changes) during a live match.
+    private func syncUserLineupToPitch() {
+        guard let session = liveMatch, let uid = session.config.userClubId,
+              let userIdx = clubs.firstIndex(where: { $0.id == uid }) else { return }
+        let isHome = session.home.id == uid
+        clubs[userIdx].tactics.startingXI = isHome ? session.paused.homeOnPitch : session.paused.awayOnPitch
+        clubs[userIdx].tactics.substitutes = isHome ? session.paused.homeBenchIds : session.paused.awayBenchIds
     }
 
     /// Substitutions the user can still make in the live match.
     public var liveSubsRemaining: Int {
         guard let session = liveMatch, let uid = userClubId else { return 0 }
         return session.home.id == uid ? session.paused.homeSubsRemaining : session.paused.awaySubsRemaining
+    }
+
+    /// Substitution windows the user has left (changes made at the same
+    /// stoppage, or at half-time, count as one).
+    public var liveWindowsRemaining: Int {
+        guard let session = liveMatch, let uid = userClubId else { return 0 }
+        return session.home.id == uid ? session.paused.homeWindowsRemaining : session.paused.awayWindowsRemaining
     }
 
     /// Simulates a single fixture by delegating to the shared `MatchEngine`, then
@@ -2182,17 +2257,27 @@ public final class GameState: Codable {
         let awaySuspensionsBefore: [UUID: Int]
         let result: MatchResult
         if let session = liveMatch, session.fixtureId == fixture.id {
-            // The second half of a live match: pick up where the whistle went,
-            // with the user's half-time lineup and tactics.
-            homeClub = session.home
-            awayClub = session.away
-            if let uid = userClubId, let current = club(withId: uid) {
-                if homeClub.id == uid { homeClub.tactics = current.tactics }
-                if awayClub.id == uid { awayClub.tactics = current.tactics }
-            }
             homeSuspensionsBefore = session.homeSuspensions
             awaySuspensionsBefore = session.awaySuspensions
-            result = MatchEngine.resume(session.paused, home: &homeClub, away: &awayClub, config: session.config)
+            if let finished = session.finished {
+                // Played to the end live.
+                homeClub = finished.home
+                awayClub = finished.away
+                result = finished.result
+            } else {
+                // The rest of a live match (skipped to the end): pick up where
+                // it stopped, with the manager's current lineup and tactics.
+                homeClub = session.home
+                awayClub = session.away
+                if let uid = userClubId, gameMode == .manageClub, let current = club(withId: uid) {
+                    if homeClub.id == uid { homeClub.tactics = current.tactics }
+                    if awayClub.id == uid { awayClub.tactics = current.tactics }
+                }
+                // Nobody is waiting on the touchline any more.
+                var config = session.config
+                config.pauseForUserDecisions = false
+                result = MatchEngine.resume(session.paused, home: &homeClub, away: &awayClub, config: config)
+            }
             liveMatch = nil
         } else {
             let prepared = prepareMatch(fixture, homeIdx: homeIdx, awayIdx: awayIdx)
@@ -2234,9 +2319,25 @@ public final class GameState: Codable {
             if awayClub.seasonResults.count > 6 { awayClub.seasonResults.removeFirst(awayClub.seasonResults.count - 6) }
         }
 
+        // The medical report on the manager's players hurt in the match.
+        if let uid = userClubId, fixture.involves(clubId: uid) {
+            let before = homeClub.id == uid ? clubs[homeIdx] : clubs[awayIdx]
+            let after = homeClub.id == uid ? homeClub : awayClub
+            for player in after.players {
+                guard let injury = player.injury,
+                      before.players.first(where: { $0.id == player.id })?.injury == nil else { continue }
+                addNews(
+                    headline: "\(player.fullName): \(injury.type.displayName)",
+                    body: "\(player.fullName) picked up a \(injury.type.displayName.lowercased()) against \(clubName(for: homeClub.id == uid ? awayClub.id : homeClub.id)). The medical team expect him to be out for \(injury.timeOutText).",
+                    category: .general,
+                    sender: "Medical Department"
+                )
+            }
+        }
+
         clubs[homeIdx] = homeClub
         clubs[awayIdx] = awayClub
-        
+
         fixture.isPlayed = true
         fixture.result = archived
 
@@ -4042,9 +4143,14 @@ public final class GameState: Codable {
                 // Young players develop, veterans decline; values are re-rated.
                 clubs[cIdx].players[pIdx].applySeasonalDevelopment(appearances: appearances,
                                                                     trainingLevel: clubs[cIdx].trainingFacilityLevel)
-                clubs[cIdx].players[pIdx].injury = nil
+                // The summer (about ten weeks) heals most injuries, but a
+                // long-term one carries into the new season.
                 clubs[cIdx].players[pIdx].matchFitness = 100.0
+                clubs[cIdx].players[pIdx].advanceDays(70, injuryRecoveryRate: 1.0)
                 clubs[cIdx].players[pIdx].sharpness = 65.0
+                if clubs[cIdx].players[pIdx].injury == nil {
+                    clubs[cIdx].players[pIdx].matchFitness = 100.0
+                }
                 // Suspensions carry across seasons; they are served match by match.
                 // Decrement contract duration.
                 if var contract = clubs[cIdx].players[pIdx].contract {

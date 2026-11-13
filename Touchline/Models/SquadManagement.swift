@@ -106,6 +106,50 @@ extension GameState {
         }
         if let reason = entering(playerA, into: slotB) ?? entering(playerB, into: slotA) { return reason }
 
+        // During a live match: the bench is fixed, players taken off cannot
+        // return, and substitutions are limited.
+        if let session = liveMatch, session.config.userClubId == clubs[idx].id, !session.isFinished {
+            let gone = session.paused.unavailableIds
+            for (player, slot) in [(playerA, slotB), (playerB, slotA)] {
+                guard case .starter = slot else { continue }
+                if gone.contains(player.id) && !clubs[idx].tactics.startingXI.contains(player.id) {
+                    return "\(player.fullName) has already gone off and cannot come back on."
+                }
+            }
+            if case .reserve = slotA { return "\(playerA.fullName) is not in the matchday squad." }
+            if case .reserve = slotB { return "\(playerB.fullName) is not in the matchday squad." }
+            if case .bench = slotA, case .bench = slotB { return nil }
+            // Bringing someone on from the bench: is a change left?
+            let comingOn: Bool
+            switch (slotA, slotB) {
+            case (.bench, .starter), (.starter, .bench): comingOn = true
+            default: comingOn = false
+            }
+            if comingOn {
+                let isHome = session.home.id == clubs[idx].id
+                let pitchAtStop = Set(isHome ? session.paused.homeOnPitch : session.paused.awayOnPitch)
+                let newOnes = clubs[idx].tactics.startingXI.filter { !pitchAtStop.contains($0) }.count
+                if newOnes >= liveSubsRemaining {
+                    return liveSubsRemaining == 0
+                        ? "No substitutions left\(liveWindowsRemaining == 0 ? " (all three windows used)" : "")."
+                        : "That would be more substitutions than you have left."
+                }
+            }
+            var tactics = clubs[idx].tactics
+            switch slotA {
+            case .starter(let i): tactics.startingXI[i] = b
+            case .bench(let i): tactics.substitutes[i] = b
+            case .reserve: break
+            }
+            switch slotB {
+            case .starter(let i): tactics.startingXI[i] = a
+            case .bench(let i): tactics.substitutes[i] = a
+            case .reserve: break
+            }
+            clubs[idx].tactics = tactics
+            return nil
+        }
+
         var tactics = clubs[idx].tactics
         func put(_ id: UUID, into slot: LineupSlot) {
             switch slot {
@@ -127,6 +171,7 @@ extension GameState {
     public func addToBench(_ playerId: UUID) -> String? {
         guard let idx = userClubIndex, let player = clubs[idx].player(withId: playerId) else { return nil }
         guard case .reserve = lineupSlot(of: playerId) else { return nil }
+        if liveMatch != nil { return "The matchday squad is fixed once the match has kicked off." }
         guard clubs[idx].tactics.substitutes.count < 7 else { return "The bench is full. Swap him with a substitute instead." }
         guard player.isAvailable else { return "\(player.fullName) is not available." }
         clubs[idx].tactics.substitutes.append(playerId)
@@ -135,13 +180,13 @@ extension GameState {
 
     /// Takes a substitute off the bench.
     public func removeFromBench(_ playerId: UUID) {
-        guard let idx = userClubIndex else { return }
+        guard let idx = userClubIndex, liveMatch == nil else { return }
         clubs[idx].tactics.substitutes.removeAll { $0 == playerId }
     }
 
     /// Picks the strongest available side for the current formation.
     public func autoPickUserLineup() {
-        guard let idx = userClubIndex else { return }
+        guard let idx = userClubIndex, liveMatch == nil else { return }
         clubs[idx].autoPickStartingXI()
     }
 

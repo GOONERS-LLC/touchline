@@ -499,7 +499,7 @@ public struct Club: Codable, Identifiable, Hashable {
         // player from the same area of the pitch (a left winger in a left
         // midfield slot) gets the shirt rather than sitting out all season.
         for targetPos in requiredPositions {
-            func fit(_ p: Player) -> Int? {
+            func baseFit(_ p: Player) -> Int? {
                 if targetPos == .GK {
                     if p.primaryPosition == .GK { return p.overall + 100 }
                     if p.positions.contains(.GK) { return p.overall + 50 }
@@ -511,6 +511,11 @@ public struct Club: Codable, Identifiable, Hashable {
                 if p.positions.contains(targetPos) { return p.overall }
                 if p.primaryPosition.category == targetPos.category { return p.overall - 4 }
                 return nil
+            }
+            func fit(_ p: Player) -> Int? {
+                // A player short of fitness is a worse pick than his rating says.
+                let tired = Int(max(0, 88 - p.matchFitness) / 3)
+                return baseFit(p).map { $0 - tired }
             }
             var bestIdx: Int?
             var bestScore = Int.min
@@ -620,28 +625,92 @@ public struct Club: Codable, Identifiable, Hashable {
 
     /// Validates and repairs startingXI and bench arrays, removing nonexistent, injured,
     /// or suspended players and replenishing from the available reserves.
+    /// Fills gaps in the eleven with the best available player for each
+    /// gap's position, bench first (he was named as cover), then reserves.
+    private mutating func fillVacantSlots(_ slots: inout [UUID?]) {
+        let positions = tactics.formation.defaultPositions
+        for i in slots.indices where slots[i] == nil {
+            let position = i < positions.count ? positions[i] : .CM
+            let taken = Set(slots.compactMap { $0 })
+            let pool = players.filter { $0.isAvailable && !taken.contains($0.id) }
+            guard !pool.isEmpty else { continue }
+            func score(_ p: Player) -> Double {
+                var s = MatchEngine.rating(of: p, in: position)
+                if position == .GK && p.primaryPosition != .GK { s -= 40 }
+                if position != .GK && p.primaryPosition == .GK { s -= 40 }
+                return s
+            }
+            let bench = pool.filter { tactics.substitutes.contains($0.id) }
+            let benchBest = bench.max { score($0) < score($1) }
+            let anyBest = pool.max { score($0) < score($1) }
+            // Prefer the named cover unless someone else is clearly better.
+            let pick: Player?
+            if let b = benchBest, let a = anyBest, score(a) - score(b) <= 3 { pick = b } else { pick = anyBest }
+            if let pick {
+                slots[i] = pick.id
+                tactics.substitutes.removeAll { $0 == pick.id }
+            }
+        }
+    }
+
+    /// After a change of formation, keeps the same eleven and moves each
+    /// player to the new position that suits him best (no one is dropped).
+    public mutating func fitLineupToFormation(repair: Bool = true) {
+        let positions = tactics.formation.defaultPositions
+        var remaining = startingXIPlayers
+        guard remaining.count == 11 else {
+            if repair { ensureTacticalIntegrity() }
+            return
+        }
+        var slots = [UUID?](repeating: nil, count: positions.count)
+        // Fill the most specialised positions first (keeper, then the rest by
+        // how few players can play them).
+        let order = positions.indices.sorted { a, b in
+            if positions[a] == .GK { return true }
+            if positions[b] == .GK { return false }
+            let fa = remaining.filter { $0.positions.contains(positions[a]) }.count
+            let fb = remaining.filter { $0.positions.contains(positions[b]) }.count
+            return fa < fb
+        }
+        for i in order {
+            guard let best = remaining.indices.max(by: {
+                MatchEngine.rating(of: remaining[$0], in: positions[i]) < MatchEngine.rating(of: remaining[$1], in: positions[i])
+            }) else { break }
+            slots[i] = remaining.remove(at: best).id
+        }
+        tactics.startingXI = slots.compactMap { $0 }
+        if repair { ensureTacticalIntegrity() }
+    }
+
     public mutating func ensureTacticalIntegrity() {
         let playerIds = Set(players.map { $0.id })
         let unavailableIds = Set(players.filter { !$0.isAvailable }.map { $0.id })
-        
-        tactics.startingXI.removeAll { !playerIds.contains($0) || unavailableIds.contains($0) }
-        tactics.substitutes.removeAll { !playerIds.contains($0) || unavailableIds.contains($0) }
-        
-        // Remove duplicate assignments, keeping the first occurrence.
+
+        // Starters keep their places: a missing or unavailable starter leaves
+        // a gap in his position (rather than everyone after him shuffling
+        // into the wrong positions), and only that gap is filled.
         var seenStarters = Set<UUID>()
-        tactics.startingXI = tactics.startingXI.filter { seenStarters.insert($0).inserted }
+        var slots: [UUID?] = tactics.startingXI.prefix(11).map { id in
+            guard playerIds.contains(id), !unavailableIds.contains(id), seenStarters.insert(id).inserted else { return nil }
+            return id
+        }
+        tactics.substitutes.removeAll { !playerIds.contains($0) || unavailableIds.contains($0) }
         var seenSubs = seenStarters
         tactics.substitutes = tactics.substitutes.filter { seenSubs.insert($0).inserted }
-
-        // A save or formation change can leave more than eleven starters or more
-        // than seven substitutes. Trim the excess before repairing the lineup.
-        if tactics.startingXI.count > 11 {
-            tactics.startingXI = Array(tactics.startingXI.prefix(11))
-        }
         if tactics.substitutes.count > 7 {
             tactics.substitutes = Array(tactics.substitutes.prefix(7))
         }
-        
+
+        if slots.compactMap({ $0 }).count < 6 {
+            // Nothing much left of the side (a new club, or an old save): pick afresh.
+            autoPickStartingXI()
+            return
+        }
+        while slots.count < 11 { slots.append(nil) }
+        if slots.contains(where: { $0 == nil }) {
+            fillVacantSlots(&slots)
+        }
+        tactics.startingXI = slots.compactMap { $0 }
         if tactics.startingXI.count < 11 {
             autoPickStartingXI()
             return

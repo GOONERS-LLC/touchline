@@ -222,6 +222,19 @@ public enum InjuryType: String, Codable, CaseIterable, Identifiable, Hashable {
         }
     }
     
+    /// Days out, as typically seen in professional football.
+    public var recoveryDaysRange: ClosedRange<Int> {
+        switch self {
+        case .minorKnock: return 2...6
+        case .muscleStrain: return 7...21
+        case .hamstring: return 12...42
+        case .ankleLigament: return 10...56
+        case .kneeInjury: return 28...120
+        case .aclTear: return 200...300
+        case .brokenBone: return 42...100
+        }
+    }
+
     public var averageRecoveryWeeks: Int {
         let range = recoveryWeeksRange
         return (range.lowerBound + range.upperBound) / 2

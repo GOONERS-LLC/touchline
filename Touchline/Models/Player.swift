@@ -206,7 +206,7 @@ public struct Player: Codable, Identifiable, Hashable {
     
     public var statusBadgeText: String {
         if let inj = injury {
-            return inj.weeksRemaining > 1 ? "\(inj.type.displayName) (\(inj.weeksRemaining) wks)" : "\(inj.type.displayName) (1 wk)"
+            return "\(inj.type.displayName) (\(inj.timeOutText))"
         }
         if suspendedMatches > 0 {
             return "Suspended (\(suspendedMatches) \(suspendedMatches == 1 ? "match" : "matches"))"
@@ -236,7 +236,9 @@ public struct Player: Codable, Identifiable, Hashable {
         yellowCard: Bool = false,
         redCard: Bool = false,
         cleanSheet: Bool = false,
-        isMotm: Bool = false
+        isMotm: Bool = false,
+        redCardBan: Int = 3,
+        matchFatigue: Double? = nil
     ) {
         seasonStats.appearances += 1
         seasonStats.minutesPlayed += minutes
@@ -253,9 +255,15 @@ public struct Player: Codable, Identifiable, Hashable {
             form.removeFirst()
         }
         
-        // Fatigue depletion
-        let staminaFactor = Double(attributes.stamina) / 100.0
-        let fatigueLoss = (Double(minutes) / 90.0) * (30.0 - (staminaFactor * 12.0))
+        // Fatigue depletion: what the match took out of him (a high press and
+        // a full ninety cost more than a late cameo).
+        let fatigueLoss: Double
+        if let matchFatigue {
+            fatigueLoss = minutes > 0 ? 6.0 + matchFatigue * 0.65 : 0
+        } else {
+            let staminaFactor = Double(attributes.stamina) / 100.0
+            fatigueLoss = (Double(minutes) / 90.0) * (30.0 - (staminaFactor * 12.0))
+        }
         matchFitness = max(0.0, matchFitness - fatigueLoss)
         sharpness = min(100.0, sharpness + (Double(minutes) / 90.0) * 8.0)
         
@@ -268,9 +276,11 @@ public struct Player: Codable, Identifiable, Hashable {
             }
         }
         
+        // A second yellow is a one-match ban; a straight red one to three,
+        // depending on the offence.
         if redCard {
             seasonStats.redCards += 1
-            suspendedMatches += 3
+            suspendedMatches += max(1, redCardBan)
         }
         
         // Morale impact from match performance
@@ -283,22 +293,22 @@ public struct Player: Codable, Identifiable, Hashable {
     
     /// Simulates weekly natural regeneration for fitness, sharpness decay, and injury recovery.
     public mutating func advanceWeekRecovery() {
-        if let currentInjury = injury {
-            let remaining = currentInjury.weeksRemaining - 1
-            if remaining <= 0 {
-                self.injury = nil
-                self.matchFitness = 65.0
-            } else {
-                self.injury = Injury(type: currentInjury.type, weeksRemaining: remaining)
-            }
+        advanceDays(7, injuryRecoveryRate: 1.0)
+    }
+
+    /// The days between matches: injuries heal (faster with good medical
+    /// staff), tired legs recover about five points a day, and a player
+    /// who is not playing slowly loses his edge. Two games a week wear a
+    /// player down; one a week he recovers fully.
+    public mutating func advanceDays(_ days: Int, injuryRecoveryRate: Double) {
+        guard days > 0 else { return }
+        if injury != nil {
+            InjuryEngine.recover(&self, days: days, rate: injuryRecoveryRate)
         } else {
-            // Fitness recovery
-            let recoveryRate = 25.0 + (Double(attributes.stamina) * 0.15)
-            matchFitness = min(100.0, matchFitness + recoveryRate)
+            let perDay = 3.5 + Double(attributes.stamina) * 0.025
+            matchFitness = min(100.0, matchFitness + perDay * Double(days))
         }
-        
-        // Sharpness decay if unplayed
-        sharpness = max(20.0, sharpness - 4.0)
+        sharpness = max(20.0, sharpness - 0.6 * Double(days))
     }
     
     public mutating func recoverFitness(amount: Double) {
@@ -842,15 +852,65 @@ public struct Contract: Codable, Hashable {
 
 public struct Injury: Codable, Hashable {
     public var type: InjuryType
-    public var weeksRemaining: Int
-    
-    public init(type: InjuryType, weeksRemaining: Int) {
+    /// Days until he is fit to play.
+    public var daysRemaining: Int
+    /// The length of the lay-off when it happened.
+    public var totalDays: Int
+    /// Part-days of healing carried between updates.
+    var carry: Double = 0
+
+    public init(type: InjuryType, days: Int) {
         self.type = type
-        self.weeksRemaining = weeksRemaining
+        self.daysRemaining = max(1, days)
+        self.totalDays = max(1, days)
     }
-    
+
+    public init(type: InjuryType, weeksRemaining: Int) {
+        self.init(type: type, days: max(1, weeksRemaining) * 7)
+    }
+
+    /// Whole weeks out, rounded up (for older screens and messages).
+    public var weeksRemaining: Int {
+        get { max(1, Int((Double(daysRemaining) / 7.0).rounded(.up))) }
+        set { daysRemaining = max(1, newValue * 7) }
+    }
+
+    /// "4 days", "2 weeks", "3 months".
+    public var timeOutText: String {
+        Injury.durationText(days: daysRemaining)
+    }
+
+    public static func durationText(days: Int) -> String {
+        if days <= 1 { return "1 day" }
+        if days < 14 { return "\(days) days" }
+        if days < 63 { return "\(Int((Double(days) / 7.0).rounded())) weeks" }
+        return "\(Int((Double(days) / 30.0).rounded())) months"
+    }
+
     public var description: String {
-        return "\(type.displayName) (\(weeksRemaining) \(weeksRemaining == 1 ? "week" : "weeks") remaining)"
+        "\(type.displayName) (\(timeOutText) remaining)"
+    }
+
+    private enum CodingKeys: String, CodingKey { case type, daysRemaining, totalDays, weeksRemaining }
+
+    /// Saves from before injuries were counted in days hold whole weeks.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(InjuryType.self, forKey: .type)
+        if let days = try c.decodeIfPresent(Int.self, forKey: .daysRemaining) {
+            daysRemaining = max(1, days)
+        } else {
+            daysRemaining = max(1, (try c.decodeIfPresent(Int.self, forKey: .weeksRemaining) ?? 1) * 7)
+        }
+        totalDays = try c.decodeIfPresent(Int.self, forKey: .totalDays) ?? daysRemaining
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(type, forKey: .type)
+        try c.encode(daysRemaining, forKey: .daysRemaining)
+        try c.encode(totalDays, forKey: .totalDays)
+        try c.encode(weeksRemaining, forKey: .weeksRemaining)
     }
 }
 

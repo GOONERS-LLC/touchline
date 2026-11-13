@@ -190,45 +190,56 @@ public struct PitchReplayView: View {
 
 // MARK: - Live Match Screen
 
+/// The match played live, a minute at a time. The manager can stop it
+/// whenever he likes ("Changes") to make substitutions or change tactics;
+/// it stops by itself at half-time and when one of his players is hurt.
 public struct LiveMatchView: View {
     @Environment(GameState.self) private var gameState
-    
+
     @State private var minute = 0
     @State private var isPlaying = false
     @State private var didSimulate = false
     @State private var ticker: Timer?
     @State private var goalFlash: MatchEvent?
     @State private var pane: Pane = .pitch
-
-    enum Pane: String, CaseIterable { case pitch = "Pitch", commentary = "Commentary", stats = "Stats", lineups = "Lineups" }
-    
-    private var fixture: Fixture? { gameState.activeMatchFixture }
-    /// The full result once the match is over; the first half while it is
-    /// stopped at the break.
-    private var result: MatchResult? {
-        if let played = fixture?.result { return played }
-        if let session = gameState.liveMatch, session.fixtureId == fixture?.id { return session.firstHalf }
-        return nil
-    }
-    private var secondHalfPending: Bool { fixture?.isPlayed == false }
-    @State private var atHalfTime = false
+    /// Why the match is stopped for the manager (half-time, an injury, or
+    /// his own call); nil while it is running.
+    @State private var touchline: String?
     @State private var editingLineup = false
     @State private var editingTactics = false
 
-    /// The last minute the replay runs to. The engine plays stoppage time (and
-    /// extra time in knockouts), so capping the replay at 90' used to hide late
-    /// goals from the live scoreboard and VoiceOver announcements.
+    enum Pane: String, CaseIterable { case pitch = "Pitch", commentary = "Commentary", stats = "Stats", lineups = "Lineups" }
+
+    private var fixture: Fixture? { gameState.activeMatchFixture }
+    private var session: LiveMatchSession? {
+        guard let s = gameState.liveMatch, s.fixtureId == fixture?.id else { return nil }
+        return s
+    }
+    /// The full result once the match is over; the match so far while it is on.
+    private var result: MatchResult? {
+        if let played = fixture?.result { return played }
+        return session?.soFar
+    }
+    /// Still being played (not yet at the final whistle).
+    private var inProgress: Bool {
+        guard let fixture, !fixture.isPlayed, let session else { return false }
+        return !session.isFinished
+    }
+    private var manages: Bool { gameState.gameMode == .manageClub }
+
+    /// The last minute of the match. While it is being played that is the
+    /// end of stoppage time (or extra time) as it stands.
     private var finalMinute: Int {
-        if secondHalfPending { return 45 }
+        if inProgress, let session { return session.paused.maxMinute }
         return max(90, result?.events.map { $0.minute }.max() ?? 90)
     }
-    
+
     public var body: some View {
         VStack(spacing: 14) {
             if let fixture = fixture,
                let home = gameState.club(withId: fixture.homeClubId),
                let away = gameState.club(withId: fixture.awayClubId) {
-                
+
                 scoreboard(home: home, away: away)
 
                 GFTabs(selection: $pane, compact: true)
@@ -237,13 +248,8 @@ public struct LiveMatchView: View {
                 Group {
                     switch pane {
                     case .pitch:
-                        PitchReplayView(
-                            fixture: fixture,
-                            homeClub: home,
-                            awayClub: away,
-                            minute: minute
-                        )
-                        .padding(.horizontal, 12)
+                        PitchReplayView(fixture: fixture, homeClub: home, awayClub: away, minute: minute)
+                            .padding(.horizontal, 12)
                         timelineFeed(home: home, away: away)
                     case .commentary:
                         commentaryCards(home: home, away: away)
@@ -261,7 +267,7 @@ public struct LiveMatchView: View {
                     }
                 }
                 .overlay {
-                    if atHalfTime { halfTimePanel(home: home, away: away) }
+                    if let reason = touchline { touchlinePanel(reason: reason, home: home, away: away) }
                 }
 
                 controls(fixture: fixture)
@@ -282,8 +288,7 @@ public struct LiveMatchView: View {
             NavigationStack {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        Label("You have \(gameState.liveSubsRemaining) substitution\(gameState.liveSubsRemaining == 1 ? "" : "s") left. Bring players on from the bench by swapping them with a starter; starters can also swap positions. Players already taken off cannot return.",
-                              systemImage: "info.circle")
+                        Label(substitutionRules, systemImage: "info.circle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         LineupEditorView()
@@ -291,7 +296,7 @@ public struct LiveMatchView: View {
                     .padding()
                 }
                 .stadiumBackground()
-                .navigationTitle("Half-Time Changes")
+                .navigationTitle("Changes")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { editingLineup = false } } }
             }
@@ -307,14 +312,32 @@ public struct LiveMatchView: View {
         }
     }
 
-    /// The break: the score, and the chance to change things.
-    private func halfTimePanel(home: Club, away: Club) -> some View {
-        let manages = gameState.gameMode == .manageClub
-        return VStack(spacing: 14) {
-            Text("HALF-TIME").font(.gfDisplay(22))
-            Text("\(home.name) \(currentHomeGoals) - \(currentAwayGoals) \(away.name)").font(.gfDisplay(22))
+    private var substitutionRules: String {
+        let subs = gameState.liveSubsRemaining
+        let windows = gameState.liveWindowsRemaining
+        let atBreak = (session?.paused.minute ?? 0) == 46
+        var text = "\(subs) substitution\(subs == 1 ? "" : "s") left"
+        text += atBreak ? " (half-time changes don't use a window). " : ", \(windows) window\(windows == 1 ? "" : "s") to make them in. "
+        text += "Swap a bench player with a starter to bring him on, or swap two starters to change positions. Players taken off cannot return."
+        return text
+    }
+
+    /// The manager's stop: the score, why play stopped, and the chance to
+    /// change things.
+    private func touchlinePanel(reason: String, home: Club, away: Club) -> some View {
+        VStack(spacing: 14) {
+            Text(reason == "HALF-TIME" ? "HALF-TIME" : "TOUCHLINE").font(.gfDisplay(22))
+            Text("\(home.name) \(currentHomeGoals) - \(currentAwayGoals) \(away.name)")
+                .font(.gfDisplay(20))
+                .multilineTextAlignment(.center)
+            if reason != "HALF-TIME" && reason != "TOUCHLINE" {
+                Label(reason, systemImage: "cross.case.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
             if manages {
-                Text("Substitutions left: \(gameState.liveSubsRemaining)")
+                Text("Substitutions left: \(gameState.liveSubsRemaining)  ·  Windows left: \(gameState.liveWindowsRemaining)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 10) {
@@ -323,9 +346,10 @@ public struct LiveMatchView: View {
                         .accessibilityHint("Make substitutions and change positions")
                     Button("Tactics") { editingTactics = true }
                         .buttonStyle(.gfOutline)
+                        .accessibilityHint("Change formation, mentality, pressing and more")
                 }
             }
-            Button("Start Second Half") { startSecondHalf() }
+            Button(minute == 45 && reason == "HALF-TIME" ? "Start Second Half" : "Resume") { resumePlay() }
                 .buttonStyle(.gfPrimary)
                 .padding(.horizontal, 20)
         }
@@ -338,16 +362,28 @@ public struct LiveMatchView: View {
         .accessibilityAddTraits(.isModal)
     }
 
-    /// Plays the second half with whatever was changed at the break.
-    private func startSecondHalf() {
-        guard let fixture else { return }
-        atHalfTime = false
-        gameState.simulateFixture(id: fixture.id)
+    private func stopForManager(_ reason: String) {
+        stopTicker()
+        withAnimation { touchline = reason }
+        let spoken = reason == "HALF-TIME" ? "Half-time. \(scoreText)." : reason
+        AccessibilityNotification.Announcement("\(spoken) You can make substitutions and change tactics.").post()
+    }
+
+    private func resumePlay() {
+        withAnimation { touchline = nil }
         startTicker()
     }
-    
+
     // MARK: - Subviews
-    
+
+    private var clockText: String {
+        if minute >= finalMinute && !inProgress { return "FT" }
+        if touchline == "HALF-TIME" { return "HT" }
+        let stoppage = session?.paused.secondHalfStoppage ?? 0
+        if minute > 90 && minute <= 90 + stoppage { return "90+\(minute - 90)'" }
+        return "\(minute)'"
+    }
+
     private func scoreboard(home: Club, away: Club) -> some View {
         VStack(spacing: 8) {
             Text(fixture.flatMap { f in f.cupRound.map { "\(f.competition) • \($0)" } } ?? fixture?.competition ?? "Match")
@@ -365,7 +401,7 @@ public struct LiveMatchView: View {
                         .monospacedDigit()
                         .contentTransition(.numericText())
                         .animation(.snappy, value: scoreText)
-                    Text(minute >= finalMinute ? "FT" : minute == 45 && !isPlaying ? "HT" : "\(minute)'")
+                    Text(clockText)
                         .font(.caption.weight(.heavy).monospacedDigit())
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
@@ -383,7 +419,7 @@ public struct LiveMatchView: View {
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.7))
             }
-            ProgressView(value: Double(minute), total: Double(finalMinute))
+            ProgressView(value: Double(min(minute, finalMinute)), total: Double(max(1, finalMinute)))
                 .tint(Color.gfMint)
         }
         .padding(.horizontal, 14)
@@ -412,10 +448,14 @@ public struct LiveMatchView: View {
         .background(Color(hex: club.primaryColor).opacity(0.92), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .shadow(color: .black.opacity(0.35), radius: 12)
     }
-    
+
+    private var visibleEvents: [MatchEvent] {
+        (result?.events ?? []).filter { $0.minute <= minute }
+    }
+
     private func timelineFeed(home: Club, away: Club) -> some View {
         List {
-            let visible = (result?.events ?? []).filter { $0.minute <= minute }
+            let visible = visibleEvents
             if visible.isEmpty {
                 Text(minute == 0 ? "Kick-off imminent..." : "No key events yet.")
                     .font(.caption)
@@ -432,11 +472,11 @@ public struct LiveMatchView: View {
                             .font(.caption.weight(.heavy).monospacedDigit())
                             .frame(width: 30, alignment: .leading)
                         Image(systemName: ev.type.icon)
-                            .foregroundStyle(isGoal ? Color.winGreen : ev.type == .redCard || ev.type == .secondYellow ? .red : ev.type == .yellowCard ? .yellow : .secondary)
+                            .foregroundStyle(isGoal ? Color.winGreen : ev.type == .redCard || ev.type == .secondYellow ? .red : ev.type == .yellowCard ? .yellow : ev.type == .injury ? .orange : .secondary)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(ev.shortText)
                                 .font(.subheadline.weight(isGoal ? .bold : .regular))
-                            if isGoal || ev.type == .chanceMissed || ev.type == .woodwork {
+                            if isGoal || ev.type == .chanceMissed || ev.type == .woodwork || ev.type == .injury || ev.type == .substitution {
                                 Text(ev.detailText)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -452,7 +492,7 @@ public struct LiveMatchView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
     }
-    
+
     private func controls(fixture: Fixture) -> some View {
         HStack(spacing: 10) {
             Menu {
@@ -473,6 +513,18 @@ public struct LiveMatchView: View {
             }
             .accessibilityLabel("Replay speed, \(gameState.matchSettings.speed.displayName)")
 
+            if manages && inProgress {
+                Button {
+                    stopForManager("TOUCHLINE")
+                } label: {
+                    Image(systemName: "person.2.badge.gearshape.fill")
+                        .font(.title3.weight(.bold))
+                }
+                .buttonStyle(.gfOutline)
+                .disabled(touchline != nil)
+                .accessibilityLabel("Changes: stop the match to make substitutions or change tactics")
+            }
+
             Button {
                 isPlaying ? stopTicker() : startTicker()
             } label: {
@@ -480,7 +532,7 @@ public struct LiveMatchView: View {
                     .font(.title3.weight(.bold))
             }
             .buttonStyle(.gfPrimary)
-            .disabled(minute >= finalMinute || atHalfTime)
+            .disabled((minute >= finalMinute && !inProgress) || touchline != nil)
             .accessibilityLabel(isPlaying ? "Pause match" : "Play match")
 
             Button {
@@ -490,7 +542,7 @@ public struct LiveMatchView: View {
                     .font(.title3.weight(.bold))
             }
             .buttonStyle(.gfOutline)
-            .accessibilityLabel("Skip to full time")
+            .accessibilityLabel(inProgress ? "Skip to full time" : "Full-time report")
         }
         .padding(.horizontal, 24)
     }
@@ -498,7 +550,7 @@ public struct LiveMatchView: View {
     /// Every event so far as a card: goals in the scorer's club colours,
     /// cards and chances in white, the home side's minute on the right.
     private func commentaryCards(home: Club, away: Club) -> some View {
-        let visible = (result?.events ?? []).filter { $0.minute <= minute }
+        let visible = visibleEvents
         return ScrollView {
             LazyVStack(spacing: 8) {
                 if visible.isEmpty {
@@ -546,10 +598,11 @@ public struct LiveMatchView: View {
         }
     }
 
-    /// Match stats so far. Totals are scaled to the minute reached, so the
-    /// replay does not give away what is still to come.
+    /// Match stats so far. While the match is live they are exact; for a
+    /// finished match being replayed they are scaled to the minute reached,
+    /// so the replay does not give away what is still to come.
     private func liveStats(home: Club, away: Club) -> some View {
-        let share = finalMinute > 0 ? Double(minute) / Double(finalMinute) : 1
+        let share = inProgress ? 1.0 : (finalMinute > 0 ? Double(minute) / Double(finalMinute) : 1)
         func scaled(_ v: Int) -> Int { Int((Double(v) * share).rounded()) }
         let goals = (result?.goalEvents ?? []).filter { $0.minute <= minute }
         let h = result?.homeStats, a = result?.awayStats
@@ -562,7 +615,7 @@ public struct LiveMatchView: View {
                                 homeText: "\(Int(h.possession.rounded()))", awayText: "\(Int(a.possession.rounded()))",
                                 homeColor: homeColor, awayColor: awayColor)
                     DualStatBar(title: "xG", home: h.xG * share, away: a.xG * share,
-                                homeText: String(format: "%.1f", h.xG * share), awayText: String(format: "%.1f", a.xG * share),
+                                homeText: String(format: "%.2f", h.xG * share), awayText: String(format: "%.2f", a.xG * share),
                                 homeColor: homeColor, awayColor: awayColor)
                     let hg = goals.filter { $0.isHomeTeam }.count, ag = goals.count - goals.filter { $0.isHomeTeam }.count
                     let hOn = max(hg, scaled(h.shotsOnTarget)), aOn = max(ag, scaled(a.shotsOnTarget))
@@ -575,7 +628,9 @@ public struct LiveMatchView: View {
                                 homeText: "\(scaled(h.corners))", awayText: "\(scaled(a.corners))", homeColor: homeColor, awayColor: awayColor)
                     DualStatBar(title: "Fouls", home: Double(scaled(h.fouls)), away: Double(scaled(a.fouls)),
                                 homeText: "\(scaled(h.fouls))", awayText: "\(scaled(a.fouls))", homeColor: homeColor, awayColor: awayColor)
-                    let cards = (result?.events ?? []).filter { $0.minute <= minute }
+                    DualStatBar(title: "Offsides", home: Double(scaled(h.offsides)), away: Double(scaled(a.offsides)),
+                                homeText: "\(scaled(h.offsides))", awayText: "\(scaled(a.offsides))", homeColor: homeColor, awayColor: awayColor)
+                    let cards = visibleEvents
                     let hy = cards.filter { $0.isHomeTeam && $0.type == .yellowCard }.count
                     let ay = cards.filter { !$0.isHomeTeam && $0.type == .yellowCard }.count
                     DualStatBar(title: "Yellow cards", home: Double(hy), away: Double(ay),
@@ -587,13 +642,24 @@ public struct LiveMatchView: View {
         }
     }
 
-    /// Both starting elevens, with match ratings once the whistle has gone.
+    /// Who is on the pitch now. While the match is live, each player shows
+    /// how much he has left in his legs, and any knock he is carrying.
+    private func onPitch(_ club: Club, isHome: Bool) -> [Player] {
+        guard let session, !session.isFinished else { return club.startingXIPlayers }
+        let ids = isHome ? session.paused.homeOnPitch : session.paused.awayOnPitch
+        let source = isHome ? session.home : session.away
+        return ids.compactMap { id in source.players.first { $0.id == id } ?? club.players.first { $0.id == id } }
+    }
+
     private func lineups(home: Club, away: Club) -> some View {
-        let done = minute >= finalMinute
-        func column(_ club: Club, alignment: HorizontalAlignment) -> some View {
+        let done = !inProgress && minute >= finalMinute
+        let fatigue = session?.paused.fatigue ?? [:]
+        let hurt = session?.paused.hurtIds ?? []
+        let off = session?.paused.sentOffIds ?? []
+        func column(_ club: Club, isHome: Bool, alignment: HorizontalAlignment) -> some View {
             VStack(alignment: alignment, spacing: 6) {
                 Text(club.tactics.formation.rawValue).font(.gfLabel(14)).foregroundStyle(.secondary)
-                ForEach(club.startingXIPlayers) { player in
+                ForEach(onPitch(club, isHome: isHome)) { player in
                     HStack(spacing: 6) {
                         if alignment == .trailing { Spacer(minLength: 0) }
                         Text(player.primaryPosition.abbreviation)
@@ -601,7 +667,25 @@ public struct LiveMatchView: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 5).padding(.vertical, 2)
                             .background(Capsule().fill(player.primaryPosition.category.accentColor))
-                        Text(player.displayName).font(.caption.weight(.semibold)).lineLimit(1)
+                        Text(player.displayName)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .strikethrough(off.contains(player.id))
+                        if hurt.contains(player.id) {
+                            Image(systemName: "cross.case.fill").font(.caption2).foregroundStyle(.orange)
+                                .accessibilityLabel("hurt")
+                        }
+                        if inProgress, let tired = fatigue[player.id] {
+                            // Condition: what is left in his legs.
+                            let left = max(0, 1 - tired / 45)
+                            Capsule().fill(Color.white.opacity(0.2))
+                                .frame(width: 26, height: 5)
+                                .overlay(alignment: .leading) {
+                                    Capsule().fill(left > 0.55 ? Color.gfMint : left > 0.3 ? Color.yellow : Color.red)
+                                        .frame(width: 26 * left, height: 5)
+                                }
+                                .accessibilityLabel("condition \(Int(left * 100)) percent")
+                        }
                         if done, let rating = result?.playerRatings[player.id] {
                             Text(String(format: "%.1f", rating))
                                 .font(.caption2.weight(.heavy).monospacedDigit())
@@ -617,28 +701,28 @@ public struct LiveMatchView: View {
         }
         return ScrollView {
             HStack(alignment: .top, spacing: 12) {
-                column(home, alignment: .leading)
-                column(away, alignment: .trailing)
+                column(home, isHome: true, alignment: .leading)
+                column(away, isHome: false, alignment: .trailing)
             }
             .gfCard()
             .padding(.horizontal)
         }
     }
-    
+
     // MARK: - Logic
-    
+
     private var currentHomeGoals: Int {
         (result?.goalEvents ?? []).filter { $0.minute <= minute && $0.isHomeTeam }.count
     }
-    
+
     private var currentAwayGoals: Int {
         (result?.goalEvents ?? []).filter { $0.minute <= minute && !$0.isHomeTeam }.count
     }
-    
+
     private var scoreText: String {
         "\(currentHomeGoals) - \(currentAwayGoals)"
     }
-    
+
     private func prepare() {
         // Never replay a finished match: if the active fixture has already
         // been played and we are not mid-replay, pick today's match instead.
@@ -649,64 +733,82 @@ public struct LiveMatchView: View {
             }
         }
         guard let fixture = fixture else { return }
-        // Simulate first (pre-decides the outcome), then replay it minute by minute.
         if !didSimulate {
             if !fixture.isPlayed {
                 gameState.applyTeamTalkIfNeeded()
-                // Live: play to half-time and stop there for changes.
+                // Kick off; the match is then played a minute at a time.
                 if !gameState.beginLiveMatch(fixtureId: fixture.id) {
                     gameState.simulateFixture(id: fixture.id)
                 }
             }
             didSimulate = true
         }
-        minute = 0
+        // Coming back to a match in progress carries on from where it was.
+        minute = session.map { $0.isFinished ? 0 : $0.paused.minutePlayed } ?? 0
         if let home = gameState.club(withId: fixture.homeClubId) {
             CrowdAtmosphere.shared.startMatch(capacity: home.stadiumCapacity)
         }
         startTicker()
     }
-    
+
     private func startTicker() {
-        guard minute < finalMinute else { return }
+        guard inProgress || minute < finalMinute else { return }
         isPlaying = true
         ticker?.invalidate()
         let interval = gameState.matchSettings.speed.tickInterval
-        ticker = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { timer in
-            Task { @MainActor in
-                advanceMinute()
-                if minute >= finalMinute {
-                    timer.invalidate()
-                    isPlaying = false
-                    if secondHalfPending {
-                        // An owner only watches: no half-time changes to make.
-                        if gameState.matchSettings.stopAtHalfTime && gameState.gameMode == .manageClub {
-                            withAnimation { atHalfTime = true }
-                            AccessibilityNotification.Announcement("Half-time. \(scoreText). You can make substitutions and change tactics, then start the second half.").post()
-                        } else {
-                            startSecondHalf()
-                        }
-                    } else {
-                        Haptics.matchEvent(.fullTime)
-                        CrowdAtmosphere.shared.fullTime()
-                    }
-                }
-            }
+        ticker = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
+            Task { @MainActor in tick() }
         }
     }
-    
+
     private func stopTicker() {
         ticker?.invalidate()
         ticker = nil
         isPlaying = false
     }
-    
-    private func advanceMinute() {
-        let previous = minute
-        minute = min(finalMinute, minute + 1)
 
+    /// One minute of the match: played by the engine if the match is live,
+    /// then shown.
+    private func tick() {
+        guard let fixture else { stopTicker(); return }
+        let previous = minute
+        if inProgress {
+            let target = minute + 1
+            let stillPlaying = gameState.advanceLiveMatch(through: target)
+            minute = target
+            if !stillPlaying {
+                // Final whistle: write the result like any other match.
+                gameState.simulateFixture(id: fixture.id)
+            }
+            reveal(from: previous)
+            if stillPlaying, let session {
+                if let reason = session.paused.stopReason {
+                    Haptics.matchEvent(.injury)
+                    stopForManager(reason)
+                    return
+                }
+                if minute == 45 && manages && gameState.matchSettings.stopAtHalfTime {
+                    stopForManager("HALF-TIME")
+                    return
+                }
+            }
+        } else {
+            minute = min(finalMinute, minute + 1)
+            reveal(from: previous)
+        }
+        if !inProgress && minute >= finalMinute {
+            stopTicker()
+            Haptics.matchEvent(.fullTime)
+            CrowdAtmosphere.shared.fullTime()
+            AccessibilityNotification.Announcement("Full time. \(scoreText).").post()
+        }
+    }
+
+    /// Crowd, haptics and announcements for what happened since `previous`.
+    private func reveal(from previous: Int) {
+        let events = result?.events ?? []
         // The crowd and haptics react to every incident, not just major ones.
-        for ev in (result?.events ?? []) where ev.minute > previous && ev.minute <= minute {
+        for ev in events where ev.minute > previous && ev.minute <= minute {
             CrowdAtmosphere.shared.react(to: ev)
             if ev.type == .goal || ev.type == .penalty || ev.type == .ownGoal {
                 let userId = gameState.userClubId
@@ -718,9 +820,7 @@ public struct LiveMatchView: View {
         CrowdAtmosphere.shared.tickMinute(homeLeading: currentHomeGoals > currentAwayGoals)
 
         // Announce major events as their minute arrives.
-        let newEvents = (result?.events ?? []).filter {
-            $0.minute > previous && $0.minute <= minute && $0.type.isMajorEvent
-        }
+        let newEvents = events.filter { $0.minute > previous && $0.minute <= minute && $0.type.isMajorEvent }
         for ev in newEvents {
             AccessibilityNotification.Announcement(ev.detailText).post()
             if ev.type == .goal || ev.type == .penalty || ev.type == .ownGoal {
@@ -733,9 +833,10 @@ public struct LiveMatchView: View {
             }
         }
     }
-    
+
     private func finish(fixture: Fixture) {
         stopTicker()
+        touchline = nil
         if gameState.season.fixtures.contains(where: { $0.id == fixture.id }) {
             gameState.simulateFixture(id: fixture.id)
             minute = finalMinute
