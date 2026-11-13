@@ -542,7 +542,7 @@ public struct LiveMatchView: View {
                     .font(.title3.weight(.bold))
             }
             .buttonStyle(.gfOutline)
-            .accessibilityLabel(inProgress ? "Skip to full time" : "Full-time report")
+            .accessibilityLabel("Skip to full time")
         }
         .padding(.horizontal, 24)
     }
