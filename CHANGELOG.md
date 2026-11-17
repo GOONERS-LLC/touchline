@@ -5,6 +5,21 @@ All notable changes to Touchline are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Club crests are gone from every screen.
+- Owner mode: the Team tile is now Squad, with squad and starting-XI ratings,
+  your rank in the division, a line-by-line evaluation (goalkeepers, defenders,
+  midfielders, forwards against the division average, thin positions flagged),
+  age profile, squad value, wages and expiring contracts.
+- Owner mode: set a season target for the manager (avoid relegation up to win
+  the league). Meet it and the board and fans are pleased; miss it and the
+  manager's mood and the fans' confidence suffer.
+- Owner mode: take a dividend from a debt-free club (Bank). Supporters and the
+  manager dislike it. Accounts shows wages-to-turnover and dividends taken.
+- Decluttered the owner home screen: Training, Academy, Medical and Stadium are
+  under Facilities; Identity sits inside Policy.
+
 ## [2.3.0] - 2026-11-13
 
 A much more realistic match day, injuries that behave like football, and

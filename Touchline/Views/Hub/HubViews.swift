@@ -108,7 +108,6 @@ struct NextMatchLine: View {
                 let venue = fixture.homeClubId == club.id ? "home" : "away"
                 let round = fixture.cupRound.map { "\(fixture.competition), \($0)" } ?? fixture.competition
                 HStack(spacing: 12) {
-                    CrestView(club: opponent, size: 38)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(today ? "MATCH DAY · vs \(opponent.name)" : "Next: vs \(opponent.name)")
                             .font(.system(.headline, design: .rounded))
@@ -236,7 +235,6 @@ public struct DashboardView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            if let club = gameState.userClub { CrestView(club: club, size: 30) }
             VStack(alignment: .leading, spacing: 1) {
                 Text(Self.longDate(gameState.season.currentDate))
                     .font(.subheadline.weight(.semibold))

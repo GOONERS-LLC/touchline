@@ -21,7 +21,7 @@ public struct SocialPost: Identifiable, Hashable {
     public var id: String
     public var kind: Kind
     public var handle: String
-    /// A player's face, or nil for a club account (shown with its crest).
+    /// A player's face, or nil for a club account.
     public var faceSeed: UInt64?
     public var clubId: UUID?
     public var text: String

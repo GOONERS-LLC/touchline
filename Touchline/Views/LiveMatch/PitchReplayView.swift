@@ -391,7 +391,6 @@ public struct LiveMatchView: View {
                 .foregroundStyle(.white.opacity(0.85))
             HStack {
                 VStack(spacing: 4) {
-                    CrestView(club: home, size: 34)
                     Text(home.name.uppercased()).font(.gfLabel(14)).lineLimit(1).minimumScaleFactor(0.6)
                 }
                 .frame(maxWidth: .infinity)
@@ -408,7 +407,6 @@ public struct LiveMatchView: View {
                         .background(Color.black.opacity(0.25), in: Capsule())
                 }
                 VStack(spacing: 4) {
-                    CrestView(club: away, size: 34)
                     Text(away.name.uppercased()).font(.gfLabel(14)).lineLimit(1).minimumScaleFactor(0.6)
                 }
                 .frame(maxWidth: .infinity)
@@ -436,7 +434,6 @@ public struct LiveMatchView: View {
                 .font(.system(size: 32, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
             HStack(spacing: 6) {
-                CrestView(club: club, size: 22)
                 Text(scorer ?? club.name).font(.headline).foregroundStyle(.white)
             }
             if let assist {

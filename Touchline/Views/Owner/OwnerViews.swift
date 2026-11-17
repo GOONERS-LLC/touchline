@@ -81,7 +81,6 @@ public struct OwnerCareerTabView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            if let club = gameState.userClub { CrestView(club: club, size: 30) }
             VStack(alignment: .leading, spacing: 1) {
                 Text(DashboardView.longDate(gameState.season.currentDate))
                     .font(.subheadline.weight(.semibold))
@@ -116,7 +115,7 @@ public struct OwnerCareerTabView: View {
                 screenTile("News", "newspaper.fill", .news)
                 screenTile("Fixtures", "calendar", .matchHistory)
                 screenTile("Table", "list.number", .standings)
-                NavigationLink { OwnerTeamView() } label: { HubTile(title: "Team", icon: "person.3.fill") }
+                NavigationLink { OwnerSquadView() } label: { HubTile(title: "Squad", icon: "person.3.fill") }
                 NavigationLink { OwnerManagerView() } label: { HubTile(title: "Manager", icon: "person.badge.key.fill") }
                 NavigationLink { OwnerStaffView() } label: { HubTile(title: "Staff", icon: "person.2.badge.gearshape.fill") }
             }
@@ -127,13 +126,9 @@ public struct OwnerCareerTabView: View {
                 }
                 NavigationLink { OwnerAccountsView() } label: { HubTile(title: "Accounts", icon: "chart.bar.doc.horizontal.fill") }
                 NavigationLink { OwnerBankView() } label: { HubTile(title: "Bank", icon: "banknote.fill") }
-                NavigationLink { OwnerFacilityView(area: .training) } label: { HubTile(title: "Training", icon: "figure.soccer") }
-                NavigationLink { OwnerFacilityView(area: .academy) } label: { HubTile(title: "Academy", icon: "figure.and.child.holdinghands") }
-                NavigationLink { OwnerFacilityView(area: .medical) } label: { HubTile(title: "Medical", icon: "cross.case.fill") }
-                NavigationLink { OwnerStadiumView() } label: { HubTile(title: "Stadium", icon: "sportscourt.fill") }
+                NavigationLink { OwnerFacilitiesView() } label: { HubTile(title: "Facilities", icon: "building.2.fill") }
             }
             Group {
-                NavigationLink { OwnerIdentityView() } label: { HubTile(title: "Identity", icon: "paintpalette.fill") }
                 NavigationLink { OwnerPolicyView() } label: { HubTile(title: "Policy", icon: "slider.horizontal.3") }
                 NavigationLink { OwnerLegacyView() } label: { HubTile(title: "Legacy", icon: "rosette") }
                 screenTile("History", "trophy.fill", .history)
@@ -427,21 +422,91 @@ struct ClubPurchaseView: View {
     }
 }
 
-// MARK: - Team
+// MARK: - Squad (ratings and evaluation)
 
-struct OwnerTeamView: View {
+struct OwnerSquadView: View {
     @Environment(GameState.self) private var gameState
+
+    private struct Line {
+        let category: PositionCategory
+        let count: Int
+        let starters: Int
+        let minimum: Int
+        let average: Double
+        let leagueAverage: Double
+        var verdict: (text: String, color: Color) {
+            if count < minimum { return ("Thin: sign cover", Color.lossRed) }
+            if average >= leagueAverage + 2 { return ("Strong", Color.winGreen) }
+            if average <= leagueAverage - 2 { return ("Weak", Color.bronzeAccent) }
+            return ("Par", .secondary)
+        }
+    }
+
+    private func topAverage(_ club: Club, _ category: PositionCategory, _ n: Int) -> Double {
+        let ratings = club.players.filter { $0.primaryPosition.category == category }.map(\.overall).sorted(by: >).prefix(n)
+        guard !ratings.isEmpty else { return 0 }
+        return Double(ratings.reduce(0, +)) / Double(ratings.count)
+    }
+
+    private func lines(_ club: Club) -> [Line] {
+        let rivals = gameState.clubs.filter { $0.leagueTier == club.leagueTier && !$0.isUserClub }
+        let spec: [(PositionCategory, Int, Int)] = [(.goalkeeper, 1, 2), (.defender, 4, 5), (.midfielder, 3, 5), (.forward, 3, 4)]
+        return spec.map { category, starters, minimum in
+            let others = rivals.map { topAverage($0, category, starters) }.filter { $0 > 0 }
+            let leagueAverage = others.isEmpty ? 0 : others.reduce(0, +) / Double(others.count)
+            return Line(category: category,
+                        count: club.players.filter { $0.primaryPosition.category == category }.count,
+                        starters: starters, minimum: minimum,
+                        average: topAverage(club, category, starters), leagueAverage: leagueAverage)
+        }
+    }
+
+    /// 1 = best squad rating in the division.
+    private func divisionRank(_ club: Club) -> (rank: Int, of: Int) {
+        let peers = gameState.clubs.filter { $0.leagueTier == club.leagueTier }
+        let better = peers.filter { $0.squadAverageOverall > club.squadAverageOverall }.count
+        return (better + 1, peers.count)
+    }
 
     var body: some View {
         List {
             if let club = gameState.userClub {
-                Section(header: Text("\(club.manager)'s team · \(club.tactics.formation.rawValue)")) {
-                    FormationPitchView(formation: club.tactics.formation, players: club.startingXIPlayers,
-                                       selectedPlayerId: nil, onSelect: { _ in })
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
+                let rank = divisionRank(club)
+                Section("Ratings") {
+                    LabeledContent("Starting XI", value: String(format: "%.1f", club.startingXIAverageOverall))
+                    LabeledContent("Whole squad", value: String(format: "%.1f", club.squadAverageOverall))
+                    LabeledContent("In your division", value: "\(rank.rank)\(DashboardView.ordinal(rank.rank)) of \(rank.of)")
+                    LabeledContent("Injured", value: "\(club.injuredPlayers.count)")
                 }
-                Section("Squad (\(club.players.count))") {
+                Section(header: Text("Evaluation"), footer: Text("Compared with the average club in your division, line by line.")) {
+                    ForEach(lines(club), id: \.category) { line in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(line.category.displayName + "s").font(.subheadline.weight(.semibold))
+                                Text("\(line.count) players · top \(line.starters) average \(String(format: "%.1f", line.average))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(line.verdict.text).font(.caption.weight(.semibold)).foregroundStyle(line.verdict.color)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                    let ageAverage = Double(club.players.reduce(0) { $0 + $1.age }) / Double(max(1, club.players.count))
+                    LabeledContent("Average age", value: String(format: "%.1f", ageAverage))
+                    LabeledContent("Squad size", value: "\(club.players.count)")
+                    LabeledContent("Players over 31", value: "\(club.players.filter { $0.age > 31 }.count)")
+                    LabeledContent("Under 21", value: "\(club.players.filter { $0.age < 21 }.count)")
+                }
+                Section("Money") {
+                    moneyRow("Squad market value", club.players.reduce(0) { $0 + $1.value })
+                    moneyRow("Player wages a week", club.totalPlayerWageBill)
+                    let expiring = club.players.filter { !$0.isOnLoan && ($0.contract?.yearsRemaining ?? 99) <= 1 }
+                    LabeledContent("Contracts ending within a year", value: "\(expiring.count)")
+                    ForEach(club.players.sorted { $0.payrollWage > $1.payrollWage }.prefix(3)) { player in
+                        LabeledContent(player.fullName, value: "\(Player.formatCurrency(player.payrollWage))/w")
+                    }
+                }
+                Section("Players (\(club.players.count))") {
                     ForEach(club.players.sorted { $0.overall > $1.overall }) { player in
                         NavigationLink(destination: PlayerDetailView(playerId: player.id)) {
                             PlayerRowView(player: player)
@@ -450,7 +515,7 @@ struct OwnerTeamView: View {
                 }
             }
         }
-        .ownerScreen("Team")
+        .ownerScreen("Squad")
     }
 }
 
@@ -755,6 +820,17 @@ struct OwnerAccountsView: View {
                     moneyRow("Cash", club.finances.balance)
                     moneyRow("Bank debt", owner.totalDebt)
                 }
+                let turnover = OwnerBusiness.annualRevenue(club.finances)
+                if turnover > 0 {
+                    let wageRatio = Int((Double(club.totalWeeklyWageBill * 52) / Double(turnover) * 100).rounded())
+                    Section(header: Text("Financial health"), footer: Text(wageRatio > 80 ? "Wages swallow most of the income. Banks and the league will take notice."
+                                                                         : wageRatio > 65 ? "Wages are high for the turnover. Be careful." : "Wages are in a healthy range.")) {
+                        LabeledContent("Wages to turnover", value: "(wageRatio)%")
+                            .foregroundStyle(wageRatio > 80 ? Color.lossRed : wageRatio > 65 ? Color.bronzeAccent : .primary)
+                        moneyRow("Turnover (a year)", turnover)
+                        moneyRow("Dividends taken", owner.dividendsTaken)
+                    }
+                }
                 if let flow = gameState.weeklyCashFlow {
                     Section(header: Text("Last week"), footer: Text(flow.advice)) {
                         moneyRow("TV & prize money", flow.broadcasting)
@@ -826,6 +902,14 @@ struct OwnerBankView: View {
                     .disabled(amount > owner.personalWealth)
                 }
             }
+            Section(header: Text("Dividend"), footer: Text("Only a debt-free club with cash to spare can pay one. Supporters and the manager do not like seeing money leave.")) {
+                let dividend = gameState.maxDividend
+                Button("Take (Player.formatCurrency(dividend)) from the club") {
+                    message = gameState.takeDividend(dividend) ? "(Player.formatCurrency(dividend)) paid to you." : "The club cannot afford a dividend."
+                    try? SaveManager.shared.autoSave(gameState: gameState)
+                }
+                .disabled(dividend < 100_000)
+            }
             Section(header: Text("Loans"), footer: Text("Repaid weekly over two seasons. The more the club owes, the higher the rate.")) {
                 ForEach(owner.loans) { loan in
                     HStack {
@@ -859,6 +943,33 @@ struct OwnerBankView: View {
 }
 
 // MARK: - Facilities
+
+/// Training ground, academy, medical centre and the stadium in one place.
+struct OwnerFacilitiesView: View {
+    @Environment(GameState.self) private var gameState
+
+    var body: some View {
+        List {
+            if let club = gameState.userClub {
+                Section {
+                    NavigationLink { OwnerFacilityView(area: .training) } label: {
+                        LabeledContent("Training ground", value: "Level (club.trainingFacilityLevel)")
+                    }
+                    NavigationLink { OwnerFacilityView(area: .academy) } label: {
+                        LabeledContent("Youth academy", value: "Level (club.youthAcademyLevel)")
+                    }
+                    NavigationLink { OwnerFacilityView(area: .medical) } label: {
+                        LabeledContent("Medical centre", value: "Level (club.medicalFacilityLevel)")
+                    }
+                    NavigationLink { OwnerStadiumView() } label: {
+                        LabeledContent("Stadium", value: club.stadiumCapacity.formatted())
+                    }
+                }
+            }
+        }
+        .ownerScreen("Facilities")
+    }
+}
 
 struct OwnerFacilityView: View {
     @Environment(GameState.self) private var gameState
@@ -1080,11 +1191,19 @@ struct OwnerPolicyView: View {
                         value: Binding(get: { gameState.owner.delegatedSpendPercent }, set: { gameState.owner.delegatedSpendPercent = $0 }),
                         in: 0...100, step: 5)
             }
+            Section(header: Text("Season target"), footer: Text(owner.seasonObjective.summary + " Judged at the end of the season.")) {
+                Picker("Target", selection: Binding(get: { gameState.owner.seasonObjective }, set: { gameState.owner.seasonObjective = $0 })) {
+                    ForEach(SeasonObjective.allCases) { Text($0.rawValue).tag($0) }
+                }
+            }
             Section(header: Text("Recruitment"), footer: Text(owner.recruitmentPolicy.summary)) {
                 Picker("Policy", selection: Binding(get: { gameState.owner.recruitmentPolicy }, set: { gameState.owner.recruitmentPolicy = $0 })) {
                     ForEach(RecruitmentPolicy.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
+            }
+            Section {
+                NavigationLink("Club identity: name, colours, vision") { OwnerIdentityView() }
             }
         }
         .ownerScreen("Policy")

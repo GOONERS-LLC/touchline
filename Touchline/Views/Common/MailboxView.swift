@@ -382,7 +382,6 @@ public struct MatchHistoryView: View {
             Image(systemName: "star.circle.fill")
                 .foregroundStyle(Color.goldAccent)
                 .font(.title3)
-            if let opponent { CrestView(club: opponent, size: 26) }
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(isHome ? "vs" : "at") \(opponent?.name ?? "Opponent")")
                     .font(.subheadline.weight(.semibold))
@@ -453,9 +452,6 @@ public struct MatchResultRow: View {
                 .background(outcomeColor)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
-            if let opponent {
-                CrestView(club: opponent, size: 26)
-            }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(isHome ? "vs" : "at") \(opponent?.name ?? "Opponent")")
@@ -549,7 +545,7 @@ struct IncomingNegotiationView: View {
             VStack(spacing: 14) {
                 Text(player.fullName.uppercased()).font(.gfDisplay(20)).multilineTextAlignment(.center)
                 if let buyer = gameState.club(withId: offer.toClubId) {
-                    HStack(spacing: 6) { CrestView(club: buyer, size: 18); Text(buyer.name).font(.headline) }
+                    Text(buyer.name).font(.headline)
                 }
                 FaceView(player: player, size: 110, style: .full)
                     .frame(width: 170, height: 190)
@@ -672,7 +668,7 @@ struct IncomingNegotiationView: View {
 
 // MARK: - Calendar card
 
-/// "LEEDS UNITED            WREXHAM": both names on top, crests below,
+/// "LEEDS UNITED            WREXHAM": both names on top,
 /// the date (or the score) in the middle.
 struct FixtureCardRow: View {
     @Environment(GameState.self) private var gameState
@@ -700,7 +696,6 @@ struct FixtureCardRow: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
             HStack {
-                if let home { CrestView(club: home, size: 28) }
                 Spacer()
                 VStack(spacing: 2) {
                     if let result {
@@ -724,7 +719,6 @@ struct FixtureCardRow: View {
                     }
                 }
                 Spacer()
-                if let away { CrestView(club: away, size: 28) }
             }
         }
         .padding(.vertical, 4)

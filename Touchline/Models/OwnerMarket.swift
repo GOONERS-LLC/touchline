@@ -55,7 +55,7 @@ extension SponsorshipTier {
 
     var brands: [String] {
         switch self {
-        case .local: return ["Town Motors", "Riverside Bakery", "Hillcrest Builders", "Parkway Dental", "Corner Print Co.",
+        case .local: return ["Town Motors", "Riverside Bakery", "Hillside Builders", "Parkway Dental", "Corner Print Co.",
                              "Station Garage", "Market Street Cafe", "Oakfield Plumbing", "Bridge Carpets", "Fairway Taxis"]
         case .regional: return ["County Energy", "Northern Rail Tours", "Valley Brewery", "Shire Insurance", "Coastline Homes",
                                 "Midland Logistics", "Highland Water", "Westway Cars"]

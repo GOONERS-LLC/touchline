@@ -511,7 +511,6 @@ public struct ClubSelectView: View {
                         select(club)
                     } label: {
                         HStack(spacing: 14) {
-                            CrestView(club: club, size: 40)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(club.name)
                                     .font(.headline)
@@ -1067,7 +1066,6 @@ public struct SquadView: View {
         let text = Color.readable(on: club.primaryColor)
         return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
-                CrestView(club: club, size: 48)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(club.name).font(.title3.weight(.heavy))
                     Text("\(club.players.count) players • \(club.leagueTier.displayName)")
@@ -1729,7 +1727,6 @@ public struct StandingsView: View {
                             .font(.caption.weight(.bold).monospacedDigit())
                             .foregroundStyle(.secondary)
                             .frame(width: 22)
-                        CrestView(club: entry.club, size: 20)
                         Text("\(entry.player.displayName.uppercased()) (\(entry.club.name))")
                             .font(.subheadline.weight(entry.club.isUserClub ? .heavy : .regular))
                             .lineLimit(1)
@@ -1754,7 +1751,6 @@ public struct StandingsView: View {
             Section {
                 HStack(spacing: 10) {
                     Image(systemName: "trophy.fill").foregroundStyle(Color.goldAccent)
-                    CrestView(club: champion, size: 26)
                     Text("\(champion.name) — \(cup.name) winners")
                         .font(.headline)
                 }
@@ -1842,9 +1838,6 @@ public struct StandingsView: View {
             Text("\(rank)")
                 .font(.caption.monospacedDigit())
                 .frame(width: 22, alignment: .leading)
-            if let club {
-                CrestView(club: club, size: 22)
-            }
             VStack(alignment: .leading, spacing: 3) {
                 Text(club?.name ?? "Club")
                     .font(.subheadline)
@@ -2639,7 +2632,6 @@ public struct MatchDayView: View {
                 .foregroundStyle(.white.opacity(0.85))
             HStack {
                 VStack(spacing: 6) {
-                    CrestView(club: home, size: 40)
                     Text(home.name).font(.caption.weight(.bold)).multilineTextAlignment(.center).lineLimit(2)
                 }
                 .frame(maxWidth: .infinity)
@@ -2648,7 +2640,6 @@ public struct MatchDayView: View {
                     Text(fixture.date).font(.caption2.monospacedDigit()).opacity(0.8)
                 }
                 VStack(spacing: 6) {
-                    CrestView(club: away, size: 40)
                     Text(away.name).font(.caption.weight(.bold)).multilineTextAlignment(.center).lineLimit(2)
                 }
                 .frame(maxWidth: .infinity)
@@ -3013,7 +3004,6 @@ extension PlayerDetailView {
                         .minimumScaleFactor(0.8)
                     HStack(spacing: 6) {
                         if let club {
-                            CrestView(club: club, size: 18)
                             Text(club.name).font(.subheadline.weight(.semibold))
                         } else {
                             Text("Free Agent").font(.subheadline.weight(.semibold))
@@ -3126,7 +3116,6 @@ extension PlayerDetailView {
                     .background(Capsule().fill(player.primaryPosition.category.accentColor))
                 Text(player.nationality.uppercased()).font(.gfLabel(16))
                 HStack(spacing: 6) {
-                    if let club { CrestView(club: club, size: 18) }
                     Text((club?.name ?? "Free agent").uppercased()).font(.gfLabel(16)).lineLimit(1).minimumScaleFactor(0.6)
                 }
                 HStack {
@@ -4276,7 +4265,6 @@ public struct NegotiationView: View {
             VStack(spacing: 14) {
                 Text(player.fullName.uppercased()).font(.gfDisplay(20)).multilineTextAlignment(.center)
                 HStack(spacing: 6) {
-                    if let club { CrestView(club: club, size: 18) }
                     Text(club?.name ?? "Free agent").font(.headline)
                 }
                 FaceView(player: player, size: 110, style: .full)
@@ -4805,7 +4793,6 @@ public struct NewsFeedView: View {
                     if let seed = post.faceSeed {
                         FaceView(seed: seed, size: 52)
                     } else if let id = post.clubId, let club = gameState.club(withId: id) {
-                        CrestView(club: club, size: 46)
                     } else {
                         Image(systemName: "person.crop.circle.fill").font(.largeTitle)
                     }

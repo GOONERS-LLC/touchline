@@ -135,7 +135,6 @@ struct CalendarAdvanceView: View {
             if let fixture = gameState.nextUserFixture, let uid = gameState.userClubId,
                let opponentId = fixture.opponentId(for: uid), let opponent = gameState.club(withId: opponentId) {
                 HStack(spacing: 8) {
-                    CrestView(club: opponent, size: 22)
                     Text("\(fixture.homeClubId == uid ? "vs" : "at") \(opponent.name)")
                         .font(.subheadline.weight(.semibold))
                     Text("· \(shortDate(fixture.date))")

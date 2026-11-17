@@ -90,6 +90,10 @@ public struct OwnerProfile: Codable, Hashable {
     public var valuationAtTakeover: Int?
     /// One record per completed season of the owner's tenure.
     public var seasonHistory: [ManagerSeasonRecord]
+    /// What the owner expects of the manager this season; judged at the final whistle.
+    public var seasonObjective: SeasonObjective
+    /// Total taken out of the club as dividends.
+    public var dividendsTaken: Int
 
     public var totalDebt: Int { loans.reduce(0) { $0 + $1.remaining } }
 
@@ -128,6 +132,8 @@ public struct OwnerProfile: Codable, Hashable {
         self.isInAdministration = false
         self.valuationAtTakeover = nil
         self.seasonHistory = []
+        self.seasonObjective = .topHalf
+        self.dividendsTaken = 0
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -135,7 +141,7 @@ public struct OwnerProfile: Codable, Hashable {
         case managerRating, ticketPricing
         case personalWealth, totalInvested, loans, stadiumProject, namingRightsValue
         case managerSatisfaction, delegatedSpendPercent, recruitmentPolicy, managerContract, fanMoodLog, weeksInDebt, isInAdministration, valuationAtTakeover
-        case seasonHistory
+        case seasonHistory, seasonObjective, dividendsTaken
     }
 
     public init(from decoder: Decoder) throws {
@@ -163,6 +169,8 @@ public struct OwnerProfile: Codable, Hashable {
         self.isInAdministration = try container.decodeIfPresent(Bool.self, forKey: .isInAdministration) ?? false
         self.valuationAtTakeover = try container.decodeIfPresent(Int.self, forKey: .valuationAtTakeover)
         self.seasonHistory = try container.decodeIfPresent([ManagerSeasonRecord].self, forKey: .seasonHistory) ?? []
+        self.seasonObjective = try container.decodeIfPresent(SeasonObjective.self, forKey: .seasonObjective) ?? .topHalf
+        self.dividendsTaken = try container.decodeIfPresent(Int.self, forKey: .dividendsTaken) ?? 0
     }
 }
 
@@ -430,5 +438,48 @@ public struct SeededGenerator: RandomNumberGenerator {
         z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
         z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
         return z ^ (z >> 31)
+    }
+}
+
+/// The finish an owner expects from the manager this season.
+public enum SeasonObjective: String, Codable, CaseIterable, Identifiable, Hashable {
+    case avoidRelegation = "Avoid relegation"
+    case midTable = "Mid-table"
+    case topHalf = "Top half"
+    case promotionOrTopSix = "Promotion / top six"
+    case title = "Win the league"
+
+    public var id: String { rawValue }
+
+    /// The lowest league position that meets the target in a division of `teams` clubs.
+    public func lowestAcceptablePosition(teams: Int) -> Int {
+        switch self {
+        case .avoidRelegation: return max(1, teams - 3)
+        case .midTable: return max(1, Int((Double(teams) * 0.65).rounded()))
+        case .topHalf: return max(1, teams / 2)
+        case .promotionOrTopSix: return 6
+        case .title: return 1
+        }
+    }
+
+    public var summary: String {
+        switch self {
+        case .avoidRelegation: return "Survival is enough. Little pressure, little reward."
+        case .midTable: return "A comfortable, forgettable season is fine."
+        case .topHalf: return "Finish in the top half of the table."
+        case .promotionOrTopSix: return "Go up, or at least reach the top six."
+        case .title: return "Nothing but the league title will do. The manager feels the heat."
+        }
+    }
+
+    /// How hard missing the target is felt (and how well meeting it is rewarded).
+    public var stakes: Double {
+        switch self {
+        case .avoidRelegation: return 0.6
+        case .midTable: return 0.8
+        case .topHalf: return 1.0
+        case .promotionOrTopSix: return 1.3
+        case .title: return 1.6
+        }
     }
 }

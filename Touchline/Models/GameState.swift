@@ -1276,6 +1276,52 @@ public final class GameState: Codable {
         return true
     }
 
+    /// The most the owner can pay themselves as a dividend. Only a healthy
+    /// club can: no debt, no administration, and a cash cushion stays behind.
+    public var maxDividend: Int {
+        guard gameMode == .createClub, let club = userClub, !owner.isInAdministration,
+              owner.totalDebt == 0, owner.weeksInDebt == 0 else { return 0 }
+        let cushion = max(1_000_000, OwnerBusiness.annualRevenue(club.finances) / 4)
+        return max(0, (club.finances.balance - cushion) / 4)
+    }
+
+    /// Pays the owner a dividend out of club cash. Supporters and the manager
+    /// notice money leaving the club.
+    @discardableResult
+    public func takeDividend(_ amount: Int) -> Bool {
+        guard amount > 0, amount <= maxDividend,
+              let idx = clubs.firstIndex(where: { $0.isUserClub }) else { return false }
+        clubs[idx].finances.balance -= amount
+        owner.personalWealth += amount
+        owner.dividendsTaken += amount
+        adjustFans(-(amount >= 5_000_000 ? 5 : 3))
+        owner.managerSatisfaction = max(0, owner.managerSatisfaction - managerMoodChange(3))
+        addNews(headline: "Owner Takes \(Player.formatCurrency(amount)) Dividend",
+                body: "\(owner.name) has paid themselves \(Player.formatCurrency(amount)) from \(clubs[idx].name). Supporters want it spent on the team.",
+                category: .board, sender: "Finance Director")
+        return true
+    }
+
+    /// Judges the manager against the owner's target at the end of a season.
+    func judgeSeasonObjective(position: Int, teams: Int, promoted: Bool) {
+        let objective = owner.seasonObjective
+        let limit = objective.lowestAcceptablePosition(teams: teams)
+        let met = position <= limit || (objective == .promotionOrTopSix && promoted)
+        let verdict: String
+        if met {
+            owner.managerSatisfaction = min(100, owner.managerSatisfaction + Int((8 * objective.stakes).rounded()))
+            adjustFans(Int((3 * objective.stakes).rounded()))
+            verdict = "Target met: \(objective.rawValue.lowercased()). The board is pleased."
+        } else {
+            let miss = position - limit
+            let base = miss > 4 ? 12 : 5
+            owner.managerSatisfaction = max(0, owner.managerSatisfaction - managerMoodChange(Int((Double(base) * objective.stakes).rounded())))
+            adjustFans(-Int((Double(miss > 4 ? 4 : 2) * objective.stakes).rounded()))
+            verdict = "Target missed: \(objective.rawValue.lowercased()). Finished \(position)\(standingRankSuffix(position)). The manager knows the board is unhappy."
+        }
+        addNews(headline: "Season Target Reviewed", body: verdict, category: .board, sender: "Board Secretary")
+    }
+
     /// Takes a bank loan repaid weekly over two seasons.
     @discardableResult
     public func takeLoan(amount: Int, rate: Double) -> Bool {
@@ -1421,6 +1467,8 @@ public final class GameState: Codable {
     static let fanReasons: [String: String] = [
         "advanceWeek": "Ticket prices",
         "investInClub": "Owner investing their own money",
+        "takeDividend": "Owner taking money out of the club",
+        "judgeSeasonObjective": "Season target",
         "signNamingRights": "Stadium renamed for a sponsor",
         "startStadiumProject": "New stadium plans",
         "checkManagerResignation": "Manager walked out",
@@ -4686,6 +4734,8 @@ public final class GameState: Codable {
                 finalPosition: review.position,
                 honours: honours
             ))
+            let teams = finalTables.values.first { table in table.contains { $0.clubId == uid } }?.count ?? 20
+            judgeSeasonObjective(position: review.position, teams: teams, promoted: promotedIds.contains(uid))
         }
 
         // Distribute merit prize money based on final standings.

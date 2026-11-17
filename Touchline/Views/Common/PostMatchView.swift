@@ -104,7 +104,7 @@ public struct PostMatchView: View {
 
     // MARK: - Scoreboard
 
-    /// Crests and names either side of a big score, with each side's scorers
+    /// Names either side of a big score, with each side's scorers
     /// listed under its name.
     private func scoreboard(fixture: Fixture, res: MatchResult, home: Club, away: Club) -> some View {
         let outcome = gameState.userClubId.map { res.outcomeLetter(for: $0) } ?? "-"
@@ -184,7 +184,6 @@ public struct PostMatchView: View {
 
     private func teamColumn(_ club: Club, scorers: [MatchEvent]) -> some View {
         VStack(spacing: 6) {
-            CrestView(club: club, size: 50)
             Text(club.name)
                 .font(.subheadline.weight(.heavy))
                 .foregroundStyle(.white)
@@ -574,7 +573,6 @@ public struct PostMatchView: View {
                         HStack {
                             Text("\(i + 1)").frame(width: 26, alignment: .leading)
                             HStack(spacing: 6) {
-                                if let club { CrestView(club: club, size: 18) }
                                 Text(club?.name ?? "–").lineLimit(1)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
