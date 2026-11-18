@@ -4,10 +4,10 @@
 
 ## What it has
 
-- 802 clubs in 45 leagues with current squads, promotion and relegation, domestic cups, continental competitions and international tournaments.
-- Owner careers: hire managers and staff, sponsors that come to you, facilities, takeovers, and watching your team live.
+- 802 clubs in 45 leagues with current squads, promotion and relegation, domestic cups, continental competitions and international tournaments on a real calendar (World Cup, EURO, Copa América, AFCON, Asian Cup).
+- Owner careers: hire managers and staff, set season targets, squad evaluation, sponsors that come to you, dividends, loans, facilities, takeovers, and watching your team live.
 - Manager careers: squad selection, tactics, training, transfers and loans, and real half-time changes.
-- Live matches with commentary, momentum, stats and lineups, and a full-time report with ratings, press conference and the table.
+- Live matches with spoken commentary, stats and lineups, and a full-time report with ratings, press conference and the table.
 - A real stadium crowd recorded at football grounds that reacts to the match, and haptics.
 - Datapack editor with import and export.
 

@@ -81,6 +81,7 @@ public struct OwnerCareerTabView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
+            if let club = gameState.userClub { CrestView(club: club, size: 30) }
             VStack(alignment: .leading, spacing: 1) {
                 Text(DashboardView.longDate(gameState.season.currentDate))
                     .font(.subheadline.weight(.semibold))
@@ -235,6 +236,7 @@ struct OwnerBoardroomView: View {
                     SeasonReviewCard(review: review)
                 }
                 if let club = gameState.userClub {
+                    snapshot(club)
                     decisions(club)
                 }
             }
@@ -250,6 +252,25 @@ struct OwnerBoardroomView: View {
         } message: {
             Text("The money is yours. You then pick a club you can afford; what is left over becomes that club's cash.")
         }
+    }
+
+    /// The owner's quick read on the club before any decisions.
+    private func snapshot(_ club: Club) -> some View {
+        let owner = gameState.owner
+        return VStack(alignment: .leading, spacing: 6) {
+            GFSectionHeader(title: "Where the club stands", icon: "gauge.with.dots.needle.33percent")
+            if let status = gameState.ownerTargetStatus {
+                Text("League: \(status.position)\(DashboardView.ordinal(status.position)) of \(status.teams). Target \(owner.seasonObjective.rawValue.lowercased()): \(status.onTrack ? "on track" : "behind").")
+                    .font(.subheadline)
+            }
+            Text("Cash \(Player.formatCurrency(club.finances.balance)) · debt \(Player.formatCurrency(owner.totalDebt)) · valuation \(Player.formatCurrency(gameState.clubValuation)).")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Supporters \(owner.supporterConfidence)% · manager \(owner.managerSatisfaction >= 70 ? "settled" : owner.managerSatisfaction >= 40 ? "wants more support" : "close to walking out").")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .gfCard()
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -534,6 +555,13 @@ struct OwnerManagerView: View {
                     LabeledContent("Coaching rating", value: "\(gameState.owner.managerRating)")
                     LabeledContent("Mood", value: gameState.owner.managerSatisfaction >= 70 ? "Fully backed"
                                    : gameState.owner.managerSatisfaction >= 40 ? "Wants more support" : "Close to walking out")
+                }
+                Section("Season target") {
+                    LabeledContent("Target", value: gameState.owner.seasonObjective.rawValue)
+                    if let status = gameState.ownerTargetStatus {
+                        LabeledContent("Now", value: "\(status.position)\(DashboardView.ordinal(status.position)) of \(status.teams) · \(status.onTrack ? "on track" : "behind")")
+                            .foregroundStyle(status.onTrack ? Color.winGreen : Color.bronzeAccent)
+                    }
                 }
                 if let contract = gameState.owner.managerContract {
                     Section("Contract") {

@@ -2,34 +2,26 @@
 //  InternationalTournamentBuilder.swift
 //  Touchline
 //
-//  Seeds international tournaments from the loaded national teams: takes the top
-//  ranked nations eligible for each competition, draws them into groups, and
-//  schedules a round-robin group stage.
+//  Seeds one edition of an international tournament from the loaded national
+//  teams: takes the top ranked nations eligible for it, draws them into groups
+//  serpentine-style, and dates a round-robin group stage (three matchdays,
+//  back to back, with a set number of games a day). Knockout rounds are dated
+//  as they are drawn.
 //
 
 import Foundation
 
 public enum InternationalTournamentBuilder {
 
-    /// Builds every international tournament from the available national teams.
-    public static func build(from teams: [NationalTeam]) -> [InternationalTournament.State] {
-        var states: [InternationalTournament.State] = []
-        for kind in InternationalTournament.Kind.allCases {
-            if let state = build(kind: kind, from: teams) {
-                states.append(state)
-            }
-        }
-        return states
-    }
-
-    /// Builds a single tournament for the given kind.
-    public static func build(kind: InternationalTournament.Kind, from teams: [NationalTeam]) -> InternationalTournament.State? {
-        // Eligible nations: matching confederation (or all for the World Cup), ranked.
+    /// Builds one dated edition of a tournament.
+    public static func build(kind: InternationalTournament.Kind, edition: Int, startDate: String,
+                             from teams: [NationalTeam]) -> InternationalTournament.State? {
+        // Eligible nations: matching confederations (or all for the World Cup), ranked.
         let eligible: [NationalTeam]
-        if let confederation = kind.confederation {
-            eligible = teams.filter { $0.confederation == confederation }
-        } else {
+        if kind.confederations.isEmpty {
             eligible = teams
+        } else {
+            eligible = teams.filter { kind.confederations.contains($0.confederation) }
         }
 
         let ranked = eligible.sorted { lhs, rhs in
@@ -47,9 +39,7 @@ public enum InternationalTournamentBuilder {
         guard field.count >= 4 else { return nil }
 
         // Draw into groups serpentine-style for balanced pools. Cap the group
-        // count by the available field so every group has at least two nations;
-        // smaller fields then use a compact knockout bracket (see
-        // `InternationalTournament.State.knockoutFieldSize`).
+        // count by the available field so every group has at least two nations.
         let groupCount = min(kind.groupCount, max(2, field.count / 2))
         var groups: [[NationalTeam]] = Array(repeating: [], count: groupCount)
         for (i, team) in field.enumerated() {
@@ -59,12 +49,33 @@ public enum InternationalTournamentBuilder {
         }
 
         var assignments: [String: [String]] = [:]
-        var fixtures: [InternationalTournament.Fixture] = []
+        // Matchday -> that day's games across every group.
+        var matchdays: [[InternationalTournament.Fixture]] = []
 
         for (gIdx, group) in groups.enumerated() {
             let groupName = "Group \(String(UnicodeScalar(65 + gIdx)!))"
-            assignments[groupName] = group.map { $0.id }
-            fixtures.append(contentsOf: roundRobin(group.map { $0.id }, stage: groupName))
+            let ids = group.map { $0.id }
+            assignments[groupName] = ids
+            for (md, pairs) in rounds(ids).enumerated() {
+                while matchdays.count <= md { matchdays.append([]) }
+                for (home, away) in pairs {
+                    matchdays[md].append(InternationalTournament.Fixture(homeTeamId: home, awayTeamId: away, stage: groupName))
+                }
+            }
+        }
+
+        // Date the group stage: each matchday fills consecutive days, a fixed
+        // number of games a day, and the next matchday starts the day after.
+        var fixtures: [InternationalTournament.Fixture] = []
+        var day = startDate
+        let perDay = max(1, kind.groupGamesPerDay)
+        for games in matchdays {
+            for (i, var game) in games.enumerated() {
+                if i > 0 && i % perDay == 0 { day = TournamentDates.add(day, days: 1) }
+                game.date = day
+                fixtures.append(game)
+            }
+            day = TournamentDates.add(day, days: 1)
         }
 
         return InternationalTournament.State(
@@ -72,18 +83,29 @@ public enum InternationalTournamentBuilder {
             stage: .groupStage,
             participantIds: field.map { $0.id },
             groupAssignments: assignments,
-            fixtures: fixtures
+            fixtures: fixtures,
+            edition: edition,
+            startDate: startDate
         )
     }
 
-    /// Round-robin fixtures for a 4-team group (6 matches).
-    private static func roundRobin(_ ids: [String], stage: String) -> [InternationalTournament.Fixture] {
-        var fixtures: [InternationalTournament.Fixture] = []
-        for i in 0..<ids.count {
-            for j in (i + 1)..<ids.count {
-                fixtures.append(InternationalTournament.Fixture(homeTeamId: ids[i], awayTeamId: ids[j], stage: stage))
+    /// A round-robin split into matchdays (the circle method). Each team plays
+    /// once a matchday; a group of odd size gives one side a rest day.
+    private static func rounds(_ ids: [String]) -> [[(String, String)]] {
+        var teams: [String?] = ids
+        if teams.count % 2 == 1 { teams.append(nil) }
+        let n = teams.count
+        var result: [[(String, String)]] = []
+        for round in 0..<(n - 1) {
+            var pairs: [(String, String)] = []
+            for i in 0..<(n / 2) {
+                guard let a = teams[i], let b = teams[n - 1 - i] else { continue }
+                // Alternate who is nominally at home so it is not always the top seed.
+                pairs.append(round % 2 == 0 ? (a, b) : (b, a))
             }
+            result.append(pairs)
+            teams.insert(teams.removeLast(), at: 1)
         }
-        return fixtures
+        return result
     }
 }

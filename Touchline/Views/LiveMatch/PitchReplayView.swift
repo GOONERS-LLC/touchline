@@ -196,6 +196,8 @@ public struct PitchReplayView: View {
 public struct LiveMatchView: View {
     @Environment(GameState.self) private var gameState
 
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverOn
+
     @State private var minute = 0
     @State private var isPlaying = false
     @State private var didSimulate = false
@@ -391,6 +393,7 @@ public struct LiveMatchView: View {
                 .foregroundStyle(.white.opacity(0.85))
             HStack {
                 VStack(spacing: 4) {
+                    CrestView(club: home, size: 34)
                     Text(home.name.uppercased()).font(.gfLabel(14)).lineLimit(1).minimumScaleFactor(0.6)
                 }
                 .frame(maxWidth: .infinity)
@@ -407,6 +410,7 @@ public struct LiveMatchView: View {
                         .background(Color.black.opacity(0.25), in: Capsule())
                 }
                 VStack(spacing: 4) {
+                    CrestView(club: away, size: 34)
                     Text(away.name.uppercased()).font(.gfLabel(14)).lineLimit(1).minimumScaleFactor(0.6)
                 }
                 .frame(maxWidth: .infinity)
@@ -434,6 +438,7 @@ public struct LiveMatchView: View {
                 .font(.system(size: 32, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
             HStack(spacing: 6) {
+                CrestView(club: club, size: 22)
                 Text(scorer ?? club.name).font(.headline).foregroundStyle(.white)
             }
             if let assist {
@@ -745,6 +750,8 @@ public struct LiveMatchView: View {
         if let home = gameState.club(withId: fixture.homeClubId) {
             CrowdAtmosphere.shared.startMatch(capacity: home.stadiumCapacity)
         }
+        // A screen-reader user follows the match in the Commentary tab.
+        if voiceOverOn { pane = .commentary }
         startTicker()
     }
 
@@ -752,7 +759,8 @@ public struct LiveMatchView: View {
         guard inProgress || minute < finalMinute else { return }
         isPlaying = true
         ticker?.invalidate()
-        let interval = gameState.matchSettings.speed.tickInterval
+        // With VoiceOver on, give each minute time to be read out.
+        let interval = voiceOverOn ? max(2.5, gameState.matchSettings.speed.tickInterval) : gameState.matchSettings.speed.tickInterval
         ticker = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
             Task { @MainActor in tick() }
         }
@@ -816,10 +824,18 @@ public struct LiveMatchView: View {
         }
         CrowdAtmosphere.shared.tickMinute(homeLeading: currentHomeGoals > currentAwayGoals)
 
+        // VoiceOver follows the match: everything that happened this minute is
+        // read out as one announcement, in order, so none of it talks over the
+        // rest. The Commentary tab holds the same lines to scroll back through.
+        let happened = events.filter { $0.minute > previous && $0.minute <= minute && $0.type != .commentary }
+        if voiceOverOn, !happened.isEmpty {
+            let lines = happened.map { "\($0.minute) minutes. \($0.detailText)" }
+            AccessibilityNotification.Announcement(lines.joined(separator: " ")).post()
+        }
+
         // Announce major events as their minute arrives.
         let newEvents = events.filter { $0.minute > previous && $0.minute <= minute && $0.type.isMajorEvent }
         for ev in newEvents {
-            AccessibilityNotification.Announcement(ev.detailText).post()
             if ev.type == .goal || ev.type == .penalty || ev.type == .ownGoal {
                 SoundManager.shared.play(.goal, enabled: gameState.soundEnabled)
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { goalFlash = ev }

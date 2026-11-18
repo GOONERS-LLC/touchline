@@ -54,11 +54,65 @@ public enum InternationalTournament {
         /// Field size (number of nations).
         public var teamCount: Int {
             switch self {
-            case .worldCup: return 32
+            case .worldCup: return 48
             case .euro: return 24
             case .copaAmerica: return 16
             case .africaCupOfNations: return 24
             case .asianCup: return 24
+            }
+        }
+
+        /// Confederations whose members play. Copa América invites CONCACAF
+        /// nations to fill the field, as the real tournament does.
+        public var confederations: [Confederation] {
+            switch self {
+            case .worldCup: return []
+            case .euro: return [.uefa]
+            case .copaAmerica: return [.conmebol, .concacaf]
+            case .africaCupOfNations: return [.caf]
+            case .asianCup: return [.afc]
+            }
+        }
+
+        /// The edition (and its opening day) that kicks off in the season
+        /// starting in August of the given year, if there is one. Seasons run
+        /// August to May, so the summer tournaments of the following year
+        /// belong to the season before them.
+        ///
+        ///   World Cup        every four years (2030, 2034 ...), June to July
+        ///   EURO, Copa       every four years (2028, 2032 ...), June to July
+        ///   AFCON            every second year (December 2027, 2029 ...)
+        ///   Asian Cup        every four years (January 2027, 2031 ...)
+        public func edition(inSeasonStarting seasonStart: Int) -> (edition: Int, date: String)? {
+            let summer = seasonStart + 1
+            switch self {
+            case .worldCup:
+                return summer % 4 == 2 ? (summer, "\(summer)-06-11") : nil
+            case .euro:
+                return summer % 4 == 0 ? (summer, "\(summer)-06-14") : nil
+            case .copaAmerica:
+                return summer % 4 == 0 ? (summer, "\(summer)-06-20") : nil
+            case .africaCupOfNations:
+                return seasonStart % 2 == 1 ? (seasonStart, "\(seasonStart)-12-21") : nil
+            case .asianCup:
+                return summer % 4 == 3 ? (summer, "\(summer)-01-12") : nil
+            }
+        }
+
+        /// The next edition at or after the season starting in the given year.
+        public func nextEdition(fromSeasonStarting seasonStart: Int) -> (edition: Int, date: String)? {
+            for year in seasonStart..<(seasonStart + 9) {
+                if let slot = edition(inSeasonStarting: year) { return slot }
+            }
+            return nil
+        }
+
+        /// Group games played on one day.
+        public var groupGamesPerDay: Int {
+            switch self {
+            case .worldCup: return 4
+            case .copaAmerica: return 2
+            default: return 3
             }
         }
 
@@ -115,6 +169,8 @@ public enum InternationalTournament {
         public var isPlayed: Bool
         public var homeGoals: Int
         public var awayGoals: Int
+        /// The day it is played (yyyy-MM-dd). Nil in older saves.
+        public var date: String?
 
         public init(
             id: UUID = UUID(),
@@ -123,8 +179,10 @@ public enum InternationalTournament {
             stage: String,
             isPlayed: Bool = false,
             homeGoals: Int = 0,
-            awayGoals: Int = 0
+            awayGoals: Int = 0,
+            date: String? = nil
         ) {
+            self.date = date
             self.id = id
             self.homeTeamId = homeTeamId
             self.awayTeamId = awayTeamId
@@ -145,6 +203,17 @@ public enum InternationalTournament {
         public var groupAssignments: [String: [String]]   // groupId -> teamIds
         public var fixtures: [Fixture]
         public var championId: String?
+        /// Calendar year the edition is named for (nil in older saves).
+        public var edition: Int?
+        /// Opening day, yyyy-MM-dd.
+        public var startDate: String?
+        public var kickoffAnnounced: Bool?
+
+        public var title: String {
+            edition.map { "\(kind.displayName) \($0)" } ?? kind.displayName
+        }
+
+        public var endDate: String? { fixtures.compactMap { $0.date }.max() }
 
         public enum Stage: String, Codable, Hashable {
             case groupStage
@@ -159,8 +228,12 @@ public enum InternationalTournament {
             participantIds: [String] = [],
             groupAssignments: [String: [String]] = [:],
             fixtures: [Fixture] = [],
-            championId: String? = nil
+            championId: String? = nil,
+            edition: Int? = nil,
+            startDate: String? = nil
         ) {
+            self.edition = edition
+            self.startDate = startDate
             self.id = id
             self.kind = kind
             self.stage = stage
@@ -198,6 +271,7 @@ public enum InternationalTournament {
         /// completed without byes.
         private var knockoutFieldSize: Int {
             let available = groupQualifiers().count
+            if available >= 32 { return 32 }
             if available >= 16 { return 16 }
             if available >= 8 { return 8 }
             if available >= 4 { return 4 }
@@ -208,6 +282,8 @@ public enum InternationalTournament {
         public var activeKnockoutRound: String? {
             let rounds: [String]
             switch knockoutFieldSize {
+            case 32...:
+                rounds = ["Round of 32"] + Self.knockoutOrder
             case 16...:
                 rounds = Self.knockoutOrder
             case 8:
@@ -234,34 +310,73 @@ public enum InternationalTournament {
 
         static let knockoutOrder = ["Round of 16", "Quarter-Final", "Semi-Final", "Third Place", "Final"]
 
-        /// Simulates every unplayed fixture once and rolls the tournament forward.
-        public mutating func simulateAll(simulate: (String, String) -> (Int, Int)) {
-            for idx in fixtures.indices where !fixtures[idx].isPlayed {
-                let (hg, ag) = simulate(fixtures[idx].homeTeamId, fixtures[idx].awayTeamId)
-                fixtures[idx].homeGoals = hg
-                fixtures[idx].awayGoals = ag
-                fixtures[idx].isPlayed = true
+        /// Plays every fixture dated on or before `date` (earliest first),
+        /// moving on to the next stage as each one finishes, until nothing more
+        /// is due. Fixtures without a date (older saves) are played at once.
+        public mutating func play(through date: String, simulate: (String, String) -> (Int, Int)) {
+            var progressed = true
+            var passes = 0
+            while progressed && passes < 12 {
+                passes += 1
+                progressed = false
+                let due = fixtures.indices
+                    .filter { !fixtures[$0].isPlayed && (fixtures[$0].date ?? "") <= date }
+                    .sorted { (fixtures[$0].date ?? "") < (fixtures[$1].date ?? "") }
+                for idx in due {
+                    let (hg, ag) = simulate(fixtures[idx].homeTeamId, fixtures[idx].awayTeamId)
+                    fixtures[idx].homeGoals = hg
+                    fixtures[idx].awayGoals = ag
+                    fixtures[idx].isPlayed = true
+                    progressed = true
+                }
+                let before = (stage, fixtures.count)
+                rollStage()
+                if stage != before.0 || fixtures.count != before.1 { progressed = true }
             }
+        }
 
+        /// Moves from the group stage to the knockouts, and draws each
+        /// knockout round once the one before it is finished.
+        private mutating func rollStage() {
             if stage == .groupStage {
                 guard groupStageComplete else { return }
                 stage = .knockout
                 generateNextKnockoutRound()
                 return
             }
-
             guard stage == .knockout else { return }
-
-            // The active round can legitimately have no fixtures when the previous
-            // round has just finished; generate it now instead of waiting forever.
             guard let round = activeKnockoutRound else {
                 finishTournament()
                 return
             }
-            let roundFixtures = fixtures.filter { $0.stage == round }
-            if roundFixtures.isEmpty || roundFixtures.allSatisfy({ $0.isPlayed }) {
+            if fixtures.filter({ $0.stage == round }).isEmpty {
                 generateNextKnockoutRound()
             }
+        }
+
+        /// Rest days before a round and games played per day, after the
+        /// previous round ends.
+        private static func knockoutPlan(_ round: String) -> (gap: Int, perDay: Int) {
+            switch round {
+            case "Round of 32": return (1, 3)
+            case "Round of 16": return (1, 2)
+            case "Quarter-Final": return (2, 2)
+            case "Semi-Final": return (2, 1)
+            case "Third Place": return (3, 1)
+            default: return (1, 1)   // Final
+            }
+        }
+
+        private func scheduled(_ games: [Fixture], round: String) -> [Fixture] {
+            guard let previous = fixtures.compactMap({ $0.date }).max() else { return games }
+            let plan = Self.knockoutPlan(round)
+            var day = TournamentDates.add(previous, days: plan.gap)
+            var out = games
+            for i in out.indices {
+                if i > 0 && i % plan.perDay == 0 { day = TournamentDates.add(day, days: 1) }
+                out[i].date = day
+            }
+            return out
         }
 
         private mutating func finishTournament() {
@@ -297,7 +412,22 @@ public enum InternationalTournament {
             let ranking: (String) -> Int = { id in ranked.firstIndex(of: id) ?? 999 }
 
             switch round {
+            case "Round of 32":
+                let qualifiers = Array(groupQualifiers().prefix(32))
+                guard qualifiers.count >= 32 else { return }
+                for i in 0..<16 {
+                    newFixtures.append(Fixture(homeTeamId: qualifiers[i], awayTeamId: qualifiers[31 - i], stage: round))
+                }
+
             case "Round of 16":
+                if fixtures.contains(where: { $0.stage == "Round of 32" }) {
+                    let field = knockoutWinners(from: "Round of 32", ranking: ranking)
+                    guard field.count >= 16 else { return }
+                    for i in 0..<8 {
+                        newFixtures.append(Fixture(homeTeamId: field[i], awayTeamId: field[15 - i], stage: round))
+                    }
+                    break
+                }
                 let qualifiers = Array(groupQualifiers().prefix(16))
                 guard qualifiers.count >= 16 else { return }
                 let winners = Array(qualifiers.prefix(8))
@@ -354,7 +484,7 @@ public enum InternationalTournament {
                 break
             }
 
-            fixtures.append(contentsOf: newFixtures)
+            fixtures.append(contentsOf: scheduled(newFixtures, round: round))
         }
 
         /// All qualifiers (winners then runners-up) across every group.
@@ -370,6 +500,11 @@ public enum InternationalTournament {
             }
             // If 6 groups (24 teams like EURO/AFCON/Asian Cup), take top 4 third-placed teams
             // to make a full 16-nation knockout bracket.
+            if winners.count == 12 && runnersUp.count == 12 {
+                // 48 teams: the eight best third-placed sides join the last 32.
+                let bestThird = thirdPlaced.sorted(by: GroupRow.sort).prefix(8).map { $0.teamId }
+                return winners + runnersUp + bestThird
+            }
             if winners.count == 6 && runnersUp.count == 6 {
                 let sortedThird = thirdPlaced.sorted(by: GroupRow.sort)
                 let bestThird = sortedThird.prefix(4).map { $0.teamId }
@@ -400,5 +535,21 @@ public enum InternationalTournament {
             }
             return losers
         }
+    }
+}
+
+/// Day arithmetic on "yyyy-MM-dd" strings, the game's date format.
+enum TournamentDates {
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f
+    }()
+
+    static func add(_ date: String, days: Int) -> String {
+        guard let d = formatter.date(from: date) else { return date }
+        return formatter.string(from: d.addingTimeInterval(Double(days) * 86_400))
     }
 }

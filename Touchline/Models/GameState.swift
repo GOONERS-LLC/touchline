@@ -26,6 +26,10 @@ public struct NewsItem: Codable, Identifiable, Hashable {
     /// the referenced offer so the inbox can present Accept / Reject / Counter.
     public var transferOfferId: UUID?
 
+    /// Whether this belongs in the manager's inbox. League-wide stories from
+    /// the Transfer Desk (big-money moves between other clubs) are news only.
+    public var isInboxMessage: Bool { sender != "Transfer Desk" }
+
     public init(
         id: UUID = UUID(),
         headline: String,
@@ -1276,6 +1280,15 @@ public final class GameState: Codable {
         return true
     }
 
+    /// Where the club stands against the owner's season target right now.
+    public var ownerTargetStatus: (position: Int, teams: Int, onTrack: Bool)? {
+        guard let club = userClub else { return nil }
+        let table = currentLeagueStandings
+        guard let index = table.firstIndex(where: { $0.clubId == club.id }) else { return nil }
+        let limit = owner.seasonObjective.lowestAcceptablePosition(teams: table.count)
+        return (index + 1, table.count, index + 1 <= limit)
+    }
+
     /// The most the owner can pay themselves as a dividend. Only a healthy
     /// club can: no debt, no administration, and a cash cushion stays behind.
     public var maxDividend: Int {
@@ -2049,9 +2062,48 @@ public final class GameState: Codable {
     /// boot and after a data reload.
     public func seedInternationalTournaments() {
         guard !nationalTeams.isEmpty else { return }
-        if internationalTournaments.isEmpty {
-            internationalTournaments = InternationalTournamentBuilder.build(from: nationalTeams)
+        // Older saves hold undated, season-long tournaments: drop them.
+        internationalTournaments.removeAll { $0.edition == nil }
+        scheduleInternationalEditions(forSeasonStarting: seasonStartYear)
+    }
+
+    /// First calendar year of the current season ("2026-27" gives 2026).
+    var seasonStartYear: Int { Int(season.year.prefix(4)) ?? 2026 }
+
+    /// Adds the tournaments that kick off during the season starting in
+    /// `startYear`. World Cups and EUROs come round every four years, AFCON
+    /// every second December, the Asian Cup every four Januaries.
+    func scheduleInternationalEditions(forSeasonStarting startYear: Int) {
+        guard !nationalTeams.isEmpty else { return }
+        for kind in InternationalTournament.Kind.allCases {
+            guard let slot = kind.edition(inSeasonStarting: startYear),
+                  !internationalTournaments.contains(where: { $0.kind == kind && $0.edition == slot.edition }),
+                  let state = InternationalTournamentBuilder.build(kind: kind, edition: slot.edition,
+                                                                   startDate: slot.date, from: nationalTeams)
+            else { continue }
+            internationalTournaments.append(state)
         }
+    }
+
+    /// Keeps every unfinished tournament and the latest finished edition of each kind.
+    func pruneInternationalTournaments() {
+        var keep: [InternationalTournament.State] = []
+        for kind in InternationalTournament.Kind.allCases {
+            let ofKind = internationalTournaments.filter { $0.kind == kind }
+            keep += ofKind.filter { $0.stage != .complete }
+            if let latest = ofKind.filter({ $0.stage == .complete }).max(by: { ($0.edition ?? 0) < ($1.edition ?? 0) }) {
+                keep.append(latest)
+            }
+        }
+        internationalTournaments = keep
+    }
+
+    /// The edition to show for a tournament: the one in progress or next up,
+    /// otherwise the latest finished.
+    public func currentTournament(of kind: InternationalTournament.Kind) -> InternationalTournament.State? {
+        let ofKind = internationalTournaments.filter { $0.kind == kind }
+        return ofKind.filter { $0.stage != .complete }.min { ($0.startDate ?? "") < ($1.startDate ?? "") }
+            ?? ofKind.max { ($0.edition ?? 0) < ($1.edition ?? 0) }
     }
 
     public func nationalTeam(withId id: String) -> NationalTeam? {
@@ -2082,32 +2134,52 @@ public final class GameState: Codable {
         managedNationalTeamId = nil
     }
 
-    /// Advances all international tournaments one round, simulating every unplayed
-    /// fixture from national-team strength.
-    public func advanceInternationalTournaments() {
-        guard !internationalTournaments.isEmpty else { return }
+    /// Plays every international fixture dated on or before the game's date
+    /// (or `date`), from national-team strength. Tournaments therefore run on
+    /// their real calendar: a January Asian Cup is played out week by week
+    /// through the season, while a summer World Cup waits for the break.
+    public func advanceInternationalTournaments(through date: String? = nil) {
+        seedInternationalTournaments()
+        let cutoff = date ?? season.currentDate
         for idx in internationalTournaments.indices {
             var tournament = internationalTournaments[idx]
-            tournament.simulateAll { [weak self] homeId, awayId in
-                guard let self,
-                      let home = self.nationalTeam(withId: homeId),
-                      let away = self.nationalTeam(withId: awayId) else { return (0, 0) }
+            guard tournament.stage != .complete else { continue }
+            tournament.play(through: cutoff) { homeId, awayId in
+                guard let home = nationalTeam(withId: homeId),
+                      let away = nationalTeam(withId: awayId) else { return (0, 0) }
                 return Self.simulateNationalScore(home: home.strength, away: away.strength)
             }
 
-            if tournament.stage == .complete, tournament.championId != nil,
-               internationalTournaments[idx].championId == nil,
-               let championId = tournament.championId {
+            if tournament.kickoffAnnounced != true, tournament.fixtures.contains(where: { $0.isPlayed }) {
+                tournament.kickoffAnnounced = true
+                addNews(
+                    headline: "\(tournament.title) Kicks Off",
+                    body: "\(tournament.participantIds.count) nations are in the \(tournament.title), running until \(tournament.endDate.map { Self.longDateText($0) } ?? "the final").",
+                    category: .general
+                )
+            }
+            if tournament.stage == .complete, let championId = tournament.championId {
                 let name = nationalTeam(withId: championId)?.name ?? championId
                 addNews(
-                    headline: "\(name) Win the \(tournament.kind.displayName)!",
-                    body: "\(name) are crowned champions of the \(tournament.kind.displayName).",
+                    headline: "\(name) Win the \(tournament.title)!",
+                    body: "\(name) are crowned champions of the \(tournament.title).",
                     category: .award
                 )
             }
-
             internationalTournaments[idx] = tournament
         }
+    }
+
+    /// "2028-06-14" as "14 June 2028".
+    static func longDateText(_ date: String) -> String {
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd"
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        guard let d = parser.date(from: date) else { return date }
+        let out = DateFormatter()
+        out.dateFormat = "d MMMM yyyy"
+        out.locale = Locale(identifier: "en_GB")
+        return out.string(from: d)
     }
 
     /// A lightweight international scoreline from two teams' strengths.
@@ -4171,10 +4243,12 @@ public final class GameState: Codable {
         payEuropeanParticipationFees()
         europeanMatchweek = 0
 
-        // Refresh the international calendar so tournaments recur each campaign.
-        if !nationalTeams.isEmpty {
-            internationalTournaments = InternationalTournamentBuilder.build(from: nationalTeams)
-        }
+        // International tournaments follow their own cycle, not the club season.
+        // The summer's tournaments finished while the clubs were on holiday;
+        // play them out, then schedule the ones in the season ahead.
+        advanceInternationalTournaments(through: String(format: "%d-07-31", startYearInt))
+        scheduleInternationalEditions(forSeasonStarting: startYearInt)
+        pruneInternationalTournaments()
         
         // Reset player seasonal match statistics and roll contracts forward.
         var renewedUserContracts: [String] = []
@@ -5400,7 +5474,7 @@ public final class GameState: Codable {
 
     /// Number of unread manager messages.
     public var unreadMailCount: Int {
-        news.reduce(0) { $0 + ($1.isRead ? 0 : 1) }
+        news.reduce(0) { $0 + ($1.isRead || !$1.isInboxMessage ? 0 : 1) }
     }
 
     /// Marks every message in the inbox as read.

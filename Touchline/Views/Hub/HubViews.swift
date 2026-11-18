@@ -108,6 +108,7 @@ struct NextMatchLine: View {
                 let venue = fixture.homeClubId == club.id ? "home" : "away"
                 let round = fixture.cupRound.map { "\(fixture.competition), \($0)" } ?? fixture.competition
                 HStack(spacing: 12) {
+                    CrestView(club: opponent, size: 38)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(today ? "MATCH DAY · vs \(opponent.name)" : "Next: vs \(opponent.name)")
                             .font(.system(.headline, design: .rounded))
@@ -235,6 +236,7 @@ public struct DashboardView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
+            if let club = gameState.userClub { CrestView(club: club, size: 30) }
             VStack(alignment: .leading, spacing: 1) {
                 Text(Self.longDate(gameState.season.currentDate))
                     .font(.subheadline.weight(.semibold))
@@ -391,13 +393,25 @@ struct ManagerStatusView: View {
                     LabeledContent("Confidence", value: "\(gameState.jobSecurity.boardConfidence)%")
                     if let target = gameState.boardTarget(for: club) {
                         let table = gameState.currentLeagueStandings
-                        let position = (table.firstIndex { $0.clubId == club.id } ?? 0) + 1
                         LabeledContent("Target", value: target.goal)
-                        LabeledContent("Now", value: "\(position)\(DashboardView.ordinal(position)) · \(position <= target.position ? "on track" : "behind")")
+                        if let index = table.firstIndex(where: { $0.clubId == club.id }) {
+                            let position = index + 1
+                            LabeledContent("Now", value: "\(position)\(DashboardView.ordinal(position)) · \(position <= target.position ? "on track" : "behind")")
+                        }
+                    }
+                }
+                if let fixture = gameState.nextUserFixture, let id = fixture.opponentId(for: club.id),
+                   let opponent = gameState.club(withId: id) {
+                    Section("Next opponent") {
+                        LabeledContent("Opponent", value: "\(opponent.name) (\(fixture.homeClubId == club.id ? "home" : "away"))")
+                        LabeledContent("Date", value: DashboardView.shortDate(fixture.date))
+                        LabeledContent("Their starting XI", value: String(format: "%.1f", opponent.startingXIAverageOverall))
+                        LabeledContent("Your starting XI", value: String(format: "%.1f", club.startingXIAverageOverall))
                     }
                 }
                 Section("Match Readiness") {
                     LabeledContent("Starters available", value: "\(available.count) of \(starters.count)")
+                    LabeledContent("Injured in the squad", value: "\(club.injuredPlayers.count)")
                     LabeledContent("Fitness", value: "\(fitness)%")
                     LabeledContent("Sharpness", value: "\(sharpness)%")
                 }

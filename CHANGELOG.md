@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Club crests are gone from every screen.
+- Club crests are back, but VoiceOver and the commentator skip them: the
+  badge is hidden from screen readers and never spoken.
+- VoiceOver follows a live match on its own: everything that happens each
+  minute is announced in order, the match opens on the Commentary tab, and
+  play is paced at a minute every few seconds so each line can be heard. The
+  Commentary tab can be scrolled back through at any time.
+- Big-money moves between other clubs (the Transfer Desk) are news only; they
+  no longer land in the Inbox or count as unread mail.
+- International tournaments keep a real calendar. The World Cup (48 teams,
+  round of 32) runs every four years from June 2030; EURO and Copa América
+  in June 2028; the Asian Cup in January 2027; AFCON every second December.
+  Fixtures have dates and are played as the game date passes them: group
+  games in three back-to-back matchdays, then dated knockout rounds, third
+  place and final. Summer tournaments finish while clubs are on holiday.
+  The Nations screen shows dates, upcoming matches and the next edition.
+  Copa América invites CONCACAF nations to fill the field.
+- Board screen (manager): next opponent against your XI, injured count.
+- Owner mode: Boardroom shows where the club stands; Manager screen shows
+  progress against the season target.
 - Owner mode: the Team tile is now Squad, with squad and starting-XI ratings,
   your rank in the division, a line-by-line evaluation (goalkeepers, defenders,
   midfielders, forwards against the division average, thin positions flagged),
