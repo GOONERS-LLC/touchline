@@ -668,7 +668,7 @@ struct OwnerStaffView: View {
                             Text("Vacant").foregroundStyle(.secondary)
                         }
                         ForEach(team) { member in
-                            LabeledContent(member.name, value: "\(member.quality)★ · \(Player.formatCurrency(member.wage))/w")
+                            LabeledContent(member.name, value: "quality \(member.quality) of 5 · \(Player.formatCurrency(member.wage))/w")
                         }
                         NavigationLink("Find candidates") { StaffMarketView(role: role) }
                     }
@@ -693,7 +693,7 @@ struct StaffMarketView: View {
                 Section(footer: Text("\(role.roleDescription) New names appear every month. Better clubs attract better staff.")) {
                     LabeledContent("Club cash", value: Player.formatCurrency(club.finances.balance))
                     if Club.staffLimit(role) == 1, let holder = current.first {
-                        LabeledContent("Current", value: "\(holder.name) \(holder.quality)★")
+                        LabeledContent("Current", value: "\(holder.name), quality \(holder.quality) of 5")
                     } else {
                         LabeledContent("Employed", value: "\(current.count) of \(Club.staffLimit(role))")
                     }
@@ -705,7 +705,7 @@ struct StaffMarketView: View {
                                 HStack {
                                     Text(person.name).fontWeight(.semibold)
                                     Spacer()
-                                    Text(String(repeating: "★", count: person.quality)).foregroundStyle(Color.goldAccent)
+                                    Text("Quality \(person.quality) of 5").foregroundStyle(Color.goldAccent)
                                 }
                                 Text("\(person.specialty) · age \(person.age)")
                                     .font(.caption).foregroundStyle(.secondary)

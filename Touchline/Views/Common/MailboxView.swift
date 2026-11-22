@@ -163,10 +163,6 @@ struct MailSubjectRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: item.category.iconName)
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 26)
-                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.headline)
                     .font(.subheadline.weight(item.isRead ? .regular : .bold))
@@ -219,11 +215,6 @@ struct MailRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: item.category.iconName)
-                    .font(.title3)
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 30)
-
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
                         Text(item.sender)
@@ -433,7 +424,7 @@ public struct MatchHistoryView: View {
         let goalsAgainst = isHome ? fixture.awayGoals : fixture.homeGoals
         let stage = fixture.stage + (fixture.leg > 0 ? " (leg \(fixture.leg))" : "")
         return HStack(spacing: 12) {
-            Image(systemName: "star.circle.fill")
+            Image(systemName: "star.circle.fill").accessibilityHidden(true)
                 .foregroundStyle(Color.goldAccent)
                 .font(.title3)
             if let opponent { CrestView(club: opponent, size: 26) }
@@ -762,7 +753,7 @@ struct FixtureCardRow: View {
                             .font(.gfDisplay(22).monospacedDigit())
                             .foregroundStyle(outcome == "W" ? Color.gfMint : outcome == "L" ? Color.gfCoral : .white)
                     } else {
-                        Image(systemName: fixture.isEuropean ? "star.circle.fill" : (fixture.cupRound != nil ? "trophy.fill" : "soccerball"))
+                        Image(systemName: fixture.isEuropean ? "star.circle.fill" : (fixture.cupRound != nil ? "trophy.fill" : "soccerball")).accessibilityHidden(true)
                             .font(.caption)
                             .foregroundStyle(fixture.isEuropean ? Color.goldAccent : .secondary)
                     }

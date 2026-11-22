@@ -88,7 +88,7 @@ struct StaffView: View {
                     .frame(width: 52, height: 60)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(alignment: .bottom) {
-                        Text("\(member.quality)★")
+                        Text("\(member.quality) of 5")
                             .font(.gfLabel(12))
                             .foregroundStyle(Color.gfNight)
                             .padding(.horizontal, 8).padding(.vertical, 2)

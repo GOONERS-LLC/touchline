@@ -201,7 +201,7 @@ public struct PostMatchView: View {
             VStack(spacing: 2) {
                 ForEach(scorers) { goal in
                     HStack(spacing: 4) {
-                        Image(systemName: "soccerball").font(.system(size: 9))
+                        Image(systemName: "soccerball").accessibilityHidden(true).font(.system(size: 9))
                         Text("\(playerSurname(goal.playerId)) \(goal.minute)'\(goal.type == .penalty ? " (pen)" : goal.type == .ownGoal ? " (og)" : "")")
                             .font(.caption2.weight(.semibold))
                             .lineLimit(1)
@@ -315,9 +315,9 @@ public struct PostMatchView: View {
     private func factIcon(_ type: MatchEventType) -> some View {
         switch type {
         case .goal, .penalty:
-            Image(systemName: "soccerball").font(.subheadline)
+            Image(systemName: "soccerball").accessibilityHidden(true).font(.subheadline)
         case .ownGoal:
-            Image(systemName: "soccerball").font(.subheadline).foregroundStyle(Color.lossRed)
+            Image(systemName: "soccerball").accessibilityHidden(true).font(.subheadline).foregroundStyle(Color.lossRed)
         case .yellowCard:
             RoundedRectangle(cornerRadius: 2).fill(.yellow).frame(width: 11, height: 15)
         case .redCard:
@@ -328,9 +328,9 @@ public struct PostMatchView: View {
                 RoundedRectangle(cornerRadius: 2).fill(.red).frame(width: 11, height: 15).offset(x: 3, y: 2)
             }
         case .injury:
-            Image(systemName: "cross.case.fill").foregroundStyle(.red).font(.caption)
+            Image(systemName: "cross.case.fill").accessibilityHidden(true).foregroundStyle(.red).font(.caption)
         default:
-            Image(systemName: "arrow.left.arrow.right").foregroundStyle(Color.winGreen).font(.caption)
+            Image(systemName: "arrow.left.arrow.right").accessibilityHidden(true).foregroundStyle(Color.winGreen).font(.caption)
         }
     }
 
@@ -426,7 +426,7 @@ public struct PostMatchView: View {
 
     private func statChip(icon: String, text: String, highlight: Bool) -> some View {
         VStack(spacing: 4) {
-            Image(systemName: icon).font(.caption)
+            Image(systemName: icon).accessibilityHidden(true).font(.caption)
             Text(text)
                 .font(.gfLabel(13).monospacedDigit())
                 .foregroundStyle(Color.gfNight)
@@ -517,11 +517,11 @@ public struct PostMatchView: View {
                     withAnimation(.snappy) { showElsewhere.toggle() }
                 } label: {
                     HStack {
-                        Image(systemName: "list.bullet.rectangle.portrait").foregroundStyle(Color.accentColor)
+                        Image(systemName: "list.bullet.rectangle.portrait").accessibilityHidden(true).foregroundStyle(Color.accentColor)
                         Text("Elsewhere in Matchweek \(gameState.leagueRound(of: fixture))").font(.headline)
                         Spacer()
                         Text("\(others.count)").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
-                        Image(systemName: "chevron.down")
+                        Image(systemName: "chevron.down").accessibilityHidden(true)
                             .rotationEffect(.degrees(showElsewhere ? 180 : 0))
                             .foregroundStyle(.secondary)
                     }

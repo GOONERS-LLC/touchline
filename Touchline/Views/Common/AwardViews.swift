@@ -17,6 +17,8 @@ struct AwardList: View {
     let icon: String
     let entries: [AwardEntry]
     var numbered = true
+    /// The player whose profile is open (to buy or shortlist him).
+    @State private var profileId: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -37,11 +39,17 @@ struct AwardList: View {
                     }
                     Spacer(minLength: 0)
                 }
+                .contentShape(Rectangle())
+                .onTapGesture { profileId = entry.id }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(numbered ? "\(index + 1). " : "\(entry.position), ")\(entry.name), \(entry.clubName)\(entry.isUsersPlayer ? ", your player" : ""). \(entry.detail)")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Opens his profile, to bid for him or shortlist him")
+                .accessibilityAction { profileId = entry.id }
             }
         }
         .gfCard()
+        .awardProfileSheet($profileId)
     }
 }
 
@@ -49,6 +57,7 @@ struct AwardList: View {
 struct ElevenView: View {
     let title: String
     let players: [AwardEntry]
+    @State private var profileId: UUID?
 
     private func line(_ positions: Set<String>) -> [AwardEntry] {
         players.filter { positions.contains($0.position) }
@@ -81,14 +90,32 @@ struct ElevenView: View {
                                 .lineLimit(1)
                         }
                         .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                        .onTapGesture { profileId = player.id }
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("\(player.position), \(player.name), \(player.clubName)\(player.isUsersPlayer ? ", your player" : ""). \(player.detail)")
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityHint("Opens his profile, to bid for him or shortlist him")
+                        .accessibilityAction { profileId = player.id }
                     }
                 }
             }
         }
         .padding(.vertical, 6)
         .gfCard()
+        .awardProfileSheet($profileId)
+    }
+}
+
+extension View {
+    /// A player's profile over an awards list, where he can be bid for or
+    /// shortlisted.
+    func awardProfileSheet(_ id: Binding<UUID?>) -> some View {
+        sheet(isPresented: Binding(get: { id.wrappedValue != nil }, set: { if !$0 { id.wrappedValue = nil } })) {
+            if let playerId = id.wrappedValue {
+                NavigationStack { PlayerDetailView(playerId: playerId) }
+            }
+        }
     }
 }
 
@@ -208,6 +235,7 @@ struct SeasonReviewScreen: View {
 struct AwardCeremonyView: View {
     @Environment(GameState.self) private var gameState
     let ceremony: AwardCeremony
+    @State private var winnerProfileId: UUID?
 
     var body: some View {
         NavigationStack {
@@ -267,7 +295,12 @@ struct AwardCeremonyView: View {
             .frame(maxWidth: .infinity)
             .gfCard()
             .accessibilityElement(children: .ignore)
+            .contentShape(Rectangle())
+            .onTapGesture { winnerProfileId = winner.id }
             .accessibilityLabel("The Ballon d'Or goes to \(winner.name) of \(winner.clubName)\(winner.isUsersPlayer ? ", your player" : ""). \(winner.detail)")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { winnerProfileId = winner.id }
+            .awardProfileSheet($winnerProfileId)
         }
         if ceremony.ranking.count > 1 {
             AwardList(title: "The Rest of the Top Ten", icon: "list.number",

@@ -164,7 +164,7 @@ struct CalendarAdvanceView: View {
                         .foregroundStyle(.secondary)
                     Text(dayNumber(day))
                         .font(.headline.monospacedDigit())
-                    Image(systemName: isMatch ? "soccerball" : "circle.fill")
+                    Image(systemName: isMatch ? "soccerball" : "circle.fill").accessibilityHidden(true)
                         .font(.system(size: isMatch ? 12 : 4))
                         .foregroundStyle(isMatch ? Color.winGreen : (isPast ? Color.secondary : Color.clear))
                 }
@@ -184,7 +184,7 @@ struct CalendarAdvanceView: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(events.prefix(7)) { event in
                 HStack(spacing: 10) {
-                    Image(systemName: event.icon)
+                    Image(systemName: event.icon).accessibilityHidden(true)
                         .frame(width: 22)
                         .foregroundStyle(event.highlight ? Color.accentColor : .secondary)
                     Text(event.text)

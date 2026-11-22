@@ -507,8 +507,13 @@ public struct Club: Codable, Identifiable, Hashable {
                     : (p.positions.contains(.GK) ? Double(p.overall) + 50 : -1000)
             }
             if p.primaryPosition == .GK { return -1000 }
-            let tired = max(0, 88 - p.matchFitness) / 3
-            return MatchEngine.rating(of: p, in: slot) - tired
+            // Fitness and form count as well as ability: a player short of
+            // match fitness or out of form loses out to a fresh, in-form one
+            // of similar quality.
+            let tired = max(0, 90 - p.matchFitness) / 2.5
+            let recent = p.form.isEmpty ? 6.6 : p.form.reduce(0, +) / Double(p.form.count)
+            let formBonus = max(-3, min(3, (recent - 6.6) * 3))
+            return MatchEngine.rating(of: p, in: slot) - tired + formBonus
         }
         // Every pairing is rated once (this runs for every club every week).
         let scores: [[Double]] = pool.map { p in requiredPositions.map { value(p, $0) } }

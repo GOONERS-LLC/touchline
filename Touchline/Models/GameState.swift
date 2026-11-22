@@ -2251,7 +2251,12 @@ public final class GameState: Codable {
     /// (or `date`), from national-team strength. Tournaments therefore run on
     /// their real calendar: a January Asian Cup is played out week by week
     /// through the season, while a summer World Cup waits for the break.
+    /// International football (tournaments, national-team jobs) is switched
+    /// off for now; the code stays so it can come back.
+    public static let internationalFootballEnabled = false
+
     public func advanceInternationalTournaments(through date: String? = nil) {
+        guard Self.internationalFootballEnabled else { return }
         seedInternationalTournaments()
         let cutoff = date ?? season.currentDate
         for idx in internationalTournaments.indices {
@@ -4174,10 +4179,28 @@ public final class GameState: Codable {
     /// run. Called once a matchweek has been completed.
     private func evaluateManagerJobSecurity() {
         guard gameMode == .manageClub,
-              let clubIdx = clubs.firstIndex(where: { $0.isUserClub }),
-              season.currentWeek >= 8,
-              jobSecurity.boardConfidence <= 10,
-              jobSecurity.gamesWithoutWin >= 5 else { return }
+              let clubIdx = clubs.firstIndex(where: { $0.isUserClub }) else { return }
+        // The board watch the table as well as results: a side well below
+        // its target loses their patience week by week, one above it earns
+        // some. (Before, only a long winless run with confidence near zero
+        // could cost a manager his job, so it almost never happened.)
+        let table = currentLeagueStandings
+        let round = currentLeague.map { currentLeagueRound(competition: $0.name) } ?? 1
+        var belowTarget = 0
+        if round >= 8, let target = boardTarget(for: clubs[clubIdx]),
+           let position = table.firstIndex(where: { $0.clubId == clubs[clubIdx].id }).map({ $0 + 1 }) {
+            belowTarget = position - target.position
+            if belowTarget >= 6 {
+                jobSecurity.boardConfidence = max(0, jobSecurity.boardConfidence - 2)
+            } else if belowTarget >= 3 {
+                jobSecurity.boardConfidence = max(0, jobSecurity.boardConfidence - 1)
+            } else if belowTarget <= 0 {
+                jobSecurity.boardConfidence = min(100, jobSecurity.boardConfidence + 1)
+            }
+        }
+        let collapsed = jobSecurity.boardConfidence <= 12
+        let poorRun = jobSecurity.gamesWithoutWin >= 4 || belowTarget >= 6
+        guard round >= 8, collapsed, poorRun else { return }
         let sackedFrom = clubs[clubIdx]
         abandonLiveTransferTalks()
         clubs[clubIdx].isUserClub = false
@@ -5855,6 +5878,7 @@ public final class GameState: Codable {
     /// reputation is high enough. An international post can be held alongside
     /// a club job, or on its own.
     func generateNationalTeamOffers() {
+        guard Self.internationalFootballEnabled else { return }
         guard gameMode == .manageClub, managedNationalTeamId == nil, !nationalTeams.isEmpty else { return }
         // Not every search: federations change managers rarely.
         guard Double.random(in: 0..<1) < (userClubId == nil ? 0.6 : 0.35) else { return }

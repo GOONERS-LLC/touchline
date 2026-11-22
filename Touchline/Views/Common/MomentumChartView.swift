@@ -84,7 +84,7 @@ struct MomentumChartView: View {
                         y: .value("Pressure", goal.isHome ? peak * 1.15 : -peak * 1.15)
                     )
                     .symbol {
-                        Image(systemName: "soccerball")
+                        Image(systemName: "soccerball").accessibilityHidden(true)
                             .font(.caption2)
                     }
                 }

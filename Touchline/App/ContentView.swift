@@ -18,6 +18,8 @@ public struct ContentView: View {
     private var isOwner: Bool { gameState.gameMode == .createClub }
 
     public var body: some View {
+        // Money in the currency of the user's league (pounds, euros, ...).
+        let _ = Currency.update(for: gameState.userClub?.leagueTier.country)
         NavigationStack {
             Group {
             switch gameState.currentScreen {
@@ -81,10 +83,17 @@ public struct ContentView: View {
         }
         // Awards nights (the Ballon d'Or in October, the Team of the Year in
         // January) take over the screen when they are held.
-        .fullScreenCover(item: Binding(get: { gameState.ceremonyToShow }, set: { gameState.ceremonyToShow = $0 })) { ceremony in
+        // Held for the Home screen, never in the middle of a match or another screen.
+        .fullScreenCover(item: Binding(get: {
+            if case .dashboard = gameState.currentScreen { return gameState.ceremonyToShow }
+            return nil
+        }, set: { gameState.ceremonyToShow = $0 })) { ceremony in
             AwardCeremonyView(ceremony: ceremony)
                 .environment(gameState)
         }
+        // Text only, everywhere: every row and button label shows its words
+        // without an icon, so VoiceOver never reads an image name.
+        .labelStyle(.titleOnly)
         .groupBoxStyle(GFGroupBoxStyle())
         .environment(\.stadiumTheme, stadiumTheme)
         .preferredColorScheme(stadiumTheme ? .dark : nil)
@@ -104,7 +113,7 @@ struct MenuRowLabel: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: icon)
+            Image(systemName: icon).accessibilityHidden(true)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 38, height: 38)
@@ -286,7 +295,7 @@ public struct GameModeCard: View {
     public var body: some View {
         Button(action: action) {
             HStack(spacing: 16) {
-                Image(systemName: iconName)
+                Image(systemName: iconName).accessibilityHidden(true)
                     .font(.title)
                     .frame(width: 58, height: 58)
                     .background(
@@ -531,7 +540,7 @@ public struct ClubSelectView: View {
                                 Text("Rep \(club.reputation)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                Image(systemName: "chevron.right")
+                                Image(systemName: "chevron.right").accessibilityHidden(true)
                                     .font(.caption2)
                                     .foregroundStyle(.tertiary)
                             }
@@ -655,7 +664,7 @@ public struct ManagerCreationView: View {
     /// Read-only coaching attribute bar for the chosen background.
     private func attributeRow(_ attr: CoachingAttribute, value: Int) -> some View {
         HStack {
-            Image(systemName: attr.iconName)
+            Image(systemName: attr.iconName).accessibilityHidden(true)
                 .frame(width: 24)
                 .foregroundStyle(.secondary)
             Text(attr.displayName)
@@ -759,7 +768,7 @@ public struct JobOffersView: View {
     private func offerRow(_ offer: JobOffer) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Image(systemName: offer.kind.iconName)
+                Image(systemName: offer.kind.iconName).accessibilityHidden(true)
                     .foregroundStyle(Color.accentColor)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(offer.teamName)
@@ -1150,7 +1159,7 @@ public struct SquadView: View {
             } label: {
                 HStack(spacing: 4) {
                     Text(club.tactics.formation.rawValue).font(.gfLabel(13))
-                    Image(systemName: "arrowtriangle.down.fill").font(.system(size: 7))
+                    Image(systemName: "arrowtriangle.down.fill").accessibilityHidden(true).font(.system(size: 7))
                 }
                 .foregroundStyle(Color.gfNight)
                 .padding(.horizontal, 12).padding(.vertical, 5)
@@ -1181,7 +1190,7 @@ public struct SquadView: View {
             } label: {
                 HStack {
                     GFSectionHeader(title: "Full Squad", icon: "person.3.fill")
-                    Image(systemName: "chevron.down")
+                    Image(systemName: "chevron.down").accessibilityHidden(true)
                         .rotationEffect(.degrees(showFullSquad ? 0 : -90))
                         .foregroundStyle(.secondary)
                 }
@@ -1231,7 +1240,7 @@ public struct SquadView: View {
                         Text(player.contract?.yearsRemaining == 0 ? "Expiring" : "1 year")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                        Image(systemName: "chevron.right").accessibilityHidden(true).font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
                 .buttonStyle(.plain)
@@ -1257,7 +1266,7 @@ public struct SquadView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                            Image(systemName: "chevron.right").accessibilityHidden(true).font(.caption2).foregroundStyle(.tertiary)
                         }
                     }
                     .buttonStyle(.plain)
@@ -1555,7 +1564,7 @@ public struct TrainingView: View {
                     ForEach(TrainingFocus.allCases) { focus in
                         Button { run(focus) } label: {
                             HStack(spacing: 12) {
-                                Image(systemName: focus.icon)
+                                Image(systemName: focus.icon).accessibilityHidden(true)
                                     .frame(width: 28)
                                     .foregroundStyle(Color.accentColor)
                                 VStack(alignment: .leading, spacing: 3) {
@@ -1563,7 +1572,7 @@ public struct TrainingView: View {
                                     Text(focus.detail).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Image(systemName: "chevron.right")
+                                Image(systemName: "chevron.right").accessibilityHidden(true)
                                     .font(.caption)
                                     .foregroundStyle(.tertiary)
                             }
@@ -1591,7 +1600,7 @@ public struct TrainingView: View {
                                 }
                                 Spacer()
                                 if gameState.teamTalk == style {
-                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor)
+                                    Image(systemName: "checkmark.circle.fill").accessibilityHidden(true).foregroundStyle(Color.accentColor)
                                 }
                             }
                         }
@@ -1807,7 +1816,7 @@ public struct StandingsView: View {
         if let championId = cup.championClubId, let champion = gameState.club(withId: championId) {
             Section {
                 HStack(spacing: 10) {
-                    Image(systemName: "trophy.fill").foregroundStyle(Color.goldAccent)
+                    Image(systemName: "trophy.fill").accessibilityHidden(true).foregroundStyle(Color.goldAccent)
                     CrestView(club: champion, size: 26)
                     Text("\(champion.name) — \(cup.name) winners")
                         .font(.headline)
@@ -1879,7 +1888,7 @@ public struct StandingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Image(systemName: "chevron.up.chevron.down")
+                Image(systemName: "chevron.up.chevron.down").accessibilityHidden(true)
                     .foregroundStyle(.secondary)
             }
         }
@@ -2109,7 +2118,7 @@ public struct TransferHubView: View {
                                     .font(.subheadline.monospacedDigit())
                                     .fontWeight(.semibold)
                             }
-                            Text("\(record.fromClubName) → \(record.toClubName)")
+                            Text("\(record.fromClubName) to \(record.toClubName)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -2388,7 +2397,7 @@ public struct PlayerSearchView: View {
         } label: {
             HStack(spacing: 2) {
                 Text(title.uppercased()).font(.gfLabel(13))
-                if sortMode == mode { Image(systemName: "chevron.down").font(.caption2.weight(.bold)) }
+                if sortMode == mode { Image(systemName: "chevron.down").accessibilityHidden(true).font(.caption2.weight(.bold)) }
             }
             .foregroundStyle(sortMode == mode ? Color.white : Color.white.opacity(0.6))
         }
@@ -2421,7 +2430,7 @@ public struct PlayerSearchView: View {
             }
             Spacer(minLength: 4)
             if player.transferStatus == .transferListed {
-                Image(systemName: "tag.fill").font(.caption2).foregroundStyle(Color.gfBanner)
+                Image(systemName: "tag.fill").accessibilityHidden(true).font(.caption2).foregroundStyle(Color.gfBanner)
             }
             Text("\(player.age)")
                 .font(.gfLabel(14).monospacedDigit())
@@ -2584,7 +2593,7 @@ public struct PlayerSearchView: View {
                         Text(deal.player.uppercased()).font(.gfLabel(16))
                         HStack {
                             Text(deal.from.uppercased()).font(.gfLabel(13)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                            Image(systemName: "chevron.right").font(.caption.weight(.bold))
+                            Image(systemName: "chevron.right").accessibilityHidden(true).font(.caption.weight(.bold))
                             Text(deal.to.uppercased()).font(.gfLabel(13)).lineLimit(1).frame(maxWidth: .infinity, alignment: .trailing)
                         }
                         Text(deal.fee).font(.gfDisplay(20))
@@ -2659,7 +2668,7 @@ public struct MatchDayView: View {
             NavigationStack {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        Label("Changes here are for this match only. Your usual lineup returns after the final whistle.",
+                        Label("Your lineup stays as you set it. Substitutions made during a match are undone afterwards.",
                               systemImage: "info.circle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -2668,34 +2677,14 @@ public struct MatchDayView: View {
                     .padding()
                 }
                 .stadiumBackground()
-                .navigationTitle("Lineup for This Match")
+                .navigationTitle("Lineup")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Reset") {
-                            gameState.restoreUsualLineup()
-                            editingLineup = false
-                        }
-                    }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") {
-                            // Nothing changed: no one-off lineup to restore later.
-                            if gameState.matchOnlyLineupBackup == gameState.userClub?.tactics {
-                                gameState.keepMatchLineup()
-                            }
-                            editingLineup = false
-                        }
-                    }
-                    ToolbarItem(placement: .bottomBar) {
-                        Button("Keep as my usual lineup") {
-                            gameState.keepMatchLineup()
-                            editingLineup = false
-                        }
+                        Button("Done") { editingLineup = false }
                     }
                 }
-            }
-            .onAppear { gameState.beginMatchOnlyLineup() }
-        }
+            }        }
     }
 
     private func hero(fixture: Fixture, home: Club, away: Club) -> some View {
@@ -2802,9 +2791,6 @@ public struct MatchDayView: View {
     private var lineupCard: some View {
         if let club = gameState.userClub {
             VStack(spacing: 12) {
-                if gameState.hasMatchOnlyLineup {
-                    GFPill(text: "One-off lineup for this match", color: .orange, icon: "clock.arrow.circlepath")
-                }
                 teamSheet(club)
                 Button {
                     editingLineup = true
@@ -2813,7 +2799,7 @@ public struct MatchDayView: View {
                 }
                 .buttonStyle(.gfOutline)
                 .padding(.horizontal, 30)
-                .accessibilityHint("Change the side for this match only")
+                .accessibilityHint("Change your starting eleven and bench")
             }
         }
     }
@@ -3151,7 +3137,7 @@ extension PlayerDetailView {
         HStack {
             Text(title.uppercased()).font(.gfLabel(14)).foregroundStyle(.secondary)
             Spacer()
-            if let icon { Image(systemName: icon).font(.caption.weight(.bold)).foregroundStyle(tint) }
+            if let icon { Image(systemName: icon).accessibilityHidden(true).font(.caption.weight(.bold)).foregroundStyle(tint) }
             Text(value.uppercased()).font(.gfLabel(15)).foregroundStyle(tint == .white ? Color.white : tint)
         }
         .accessibilityElement(children: .ignore)
@@ -3458,7 +3444,7 @@ extension PlayerDetailView {
             HStack {
                 Text(title.uppercased()).font(.gfLabel(15))
                 Spacer()
-                Image(systemName: isOn ? "checkmark.square.fill" : "square")
+                Image(systemName: isOn ? "checkmark.square.fill" : "square").accessibilityHidden(true)
                     .font(.title3)
                     .foregroundStyle(isOn ? Color.gfMint : .white)
             }
@@ -3487,9 +3473,9 @@ extension PlayerDetailView {
                     Text("P").frame(width: 30)
                     // Keepers: clean sheets and goals conceded.
                     Text(isKeeper ? "CS" : "").frame(width: 30)
-                        .overlay { if !isKeeper { Image(systemName: "soccerball") } }
+                        .overlay { if !isKeeper { Image(systemName: "soccerball").accessibilityHidden(true) } }
                     Text(isKeeper ? "GA" : "").frame(width: 30)
-                        .overlay { if !isKeeper { Image(systemName: "shoe.fill") } }
+                        .overlay { if !isKeeper { Image(systemName: "shoe.fill").accessibilityHidden(true) } }
                     Image(systemName: "star.circle.fill").frame(width: 42)
                 }
                 .font(.gfLabel(13))
@@ -3535,7 +3521,7 @@ extension PlayerDetailView {
                 VStack(spacing: 6) {
                     HStack {
                         Text(move.fromClubName.uppercased()).font(.gfLabel(14)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                        Image(systemName: "chevron.right").font(.caption.weight(.bold))
+                        Image(systemName: "chevron.right").accessibilityHidden(true).font(.caption.weight(.bold))
                         Text(move.toClubName.uppercased()).font(.gfLabel(14)).lineLimit(1).frame(maxWidth: .infinity, alignment: .trailing)
                     }
                     Text(move.isLoan ? "LOAN" : move.fee == 0 ? "FREE" : Player.formatCurrency(move.fee)).font(.gfDisplay(20))
@@ -4702,6 +4688,8 @@ public struct NegotiationView: View {
 public struct EuropeanCompetitionsView: View {
     @Environment(GameState.self) private var gameState
     @State private var selectedCompetition: EuropeanCompetition = .championsLeague
+    /// The matchweek whose results and fixtures are shown (nil = latest played).
+    @State private var selectedMatchweek: Int?
 
     private var competitionState: EuropeanCompetitionState? {
         gameState.europeanCompetitions.first { $0.competition == selectedCompetition }
@@ -4723,7 +4711,7 @@ public struct EuropeanCompetitionsView: View {
                 Section(header: Text(state.competition.displayName)) {
                     if state.stage == .complete, let champ = state.championClubId {
                         HStack {
-                            Image(systemName: "trophy.fill").foregroundStyle(.yellow)
+                            Image(systemName: "trophy.fill").accessibilityHidden(true).foregroundStyle(.yellow)
                             Text("\(gameState.club(withId: champ)?.name ?? "Champion") — Champions")
                                 .fontWeight(.semibold)
                         }
@@ -4749,13 +4737,19 @@ public struct EuropeanCompetitionsView: View {
                                 .font(.subheadline)
                                 .fontWeight(club?.isUserClub == true ? .bold : .regular)
                             Spacer()
-                            Text("\(row.played)").font(.caption).frame(width: 26, alignment: .trailing)
-                            Text("\(row.goalDifference)").font(.caption).frame(width: 30, alignment: .trailing)
-                            Text("\(row.points)").font(.subheadline).fontWeight(.bold).frame(width: 32, alignment: .trailing)
+                            Text("\(row.played)").font(.caption).frame(width: 22, alignment: .trailing)
+                            Text("\(row.won)").font(.caption).frame(width: 20, alignment: .trailing)
+                            Text("\(row.drawn)").font(.caption).frame(width: 20, alignment: .trailing)
+                            Text("\(row.lost)").font(.caption).frame(width: 20, alignment: .trailing)
+                            Text("\(row.goalDifference)").font(.caption).frame(width: 28, alignment: .trailing)
+                            Text("\(row.points)").font(.subheadline).fontWeight(.bold).frame(width: 30, alignment: .trailing)
                         }
-                        .accessibilityElement(children: .combine)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(rank). \(club?.name ?? "Club"): played \(row.played), won \(row.won), drawn \(row.drawn), lost \(row.lost), goal difference \(row.goalDifference), \(row.points) points")
                     }
                 }
+
+                resultsSection(state)
 
                 if let userClubId = gameState.userClubId {
                     let userFixtures = state.fixtures
@@ -4790,13 +4784,51 @@ public struct EuropeanCompetitionsView: View {
             Text("#").frame(width: 24, alignment: .leading)
             Text("Club")
             Spacer()
-            Text("P").frame(width: 26, alignment: .trailing)
-            Text("GD").frame(width: 30, alignment: .trailing)
-            Text("Pts").frame(width: 32, alignment: .trailing)
+            Text("P").frame(width: 22, alignment: .trailing)
+            Text("W").frame(width: 20, alignment: .trailing)
+            Text("D").frame(width: 20, alignment: .trailing)
+            Text("L").frame(width: 20, alignment: .trailing)
+            Text("GD").frame(width: 28, alignment: .trailing)
+            Text("Pts").frame(width: 30, alignment: .trailing)
         }
         .font(.caption)
         .fontWeight(.bold)
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
+    }
+
+    /// Every match in one matchweek of the competition: results, or the
+    /// fixtures still to come, as for the domestic leagues.
+    @ViewBuilder
+    private func resultsSection(_ state: EuropeanCompetitionState) -> some View {
+        let weeks = Array(Set(state.fixtures.map(\.matchweek))).sorted()
+        if !weeks.isEmpty {
+            let latestPlayed = state.fixtures.filter(\.isPlayed).map(\.matchweek).max() ?? weeks[0]
+            let week = selectedMatchweek.flatMap { weeks.contains($0) ? $0 : nil } ?? latestPlayed
+            let games = state.fixtures.filter { $0.matchweek == week }
+            Section(header: Text("Results & Fixtures")) {
+                HStack {
+                    Button {
+                        if let i = weeks.firstIndex(of: week), i > 0 { selectedMatchweek = weeks[i - 1] }
+                    } label: { Image(systemName: "chevron.left") }
+                    .disabled(weeks.first == week)
+                    .accessibilityLabel("Previous matchweek")
+                    Spacer()
+                    Text("Matchweek \(week)\(games.first.map { " · \($0.stage)" } ?? "")")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Button {
+                        if let i = weeks.firstIndex(of: week), i < weeks.count - 1 { selectedMatchweek = weeks[i + 1] }
+                    } label: { Image(systemName: "chevron.right") }
+                    .disabled(weeks.last == week)
+                    .accessibilityLabel("Next matchweek")
+                }
+                .buttonStyle(.borderless)
+                ForEach(games) { fx in
+                    EuropeanFixtureRow(fixture: fx, competitionState: state)
+                }
+            }
+        }
     }
 }
 
@@ -4936,7 +4968,7 @@ public struct NewsFeedView: View {
                     } else if let id = post.clubId, let club = gameState.club(withId: id) {
                         CrestView(club: club, size: 46)
                     } else {
-                        Image(systemName: "person.crop.circle.fill").font(.largeTitle)
+                        Image(systemName: "person.crop.circle.fill").accessibilityHidden(true).font(.largeTitle)
                     }
                 }
                 .frame(width: 54)
@@ -5085,7 +5117,7 @@ public struct InternationalHubView: View {
                     }
                     if state.stage == .complete, let champId = state.championId {
                         HStack {
-                            Image(systemName: "trophy.fill").foregroundStyle(.yellow)
+                            Image(systemName: "trophy.fill").accessibilityHidden(true).foregroundStyle(.yellow)
                             Text("\(gameState.nationalTeam(withId: champId)?.name ?? "Champion") — Champions")
                                 .fontWeight(.semibold)
                         }
@@ -5222,7 +5254,7 @@ public struct YouthAcademyView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(scout.name)
                                     .font(.body)
-                                Text("Lead Scout • \(String(repeating: "★", count: scout.quality))")
+                                Text("Lead Scout • quality \(scout.quality) of 5")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }

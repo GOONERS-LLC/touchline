@@ -310,7 +310,7 @@ public struct Player: Codable, Identifiable, Hashable {
             let perDay = 3.5 + Double(attributes.stamina) * 0.025
             matchFitness = min(100.0, matchFitness + perDay * Double(days))
         }
-        sharpness = max(20.0, sharpness - 0.6 * Double(days))
+        sharpness = max(30.0, sharpness - 0.35 * Double(days))
     }
     
     public mutating func recoverFitness(amount: Double) {
@@ -341,36 +341,42 @@ public struct Player: Codable, Identifiable, Hashable {
     
     // MARK: - Currency Formatting Helper
     
+    /// An amount (held in pounds) in the currency of the user's league.
     public static func formatCurrency(_ amount: Int) -> String {
-        if amount >= 1_000_000 {
-            let millions = Double(amount) / 1_000_000.0
-            return String(format: "£%.1fM", millions)
-        } else if amount >= 1_000 {
-            let thousands = amount / 1_000
-            return "£\(thousands)K"
+        let c = Currency.active
+        let value = Double(amount) * c.rate
+        let sign = value < 0 ? "-" : ""
+        let v = abs(value)
+        if v >= 1_000_000_000 {
+            return sign + c.symbol + String(format: "%.2fB", v / 1_000_000_000)
+        } else if v >= 1_000_000 {
+            return sign + c.symbol + String(format: "%.1fM", v / 1_000_000)
+        } else if v >= 1_000 {
+            return sign + c.symbol + "\(Int(v / 1_000))K"
         } else {
-            return "£\(amount)"
+            return sign + c.symbol + "\(Int(v))"
         }
     }
 
-    /// A VoiceOver-friendly spoken currency, e.g. "96 million pounds".
+    /// A VoiceOver-friendly spoken amount, e.g. "96 million pounds".
     public static func spokenCurrency(_ amount: Int) -> String {
-        if amount >= 1_000_000 {
-            let millions = Double(amount) / 1_000_000.0
-            let rounded = (millions * 10).rounded() / 10
+        let c = Currency.active
+        let value = Double(amount) * c.rate
+        let sign = value < 0 ? "minus " : ""
+        let v = abs(value)
+        if v >= 1_000_000 {
+            let rounded = (v / 1_000_000 * 10).rounded() / 10
             if rounded == rounded.rounded() {
-                return "\(Int(rounded)) million pounds"
+                return "\(sign)\(Int(rounded)) million \(c.name)"
             }
-            return String(format: "%.1f million pounds", rounded)
-        } else if amount >= 1_000 {
-            let thousands = amount / 1_000
-            return "\(thousands) thousand pounds"
+            return sign + String(format: "%.1f million ", rounded) + c.name
+        } else if v >= 1_000 {
+            return "\(sign)\(Int(v / 1_000)) thousand \(c.name)"
         } else {
-            return "\(amount) pounds"
+            return "\(sign)\(Int(v)) \(c.name)"
         }
     }
-    
-    // MARK: - Valuation Calculation
+        // MARK: - Valuation Calculation
     
     public static func calculateMarketValue(overall: Int, potential: Int, age: Int, position: Position) -> Int {
         var baseValue: Double
@@ -1059,9 +1065,9 @@ extension Player {
         // training ground during the season, so the summer jump is smaller.)
         case ..<20: delta = Int.random(in: 0...3)
         case 20...22: delta = Int.random(in: 0...2)
-        case 23...25: delta = poor ? Int.random(in: -1...0) : Int.random(in: 0...2)
-        case 26...29: delta = poor ? Int.random(in: -1...0) : (good ? Int.random(in: 0...2) : Int.random(in: 0...1))
-        case 30...34: delta = poor ? Int.random(in: -2...(-1)) : (good ? Int.random(in: 0...1) : 0)
+        case 23...25: delta = poor ? 0 : Int.random(in: 0...2)
+        case 26...29: delta = poor ? Int.random(in: -1...0) : (good ? Int.random(in: 1...2) : Int.random(in: 0...1))
+        case 30...34: delta = poor ? Int.random(in: -1...0) : (good ? Int.random(in: 0...1) : 0)
         case 35...39: delta = Int.random(in: -3...(-1)) - (poor ? 1 : 0)
         default: delta = 0
         }
@@ -1114,7 +1120,7 @@ extension Player {
         let level = Double(max(1, min(5, trainingLevel)))
         let facilities = 0.4 + level * 0.2                     // 0.6 (level 1) to 1.4 (level 5)
         let recent = form.isEmpty ? 6.6 : form.reduce(0, +) / Double(form.count)
-        let formFactor = recent >= 7.3 ? 1.5 : recent >= 6.8 ? 1.0 : recent >= 6.3 ? 0.7 : 0.4
+        let formFactor = recent >= 7.3 ? 1.6 : recent >= 6.8 ? 1.1 : recent >= 6.3 ? 0.85 : 0.6
         let base: Double
         switch age {
         case ..<21: base = 0.22
@@ -1124,9 +1130,10 @@ extension Player {
         default: base = 0
         }
         var change = 0
-        if potential > overall && Double.random(in: 0..<1) < base * facilities * formFactor {
-            change = overall >= 85 && Double.random(in: 0..<1) < 0.5 ? 0 : 1
-        } else if !form.isEmpty && recent < 6.0 && age >= 28 && Double.random(in: 0..<1) < 0.08 {
+        // More gains, fewer losses: training rewards work more than it punishes.
+        if potential > overall && Double.random(in: 0..<1) < base * 1.4 * facilities * formFactor {
+            change = overall >= 85 && Double.random(in: 0..<1) < 0.35 ? 0 : 1
+        } else if !form.isEmpty && recent < 5.8 && age >= 30 && Double.random(in: 0..<1) < 0.04 {
             change = -1
         }
         guard change != 0 else { return 0 }
@@ -1164,7 +1171,9 @@ extension Player {
         let recent = form.suffix(3)
         if !recent.isEmpty {
             let avg = recent.reduce(0, +) / Double(recent.count)
-            r += max(-2.5, min(2.5, (avg - 6.7) * 1.6))
+            // Good form lifts a player more than bad form drags him down.
+            let swing = (avg - 6.7) * 1.6
+            r += swing >= 0 ? min(3, swing * 1.2) : max(-1.5, swing * 0.6)
         }
         switch morale {
         case .delighted: r += 1

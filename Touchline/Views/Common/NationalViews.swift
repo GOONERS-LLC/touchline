@@ -59,7 +59,7 @@ struct NationalSquadView: View {
             }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: picked ? "checkmark.circle.fill" : "circle")
+                Image(systemName: picked ? "checkmark.circle.fill" : "circle").accessibilityHidden(true)
                     .foregroundStyle(picked ? Color.gfMint : .secondary)
                 Text(player.primaryPosition.abbreviation)
                     .font(.caption.weight(.bold))

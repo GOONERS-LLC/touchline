@@ -85,7 +85,9 @@ extension GameState {
         if entry.player.primaryPosition == .GK { score += Double(s.cleanSheets) * 0.35 }
         if champions.contains(entry.club.id) { score += 4 }
         if weighLeague {
-            score += Double(entry.player.overall) * 0.15 + Double(entry.club.reputation) * 0.12
+            // The world awards lean on quality as well as the season: the
+            // best players in the world, not just the best statistics.
+            score += Double(entry.player.overall) * 0.6 + Double(entry.club.reputation) * 0.12
                 - Double(entry.club.leagueTier.level - 1) * 3
         }
         return score

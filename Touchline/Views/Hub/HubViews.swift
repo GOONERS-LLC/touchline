@@ -28,7 +28,7 @@ struct HubScreenModifier: ViewModifier {
                         gameState.currentScreen = .dashboard
                     } label: {
                         HStack(spacing: 3) {
-                            Image(systemName: "chevron.left")
+                            Image(systemName: "chevron.left").accessibilityHidden(true)
                             Text("Home")
                         }
                     }
@@ -51,7 +51,7 @@ struct HubTile: View {
 
     var body: some View {
         VStack(spacing: 4) {
-            Image(systemName: icon)
+            Image(systemName: icon).accessibilityHidden(true)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 24, height: 24)
@@ -207,7 +207,6 @@ public struct DashboardView: View {
                     HubGrid {
                         tile("Profile", "person.crop.circle", .managerProfile)
                         tile("News", "newspaper.fill", .news)
-                        tile("Nations", "flag.2.crossed.fill", .international)
                         tile("Jobs", "briefcase.fill", .jobOffers)
                         tile("Settings", "gearshape.fill", .settings)
                         tile("Menu", "house.fill", .mainMenu)
@@ -317,9 +316,9 @@ public struct DashboardView: View {
                 tile("Staff", "person.2.badge.gearshape.fill", .staff)
                 tile("Youth", "figure.and.child.holdinghands", .youthAcademy)
                 NavigationLink { ManagerStatusView() } label: { HubTile(title: "Board", icon: "building.columns.fill") }
-                if hasEurope { tile("Europe", "star.circle.fill", .europeanCompetitions) }
+                // Europe can be followed whether or not your club is in it.
+                if !gameState.europeanCompetitions.isEmpty { tile("Europe", "star.circle.fill", .europeanCompetitions) }
                 tile("History", "trophy.fill", .history)
-                tile("Nations", "flag.2.crossed.fill", .international)
                 tile("Profile", "person.crop.circle", .managerProfile)
             }
             Group {

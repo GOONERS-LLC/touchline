@@ -112,7 +112,7 @@ public struct MatchEngine {
         static let xgSpread = 0.95
         static let blockRate = 0.23
         /// Chance per player per minute of something going wrong physically.
-        static let injuryHazard = 0.00011
+        static let injuryHazard = 0.00009
         static let maxSubs = 5
         static let maxWindows = 3
     }

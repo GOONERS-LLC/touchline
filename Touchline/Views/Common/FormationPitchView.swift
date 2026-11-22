@@ -311,11 +311,11 @@ public struct PlayerPitchCard: View {
                     .foregroundStyle(ratingColor)
             }
             HStack(spacing: 4) {
-                Image(systemName: t.icon)
+                Image(systemName: t.icon).accessibilityHidden(true)
                     .font(.system(size: 11, weight: .black))
                     .foregroundStyle(t.color)
                 if player.isInjured || player.isSuspended {
-                    Image(systemName: player.isInjured ? "cross.case.fill" : "rectangle.portrait.fill")
+                    Image(systemName: player.isInjured ? "cross.case.fill" : "rectangle.portrait.fill").accessibilityHidden(true)
                         .font(.system(size: 10))
                         .foregroundStyle(.red)
                 }
@@ -444,7 +444,7 @@ public struct PlayerTokenView: View {
                         .shadow(color: .white.opacity(0.6), radius: 4)
                 }
                 if player.isInjured || player.isSuspended {
-                    Image(systemName: player.isInjured ? "cross.circle.fill" : "exclamationmark.circle.fill")
+                    Image(systemName: player.isInjured ? "cross.circle.fill" : "exclamationmark.circle.fill").accessibilityHidden(true)
                         .font(.system(size: 13))
                         .foregroundStyle(.white, .red)
                         .offset(x: 16, y: -15)

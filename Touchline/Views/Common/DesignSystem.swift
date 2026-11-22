@@ -45,7 +45,7 @@ struct GFSectionHeader<Trailing: View>: View {
     var body: some View {
         HStack(spacing: 8) {
             if let icon {
-                Image(systemName: icon)
+                Image(systemName: icon).accessibilityHidden(true)
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.white)
                     .frame(width: 26, height: 26)
@@ -106,7 +106,7 @@ struct GFPill: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            if let icon { Image(systemName: icon) }
+            if let icon { Image(systemName: icon).accessibilityHidden(true) }
             Text(text)
         }
         .font(.caption2.weight(.bold))
@@ -451,7 +451,7 @@ struct GFTile: View {
 
     var body: some View {
         VStack(spacing: 4) {
-            Image(systemName: icon)
+            Image(systemName: icon).accessibilityHidden(true)
                 .font(.system(size: 15, weight: .semibold))
                 .frame(width: 32, height: 32)
                 .background(Circle().fill(Color(hex: "E4573D").opacity(0.9)))
@@ -500,7 +500,7 @@ struct GFEventCard<Content: View>: View {
                         FaceView(seed: faceSeed, size: 52, style: .full)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     } else if let icon {
-                        Image(systemName: icon)
+                        Image(systemName: icon).accessibilityHidden(true)
                             .font(.system(size: 26, weight: .semibold))
                             .foregroundStyle(.white.opacity(0.9))
                             .frame(width: 40, height: 40)
@@ -547,7 +547,7 @@ struct GFAdvisorBubble: View {
             if let faceSeed {
                 FaceView(seed: faceSeed, size: 34)
             } else {
-                Image(systemName: "person.crop.circle.fill").font(.largeTitle)
+                Image(systemName: "person.crop.circle.fill").accessibilityHidden(true).font(.largeTitle)
             }
             Text(text)
                 .font(.subheadline.weight(.semibold))

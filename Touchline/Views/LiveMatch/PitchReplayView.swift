@@ -266,9 +266,9 @@ public struct LiveMatchView: View {
                             .transition(.scale(scale: 0.6).combined(with: .opacity))
                     }
                 }
-                .overlay {
-                    if let reason = touchline { touchlinePanel(reason: reason, home: home, away: away) }
-                }
+                // At half-time (or any stop) the tabs stay usable, so the
+                // manager can read the stats; the stop's options sit with the
+                // match controls at the bottom instead of a panel on top.
 
                 controls(fixture: fixture)
             } else {
@@ -471,7 +471,7 @@ public struct LiveMatchView: View {
                         Text("\(ev.minute)'")
                             .font(.caption.weight(.heavy).monospacedDigit())
                             .frame(width: 30, alignment: .leading)
-                        Image(systemName: ev.type.icon)
+                        Image(systemName: ev.type.icon).accessibilityHidden(true)
                             .foregroundStyle(isGoal ? Color.winGreen : ev.type == .redCard || ev.type == .secondYellow ? .red : ev.type == .yellowCard ? .yellow : ev.type == .injury ? .orange : .secondary)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(ev.shortText)
@@ -493,7 +493,39 @@ public struct LiveMatchView: View {
         .scrollContentBackground(.hidden)
     }
 
+    /// What a stop offers: why play stopped, changes, and carrying on.
+    @ViewBuilder
+    private var stopStrip: some View {
+        if let reason = touchline {
+            VStack(spacing: 8) {
+                if reason != "HALF-TIME" && reason != "TOUCHLINE" {
+                    Label(reason, systemImage: "cross.case.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                }
+                if manages {
+                    Text("\(reason == "HALF-TIME" ? "Half-time · " : "")Substitutions left: \(gameState.liveSubsRemaining) · Windows left: \(gameState.liveWindowsRemaining)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    HStack(spacing: 10) {
+                        Button("Lineup") { editingLineup = true }
+                            .buttonStyle(.gfOutline)
+                            .accessibilityHint("Make substitutions and change positions")
+                        Button("Tactics") { editingTactics = true }
+                            .buttonStyle(.gfOutline)
+                            .accessibilityHint("Change formation, mentality, pressing and more")
+                    }
+                }
+            }
+            .padding(.horizontal, 24)
+        }
+    }
+
     private func controls(fixture: Fixture) -> some View {
+        VStack(spacing: 10) {
+        stopStrip
         HStack(spacing: 10) {
             Menu {
                 ForEach(MatchSettings.Speed.allCases) { speed in
@@ -525,15 +557,20 @@ public struct LiveMatchView: View {
                 .accessibilityLabel("Changes: stop the match to make substitutions or change tactics")
             }
 
-            Button {
-                isPlaying ? stopTicker() : startTicker()
-            } label: {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .font(.title3.weight(.bold))
+            if let reason = touchline {
+                Button(minute == 45 && reason == "HALF-TIME" ? "Start Second Half" : "Resume") { resumePlay() }
+                    .buttonStyle(.gfPrimary)
+            } else {
+                Button {
+                    isPlaying ? stopTicker() : startTicker()
+                } label: {
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.title3.weight(.bold))
+                }
+                .buttonStyle(.gfPrimary)
+                .disabled(minute >= finalMinute && !inProgress)
+                .accessibilityLabel(isPlaying ? "Pause match" : "Play match")
             }
-            .buttonStyle(.gfPrimary)
-            .disabled((minute >= finalMinute && !inProgress) || touchline != nil)
-            .accessibilityLabel(isPlaying ? "Pause match" : "Play match")
 
             Button {
                 finish(fixture: fixture)
@@ -545,6 +582,7 @@ public struct LiveMatchView: View {
             .accessibilityLabel("Skip to full time")
         }
         .padding(.horizontal, 24)
+        }
     }
 
     /// Every event so far as a card: goals in the scorer's club colours,
@@ -565,7 +603,7 @@ public struct LiveMatchView: View {
                     let fill = isGoal ? Color(hex: club.primaryColor) : Color.white
                     let text = isGoal ? Color.readable(on: club.primaryColor) : Color.black
                     let marker = VStack(spacing: 2) {
-                        Image(systemName: ev.type.icon).font(.caption)
+                        Image(systemName: ev.type.icon).accessibilityHidden(true).font(.caption)
                         Text("\(ev.minute)'").font(.caption2.weight(.heavy).monospacedDigit())
                     }
                     .foregroundStyle(Color.gfNight)
@@ -672,7 +710,7 @@ public struct LiveMatchView: View {
                             .lineLimit(1)
                             .strikethrough(off.contains(player.id))
                         if hurt.contains(player.id) {
-                            Image(systemName: "cross.case.fill").font(.caption2).foregroundStyle(.orange)
+                            Image(systemName: "cross.case.fill").accessibilityHidden(true).font(.caption2).foregroundStyle(.orange)
                                 .accessibilityLabel("hurt")
                         }
                         if inProgress, let tired = fatigue[player.id] {

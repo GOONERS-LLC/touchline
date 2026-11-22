@@ -278,7 +278,7 @@ public struct Commentary {
         let pool = templates + CommentaryLines.atmosphereExtra(home: homeClub, away: awayClub, minute: minute,
                                                                homeGoals: homeGoals, awayGoals: awayGoals)
         let chosen = pool.randomElement()!
-        return ("● \(chosen)", chosen)
+        return (chosen, chosen)
     }
     
     // MARK: - Crowd Reactions

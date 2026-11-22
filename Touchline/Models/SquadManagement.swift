@@ -196,8 +196,13 @@ extension GameState {
     public var hasMatchOnlyLineup: Bool { matchOnlyLineupBackup != nil }
 
     /// Remembers the usual lineup before one-off changes for the next match.
+    /// Called at kick-off: remembers the lineup the manager picked, so the
+    /// substitutions made during the match are undone afterwards and his
+    /// eleven is back as he set it. (Lineup changes made before the match
+    /// used to be treated as one-off and reverted too, so lineups seemed to
+    /// change by themselves.)
     public func beginMatchOnlyLineup() {
-        guard matchOnlyLineupBackup == nil, let idx = userClubIndex else { return }
+        guard let idx = userClubIndex else { return }
         matchOnlyLineupBackup = clubs[idx].tactics
     }
 

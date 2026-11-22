@@ -177,7 +177,7 @@ struct LineupEditorView: View {
                 Spacer()
             }
             if players.isEmpty {
-                Text(title == "Bench" ? "No substitutes. Select a reserve and tap ↑ to add one." : "Everyone is in the matchday squad.")
+                Text(title == "Bench" ? "No substitutes. Select a reserve, then Add to bench." : "Everyone is in the matchday squad.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {

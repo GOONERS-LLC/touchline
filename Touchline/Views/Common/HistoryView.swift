@@ -69,7 +69,7 @@ struct HistoryView: View {
                     ForEach(grouped.keys.sorted { grouped[$0]!.count > grouped[$1]!.count }, id: \.self) { name in
                         let wins = grouped[name] ?? []
                         HStack(spacing: 14) {
-                            Image(systemName: icon(for: wins.first?.kind ?? .cup))
+                            Image(systemName: icon(for: wins.first?.kind ?? .cup)).accessibilityHidden(true)
                                 .font(.title2)
                                 .foregroundStyle(Color(hex: "D4AF37"))
                                 .frame(width: 34)
@@ -194,7 +194,7 @@ struct HistoryView: View {
                             }
                         }
                         Spacer()
-                        Image(systemName: icon(for: record.kind))
+                        Image(systemName: icon(for: record.kind)).accessibilityHidden(true)
                             .foregroundStyle(Color(hex: "D4AF37"))
                     }
                     .accessibilityElement(children: .combine)
@@ -245,7 +245,7 @@ struct HistoryView: View {
             ProgressView(value: Double(unlocked), total: Double(max(1, list.count)))
             ForEach(list, id: \.achievement.id) { entry in
                 HStack(spacing: 12) {
-                    Image(systemName: entry.achievement.icon)
+                    Image(systemName: entry.achievement.icon).accessibilityHidden(true)
                         .font(.title3)
                         .foregroundStyle(entry.unlockedOn != nil ? Color(hex: "D4AF37") : Color.secondary.opacity(0.4))
                         .frame(width: 32)
@@ -259,7 +259,7 @@ struct HistoryView: View {
                     if let date = entry.unlockedOn {
                         Text(date).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                     } else {
-                        Image(systemName: "lock.fill").font(.caption).foregroundStyle(.tertiary)
+                        Image(systemName: "lock.fill").accessibilityHidden(true).font(.caption).foregroundStyle(.tertiary)
                     }
                 }
                 .accessibilityElement(children: .combine)

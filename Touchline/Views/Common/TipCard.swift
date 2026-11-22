@@ -13,7 +13,7 @@ struct TipCard: View {
     var body: some View {
         if let tip = gameState.nextTip {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: tip.icon)
+                Image(systemName: tip.icon).accessibilityHidden(true)
                     .font(.title2)
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44)

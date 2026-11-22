@@ -34,7 +34,7 @@ extension GameState {
     /// The managed nation's next match that is due (dated today or earlier)
     /// and waiting to be played.
     public var dueInternationalMatch: (tournament: InternationalTournament.State, fixture: InternationalTournament.Fixture)? {
-        guard gameMode == .manageClub, let teamId = managedNationalTeamId else { return nil }
+        guard Self.internationalFootballEnabled, gameMode == .manageClub, let teamId = managedNationalTeamId else { return nil }
         let today = season.currentDate
         var best: (InternationalTournament.State, InternationalTournament.Fixture)?
         for tournament in internationalTournaments where tournament.stage != .complete {
