@@ -964,7 +964,26 @@ extension Player {
     ///
     /// Call after `age` has been incremented for the new season. `appearances`
     /// is last season's league appearance count.
-    public mutating func applySeasonalDevelopment(appearances: Int, trainingLevel: Int = 2) {
+    public mutating func applySeasonalDevelopment(appearances: Int, trainingLevel: Int = 2, averageRating: Double = 0) {
+        // Dynamic potential: a young player's ceiling moves with how he
+        // actually plays. A breakout season raises it; a season of poor
+        // displays lowers it.
+        if age <= 24 && appearances >= 10 && averageRating > 0 {
+            var shift = 0
+            switch averageRating {
+            case 7.6...: shift = Int.random(in: 2...5)
+            case 7.2..<7.6: shift = Int.random(in: 1...3)
+            case 6.9..<7.2: shift = Int.random(in: 0...1)
+            case 6.4..<6.9: shift = 0
+            case 6.0..<6.4: shift = -Int.random(in: 0...2)
+            default: shift = -Int.random(in: 1...3)
+            }
+            // Regulars earn more of a bump than squad players.
+            if shift > 0 && appearances >= 25 { shift += 1 }
+            // The very top is reserved for the very few.
+            if shift > 0 && potential >= 90 { shift = (shift + 1) / 2 }
+            potential = Swift.min(97, Swift.max(overall, potential + shift))
+        }
         let headroom = Swift.max(0, potential - overall)
         var delta: Int
         switch age {

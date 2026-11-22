@@ -26,9 +26,20 @@ public struct NewsItem: Codable, Identifiable, Hashable {
     /// the referenced offer so the inbox can present Accept / Reject / Counter.
     public var transferOfferId: UUID?
 
-    /// Whether this belongs in the manager's inbox. League-wide stories from
-    /// the Transfer Desk (big-money moves between other clubs) are news only.
-    public var isInboxMessage: Bool { sender != "Transfer Desk" }
+    /// Sender for stories about the wider football world (other clubs'
+    /// trophies, promotions, awards). They appear in News, not the inbox.
+    public static let newsDesk = "News Desk"
+    private static let newsOnlySenders: Set<String> = ["Transfer Desk", newsDesk, "Football News", "World Football Awards"]
+
+    /// Whether this belongs in the manager's inbox. Stories about the rest of
+    /// the football world (big-money moves between other clubs, who won
+    /// which league or cup, promotions, awards) are news only.
+    public var isInboxMessage: Bool {
+        if Self.newsOnlySenders.contains(sender) { return false }
+        // Older saves filed world stories under the default sender.
+        if sender == "Club News Desk" && [.award, .promotion, .relegation].contains(category) { return false }
+        return true
+    }
 
     public init(
         id: UUID = UUID(),
@@ -978,6 +989,13 @@ public final class GameState: Codable {
 
         // 6. Check if season has completed
         if season.isSeasonFinished && season.currentPhase != .endOfSeason {
+            // A calendar that ends before the European final (a datapack of
+            // short leagues) still finishes Europe before the summer.
+            var remaining = 20
+            while remaining > 0 && europeanCompetitions.contains(where: { $0.stage != .complete }) {
+                advanceEuropeanCompetitions(force: true)
+                remaining -= 1
+            }
             processEndOfSeason()
         }
     }
@@ -989,7 +1007,18 @@ public final class GameState: Codable {
     /// calendar: eight league-phase rounds from September to January, then the
     /// knockout play-off, round of 16, quarter-finals and semi-finals over two
     /// legs each, and the final in late spring.
-    static let europeanDomesticWeeks = [5, 7, 9, 11, 13, 15, 20, 22, 25, 26, 28, 29, 32, 33, 35, 36, 40]
+    ///
+    /// These are Saturdays of the season (Saturday 1 is early August): the
+    /// tie is played on the Tuesday after, and the round is settled at the
+    /// next calendar slot. (The list used to hold raw slot numbers, but slots
+    /// count Wednesdays too, so the final was played around Christmas.)
+    ///   league phase  mid-Sep, end Sep, mid-Oct, early Nov, late Nov,
+    ///                 early Dec, mid-Jan, late Jan
+    ///   play-off      mid and late Feb
+    ///   last 16       March;  quarter-finals  late Mar / early Apr
+    ///   semi-finals   mid and late April;  final  early May, the last week
+    static let europeanSaturdays = [6, 8, 11, 13, 16, 18, 23, 25, 28, 29, 31, 32, 34, 35, 36, 37, 39]
+    static let europeanDomesticWeeks = europeanSaturdays.map { SeasonCalendar.saturday($0) + 1 }
 
     /// Whether the end of the given domestic week plays a European round.
     func isEuropeanWeek(_ domesticWeek: Int) -> Bool {
@@ -1000,9 +1029,9 @@ public final class GameState: Codable {
             && europeanCompetitions.contains { $0.stage != .complete }
     }
 
-    public func advanceEuropeanCompetitions() {
+    public func advanceEuropeanCompetitions(force: Bool = false) {
         guard !europeanCompetitions.isEmpty else { return }
-        guard isEuropeanWeek(season.currentWeek) else { return }
+        guard force || isEuropeanWeek(season.currentWeek) else { return }
 
         europeanMatchweek += 1
         let week = europeanMatchweek
@@ -1050,7 +1079,8 @@ public final class GameState: Codable {
                 addNews(
                     headline: "\(clubName(for: champ)) Win the \(competition.competition.displayName)!",
                     body: "\(clubName(for: champ)) are crowned champions of Europe.",
-                    category: .award
+                    category: .award,
+                    sender: champ == userClubId ? "The Board" : NewsItem.newsDesk
                 )
                 if champ == userClubId { unlockOwnerMilestone(id: "cup_winner") }
             }
@@ -2022,7 +2052,7 @@ public final class GameState: Codable {
                         headline: "Giant-Killing! \(w.name) Stun \(l.name)",
                         body: "\(w.leagueTier.displayName) side \(w.name) have knocked \(l.name) out of the \(cup.name).",
                         category: .general,
-                        sender: "\(cup.name)"
+                        sender: w.id == userClubId || l.id == userClubId ? "\(cup.name)" : NewsItem.newsDesk
                     )
                 }
             }
@@ -2034,7 +2064,7 @@ public final class GameState: Codable {
                         headline: "\(clubName(for: champion)) Win the \(cup.name)!",
                         body: "\(clubName(for: champion)) lift the \(cup.name) after victory in the final.",
                         category: .award,
-                        sender: "\(cup.name)"
+                        sender: champion == userClubId ? "\(cup.name)" : NewsItem.newsDesk
                     )
                     if champion == userClubId {
                         unlockOwnerMilestone(id: "cup_winner")
@@ -2155,7 +2185,8 @@ public final class GameState: Codable {
                 addNews(
                     headline: "\(tournament.title) Kicks Off",
                     body: "\(tournament.participantIds.count) nations are in the \(tournament.title), running until \(tournament.endDate.map { Self.longDateText($0) } ?? "the final").",
-                    category: .general
+                    category: .general,
+                    sender: NewsItem.newsDesk
                 )
             }
             if tournament.stage == .complete, let championId = tournament.championId {
@@ -2163,7 +2194,8 @@ public final class GameState: Codable {
                 addNews(
                     headline: "\(name) Win the \(tournament.title)!",
                     body: "\(name) are crowned champions of the \(tournament.title).",
-                    category: .award
+                    category: .award,
+                    sender: championId == managedNationalTeamId ? "National Federation" : NewsItem.newsDesk
                 )
             }
             internationalTournaments[idx] = tournament
@@ -2618,13 +2650,13 @@ public final class GameState: Codable {
         // board's wage structure allows.
         let canAffordFee = isFreeAgent || resolvedFee <= buyer.finances.transferBudget
         let projectedWageBill = buyer.totalWeeklyWageBill + offeredWage
-        let canAffordWage = projectedWageBill <= buyer.finances.wageBudget
+        let canAffordWage = projectedWageBill <= wageCeiling(for: buyer)
         if !canAffordFee || !canAffordWage {
             offer.status = .rejected
             pendingTransferOffers.append(offer)
             let reason = !canAffordFee
                 ? "The transfer fee exceeded \(buyer.name)'s budget. Raise funds before bidding again."
-                : "The proposed wage of \(Player.formatCurrency(offeredWage))/w would take the weekly wage bill beyond the board's \(Player.formatCurrency(buyer.finances.wageBudget))/w limit."
+                : "The proposed wage of \(Player.formatCurrency(offeredWage))/w would take the weekly wage bill to \(Player.formatCurrency(projectedWageBill))/w, far beyond the board's recommended \(Player.formatCurrency(buyer.finances.wageBudget))/w. They will not sanction it."
             addNews(
                 headline: "Bid for \(player.fullName) Rejected",
                 body: reason,
@@ -2728,13 +2760,13 @@ public final class GameState: Codable {
             )
         }
 
+        // The wage budget is the board's guidance, not a wall: keeping your
+        // own players is always the manager's call.
         let projectedBill = clubs[clubIdx].totalWeeklyWageBill - currentContract.wage + wage
-        guard projectedBill <= clubs[clubIdx].finances.wageBudget else {
-            return ContractRenewalResult(
-                accepted: false,
-                message: "The board cannot approve this deal. It would take the weekly wage bill to \(Player.formatCurrency(projectedBill)), above the \(Player.formatCurrency(clubs[clubIdx].finances.wageBudget))/w limit."
-            )
-        }
+        let recommended = clubs[clubIdx].finances.wageBudget
+        let budgetNote = projectedBill > recommended
+            ? " The wage bill is now \(Player.formatCurrency(projectedBill))/w, above the board's recommended \(Player.formatCurrency(recommended))/w."
+            : ""
 
         var updated = currentContract
         updated.wage = wage
@@ -2752,8 +2784,15 @@ public final class GameState: Codable {
 
         return ContractRenewalResult(
             accepted: true,
-            message: "\(player.fullName) has signed a new \(years)-year contract at \(Player.formatCurrency(wage))/w."
+            message: "\(player.fullName) has signed a new \(years)-year contract at \(Player.formatCurrency(wage))/w.\(budgetNote)"
         )
+    }
+
+    /// The wage budget is a recommendation for the user's club, set by its
+    /// stature and income. The board only steps in when a new signing would
+    /// take the bill half as high again; AI clubs stick to the figure.
+    func wageCeiling(for club: Club) -> Int {
+        club.isUserClub ? Int(Double(club.finances.wageBudget) * 1.5) : club.finances.wageBudget
     }
 
     /// Resolves every live transfer negotiation one step: selling clubs evaluate
@@ -3333,7 +3372,7 @@ public final class GameState: Codable {
         // whole deal again at the moment of completion.
         let buyer = clubs[buyerIdx]
         guard fee <= buyer.finances.transferBudget else { return false }
-        guard buyer.totalWeeklyWageBill + wage <= buyer.finances.wageBudget else { return false }
+        guard buyer.totalWeeklyWageBill + wage <= wageCeiling(for: buyer) else { return false }
 
         var signed = player
         signed.transferStatus = nil
@@ -3492,7 +3531,92 @@ public final class GameState: Codable {
             }
         }
 
+        signNotableFreeAgents()
         processAIMarket()
+    }
+
+    /// Good unattached players do not sit on the market for long. Each week
+    /// the best free agents are picked up by the biggest club they would walk
+    /// into the side at; the better the player, the sooner he finds a club.
+    /// (Before, AI clubs only took a random free agent when their squad was
+    /// thin, so a released 90-rated centre-back could go unsigned for years.)
+    private func signNotableFreeAgents() {
+        guard !freeAgents.isEmpty else { return }
+        let ranked = freeAgents.sorted { $0.overall > $1.overall }.prefix(30)
+        let eliteClubs = Array(clubs.indices.sorted { clubs[$0].reputation > clubs[$1].reputation }.prefix(60))
+        var moves = 0
+        for agent in ranked where moves < 8 {
+            // Weaker players wait longer; veterans longer still.
+            var chance: Double
+            switch agent.overall {
+            case 80...: chance = 0.7
+            case 74..<80: chance = 0.45
+            case 68..<74: chance = 0.22
+            case 62..<68: chance = 0.1
+            default: chance = 0.03
+            }
+            if agent.age >= 34 { chance *= 0.4 } else if agent.age >= 32 { chance *= 0.7 }
+            guard Double.random(in: 0..<1) < chance else { continue }
+
+            let category = agent.primaryPosition.category
+            // A player without a fee is easier to fit in: boards stretch the
+            // wage budget a little for him.
+            var candidates: [(idx: Int, wage: Int)] = []
+            let scouted = Set(eliteClubs + Array(clubs.indices.shuffled().prefix(80)))
+            for idx in scouted {
+                let club = clubs[idx]
+                if club.isUserClub || club.players.count >= 28 { continue }
+                let starters = club.startingXIPlayers.filter { $0.primaryPosition.category == category }
+                guard let weakest = starters.min(by: { $0.overall < $1.overall }),
+                      agent.overall >= weakest.overall + 2 else { continue }
+                // Unattached for a while, he settles for a little below market.
+                let wage = max(500, Int(Double(Player.calculateWage(overall: agent.overall, age: agent.age, tier: club.leagueTier)) * 0.9))
+                guard club.totalWeeklyWageBill + wage <= Int(Double(club.finances.wageBudget) * 1.15),
+                      club.finances.balance > wage * 26 else { continue }
+                candidates.append((idx, wage))
+            }
+            // He joins one of the biggest clubs that want him.
+            guard let pick = candidates.sorted(by: { clubs[$0.idx].reputation > clubs[$1.idx].reputation }).prefix(3).randomElement(),
+                  let agentIdx = freeAgents.firstIndex(where: { $0.id == agent.id }) else { continue }
+            var signed = freeAgents.remove(at: agentIdx)
+            signed.transferStatus = nil
+            signed.contract = Contract(wage: pick.wage,
+                                       yearsRemaining: signed.age >= 31 ? 1 : Int.random(in: 2...4),
+                                       signingDate: season.currentDate)
+            clubs[pick.idx].addPlayer(signed)
+            // Make room by letting the weakest squad player go.
+            if clubs[pick.idx].players.count > 27,
+               let surplus = clubs[pick.idx].players
+                .filter({ !$0.isOnLoan && $0.id != signed.id && !clubs[pick.idx].tactics.startingXI.contains($0.id) })
+                .min(by: { $0.overall < $1.overall }),
+               var released = clubs[pick.idx].removePlayer(withId: surplus.id) {
+                released.contract = nil
+                freeAgents.append(released)
+            }
+            clubs[pick.idx].finances.currentWageBill = clubs[pick.idx].totalWeeklyWageBill
+            clubs[pick.idx].ensureTacticalIntegrity()
+            transferHistory.append(
+                TransferRecord(
+                    playerId: signed.id,
+                    playerName: signed.fullName,
+                    fromClubId: UUID(),
+                    fromClubName: "Free Agent",
+                    toClubId: clubs[pick.idx].id,
+                    toClubName: clubs[pick.idx].name,
+                    fee: 0,
+                    date: season.currentDate
+                )
+            )
+            if signed.overall >= 75 && isNewsworthy(clubs[pick.idx].leagueTier) {
+                addNews(
+                    headline: "\(clubs[pick.idx].name) Sign \(signed.fullName) on a Free",
+                    body: "Free agent \(signed.fullName) (\(signed.primaryPosition.displayName), \(signed.overall)) has joined \(clubs[pick.idx].name) on a \(signed.contract?.yearsRemaining ?? 1)-year deal.",
+                    category: .transfer,
+                    sender: "Transfer Desk"
+                )
+            }
+            moves += 1
+        }
     }
 
     /// The AI transfer market. While a window is open, clubs with money to
@@ -4252,10 +4376,13 @@ public final class GameState: Codable {
         
         // Reset player seasonal match statistics and roll contracts forward.
         var renewedUserContracts: [String] = []
+        var potentialChanges: [(name: String, change: Int)] = []
         for cIdx in 0..<clubs.count {
             clubs[cIdx].seasonResults = []
             for pIdx in 0..<clubs[cIdx].players.count {
                 let appearances = clubs[cIdx].players[pIdx].seasonStats.appearances
+                let averageRating = clubs[cIdx].players[pIdx].seasonStats.averageRating
+                let potentialBefore = clubs[cIdx].players[pIdx].potential
                 clubs[cIdx].players[pIdx].seasonStats = SeasonStats()
                 clubs[cIdx].players[pIdx].yellowCards = 0
                 // Players age one year each summer. Preseason rest clears injuries
@@ -4264,7 +4391,12 @@ public final class GameState: Codable {
                 clubs[cIdx].players[pIdx].age += 1
                 // Young players develop, veterans decline; values are re-rated.
                 clubs[cIdx].players[pIdx].applySeasonalDevelopment(appearances: appearances,
-                                                                    trainingLevel: clubs[cIdx].trainingFacilityLevel)
+                                                                    trainingLevel: clubs[cIdx].trainingFacilityLevel,
+                                                                    averageRating: averageRating)
+                if clubs[cIdx].isUserClub && clubs[cIdx].players[pIdx].age <= 25 {
+                    let change = clubs[cIdx].players[pIdx].potential - potentialBefore
+                    if change >= 2 || change <= -2 { potentialChanges.append((clubs[cIdx].players[pIdx].fullName, change)) }
+                }
                 // The summer (about ten weeks) heals most injuries, but a
                 // long-term one carries into the new season.
                 clubs[cIdx].players[pIdx].matchFitness = 100.0
@@ -4323,6 +4455,24 @@ public final class GameState: Codable {
                 body: "\(names)\(remainder) left the club when \(departedUserPlayers.count == 1 ? "his contract" : "their contracts") expired.",
                 category: .contractExpiry,
                 sender: "Club Secretary"
+            )
+        }
+
+        if !potentialChanges.isEmpty {
+            let risers = potentialChanges.filter { $0.change > 0 }.sorted { $0.change > $1.change }
+            let fallers = potentialChanges.filter { $0.change < 0 }.sorted { $0.change < $1.change }
+            var lines: [String] = []
+            if !risers.isEmpty {
+                lines.append("Rising: " + risers.prefix(5).map { "\($0.name) (+\($0.change))" }.joined(separator: ", ") + ".")
+            }
+            if !fallers.isEmpty {
+                lines.append("Falling: " + fallers.prefix(5).map { "\($0.name) (\($0.change))" }.joined(separator: ", ") + ".")
+            }
+            addNews(
+                headline: "Scouts Revise Potential Ratings",
+                body: "After last season's performances the staff have reassessed our young players' ceilings. " + lines.joined(separator: " "),
+                category: .general,
+                sender: "Head of Youth Development"
             )
         }
 
@@ -4722,7 +4872,8 @@ public final class GameState: Codable {
                         addNews(
                             headline: "\(clubName(for: winner.clubId)) Win the \(tier.displayName) Play-Off Final!",
                             body: "\(clubName(for: winner.clubId)) have secured promotion via the play-offs.",
-                            category: .promotion
+                            category: .promotion,
+                            sender: winner.clubId == userClubId ? "The Board" : NewsItem.newsDesk
                         )
                     }
                 }
@@ -4752,7 +4903,8 @@ public final class GameState: Codable {
                 addNews(
                     headline: "\(clubName(for: clubId)) Promoted to the \(toTier.displayName)!",
                     body: "\(clubName(for: clubId)) finish in the automatic promotion places and go up.",
-                    category: .promotion
+                    category: .promotion,
+                    sender: clubId == userClubId ? "The Board" : NewsItem.newsDesk
                 )
             }
         }
@@ -4772,7 +4924,8 @@ public final class GameState: Codable {
                 addNews(
                     headline: "\(clubName(for: clubId)) Relegated to the \(toTier.displayName)",
                     body: "\(clubName(for: clubId)) drop down to the \(toTier.displayName) for next season.",
-                    category: .relegation
+                    category: .relegation,
+                    sender: clubId == userClubId ? "The Board" : NewsItem.newsDesk
                 )
             }
         }
@@ -4853,7 +5006,8 @@ public final class GameState: Codable {
             addNews(
                 headline: "\(clubName(for: champion.clubId)) Crowned \(tier.displayName) Champions!",
                 body: "\(clubName(for: champion.clubId)) finish top of the table with \(champion.points) points.",
-                category: .award
+                category: .award,
+                sender: champion.clubId == userClubId ? "The Board" : NewsItem.newsDesk
             )
         }
         
@@ -4881,7 +5035,8 @@ public final class GameState: Codable {
         addNews(
             headline: "Season \(season.year) Concludes!",
             body: "The final standings have been locked. Congratulations to all champions and promoted clubs. Tap 'Start New Season' on the Home screen to begin the next campaign.",
-            category: .award
+            category: .general,
+            sender: "Club Secretary"
         )
     }
     
@@ -5126,7 +5281,7 @@ public final class GameState: Codable {
                     headline: "\(league.name) Golden Boot: \(scorer.player.fullName)",
                     body: "\(scorer.player.fullName) of \(scorer.club.name) finishes as the \(league.name)'s top scorer with \(scorer.player.seasonStats.goals) goals.",
                     category: .award,
-                    sender: league.name
+                    sender: scorer.club.id == userClubId ? league.name : NewsItem.newsDesk
                 )
             }
             let regulars = squad.filter { $0.player.seasonStats.appearances >= 15 }
@@ -5136,7 +5291,7 @@ public final class GameState: Codable {
                     headline: "\(league.name) Player of the Season: \(best.player.fullName)",
                     body: "\(best.club.name)'s \(best.player.fullName) is named Player of the Season after averaging \(String(format: "%.2f", stats.averageRating)) across \(stats.appearances) games, with \(stats.goals) goals and \(stats.assists) assists.",
                     category: .award,
-                    sender: league.name
+                    sender: best.club.id == userClubId ? league.name : NewsItem.newsDesk
                 )
             }
         }

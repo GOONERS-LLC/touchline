@@ -200,8 +200,8 @@ extension GameState {
             return .refused("The \(Player.formatCurrency(fee)) loan fee is beyond your transfer budget.")
         }
         let weekly = player.wage * share / 100
-        guard borrower.totalWeeklyWageBill + weekly <= borrower.finances.wageBudget else {
-            return .refused("Covering \(share)% of his wages (\(Player.formatCurrency(weekly))/w) would break your wage budget.")
+        guard borrower.totalWeeklyWageBill + weekly <= wageCeiling(for: borrower) else {
+            return .refused("Covering \(share)% of his wages (\(Player.formatCurrency(weekly))/w) would take the wage bill far beyond the board's recommendation.")
         }
         let purchaseFee = loanPurchaseFee(for: player, terms: terms)
         if terms == .obligation, let purchaseFee, purchaseFee > borrower.finances.balance + borrower.finances.transferBudget {

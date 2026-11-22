@@ -67,7 +67,9 @@ public struct InjuryEngine {
         case .low: risk *= 0.9
         }
         if carryingKnock { risk *= 1.8 }
-        return risk
+        // The factors overlap (an old, unfit, tired player is one risk, not
+        // five stacked ones); uncapped, a tired squad broke down in clusters.
+        return min(risk, 3.5)
     }
 
     /// How bad it is. About two in five are knocks he runs off.
@@ -76,26 +78,42 @@ public struct InjuryEngine {
         if roll < (contact ? 0.55 : 0.40) { return .knock }
         let injury = severity(contact: contact, player: player)
         // A minor strain or dead leg can be played through for a while.
-        if injury.daysRemaining <= 10 && Double.random(in: 0..<1) < 0.45 {
+        if injury.daysRemaining <= 7 && Double.random(in: 0..<1) < 0.45 {
             return .playsOn(injury)
         }
         return .forcedOff(injury)
     }
 
     /// A time-loss injury, roughly in elite football's proportions: about a
-    /// third out for under a week, most of the rest one to four weeks, about
-    /// one in ten over a month, and a few season-threatening.
+    /// third out for under a week, most of the rest one to six weeks, about
+    /// one in eight two months or more, and a few season-threatening.
+    /// Contact brings sprains, ligament damage and fractures; non-contact
+    /// injuries are mostly muscular.
     static func severity(contact: Bool, player: Player) -> Injury {
         let roll = Double.random(in: 0..<100)
         let type: InjuryType
-        switch roll {
-        case ..<34: type = .minorKnock                       // bruising, dead leg: days
-        case ..<58: type = contact ? .ankleLigament : .muscleStrain
-        case ..<78: type = contact ? .muscleStrain : .hamstring
-        case ..<90: type = contact ? .ankleLigament : .hamstring
-        case ..<95.5: type = contact ? .brokenBone : .kneeInjury
-        case ..<98.5: type = .kneeInjury
-        default: type = .aclTear
+        if contact {
+            switch roll {
+            case ..<32: type = .minorKnock                   // bruising, dead leg: days
+            case ..<56: type = .ankleSprain
+            case ..<70: type = .muscleStrain
+            case ..<78: type = .calfStrain
+            case ..<88: type = .ankleLigament
+            case ..<94: type = .brokenBone
+            case ..<98.5: type = .kneeInjury
+            default: type = .aclTear
+            }
+        } else {
+            switch roll {
+            case ..<28: type = .minorKnock                   // tightness, cramp: days
+            case ..<50: type = .muscleStrain
+            case ..<62: type = .calfStrain
+            case ..<84: type = .hamstring
+            case ..<90: type = .ankleSprain
+            case ..<96: type = .kneeInjury
+            case ..<98.8: type = .ankleLigament
+            default: type = .aclTear
+            }
         }
         let range = type.recoveryDaysRange
         var days = Int.random(in: range.lowerBound...range.upperBound)
@@ -111,14 +129,19 @@ public struct InjuryEngine {
     /// injury-prone players most of all. Better medical facilities help.
     public static func trainingInjury(player: Player, medicalLevel: Int, days: Int = 7) -> Injury? {
         guard player.injury == nil else { return nil }
-        var chance = 0.0045 * Double(days) / 7.0
+        var chance = 0.003 * Double(days) / 7.0
         chance *= proneness(of: player)
         if player.matchFitness < 60 { chance *= 1.6 }
         if player.age >= 32 { chance *= 1.4 }
         chance *= 1.2 - Double(max(1, min(5, medicalLevel))) * 0.08
         guard Double.random(in: 0..<1) < chance else { return nil }
         let roll = Double.random(in: 0..<1)
-        let type: InjuryType = roll < 0.45 ? .minorKnock : roll < 0.8 ? .muscleStrain : roll < 0.96 ? .hamstring : .ankleLigament
+        let type: InjuryType = roll < 0.45 ? .minorKnock
+            : roll < 0.7 ? .muscleStrain
+            : roll < 0.82 ? .calfStrain
+            : roll < 0.94 ? .hamstring
+            : roll < 0.98 ? .ankleSprain
+            : .ankleLigament
         let range = type.recoveryDaysRange
         return Injury(type: type, days: Int.random(in: range.lowerBound...range.upperBound))
     }

@@ -194,13 +194,17 @@ public enum InjuryType: String, Codable, CaseIterable, Identifiable, Hashable {
     case kneeInjury
     case aclTear
     case brokenBone
-    
+    case ankleSprain
+    case calfStrain
+
     public var id: String { rawValue }
-    
+
     public var displayName: String {
         switch self {
         case .minorKnock: return "Minor Knock"
-        case .muscleStrain: return "Muscle Strain"
+        case .ankleSprain: return "Sprained Ankle"
+        case .calfStrain: return "Calf Strain"
+        case .muscleStrain: return "Thigh Strain"
         case .hamstring: return "Hamstring Injury"
         case .ankleLigament: return "Ankle Ligament Damage"
         case .kneeInjury: return "Knee Injury"
@@ -213,24 +217,30 @@ public enum InjuryType: String, Codable, CaseIterable, Identifiable, Hashable {
     public var recoveryWeeksRange: ClosedRange<Int> {
         switch self {
         case .minorKnock: return 0...1
-        case .muscleStrain: return 1...2
-        case .hamstring: return 2...6
-        case .ankleLigament: return 4...8
-        case .kneeInjury: return 8...24
-        case .aclTear: return 24...36
-        case .brokenBone: return 8...16
+        case .ankleSprain: return 1...3
+        case .calfStrain: return 2...4
+        case .muscleStrain: return 2...4
+        case .hamstring: return 2...7
+        case .ankleLigament: return 5...13
+        case .kneeInjury: return 5...17
+        case .aclTear: return 30...43
+        case .brokenBone: return 6...14
         }
     }
-    
-    /// Days out, as typically seen in professional football.
+
+    /// Days out, as typically seen in professional football: a sprained
+    /// ankle one to three weeks, torn ankle ligaments two to three months,
+    /// a cruciate the best part of a year.
     public var recoveryDaysRange: ClosedRange<Int> {
         switch self {
-        case .minorKnock: return 2...6
-        case .muscleStrain: return 7...21
-        case .hamstring: return 12...42
-        case .ankleLigament: return 10...56
-        case .kneeInjury: return 28...120
-        case .aclTear: return 200...300
+        case .minorKnock: return 1...6
+        case .ankleSprain: return 8...24
+        case .calfStrain: return 12...30
+        case .muscleStrain: return 12...28
+        case .hamstring: return 16...49
+        case .ankleLigament: return 40...90
+        case .kneeInjury: return 35...120
+        case .aclTear: return 210...300
         case .brokenBone: return 42...100
         }
     }
@@ -243,8 +253,8 @@ public enum InjuryType: String, Codable, CaseIterable, Identifiable, Hashable {
     public var iconName: String {
         switch self {
         case .minorKnock: return "bandage"
-        case .muscleStrain, .hamstring: return "figure.walk"
-        case .ankleLigament, .kneeInjury: return "cross.fill"
+        case .muscleStrain, .hamstring, .calfStrain: return "figure.walk"
+        case .ankleSprain, .ankleLigament, .kneeInjury: return "cross.fill"
         case .aclTear, .brokenBone: return "cross.case.fill"
         }
     }

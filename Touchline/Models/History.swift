@@ -198,7 +198,7 @@ extension GameState {
                 headline: "\(award): \(entry.player.fullName)",
                 body: "\(entry.player.fullName) of \(entry.club.name) wins the \(award) for \(year). \(record.detail).",
                 category: .award,
-                sender: "World Football Awards"
+                sender: entry.club.id == userClubId ? "Awards Committee" : "World Football Awards"
             )
         }
         give("World Player of the Year", pool.max { score($0) < score($1) }) {

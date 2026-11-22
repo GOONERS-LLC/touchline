@@ -105,7 +105,7 @@ public struct MatchEngine {
         static let xgSpread = 0.95
         static let blockRate = 0.23
         /// Chance per player per minute of something going wrong physically.
-        static let injuryHazard = 0.00026
+        static let injuryHazard = 0.00017
         static let maxSubs = 5
         static let maxWindows = 3
     }
@@ -1203,7 +1203,7 @@ public struct MatchEngine {
         side.active[foulerIdx].currentRating -= 0.05
 
         // Some fouls hurt the man fouled.
-        if Double.random(in: 0..<1) < 0.012 + Double(config.derbyIntensity) * 0.004 {
+        if Double.random(in: 0..<1) < 0.008 + Double(config.derbyIntensity) * 0.003 {
             var victimSide = defendingIsHome ? state.away : state.home
             let victims = victimSide.active.indices.filter { victimSide.active[$0].isOnPitch && victimSide.active[$0].slot != .GK }
             if let v = victims.randomElement() {

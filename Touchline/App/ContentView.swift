@@ -4140,7 +4140,7 @@ public struct FinancesView: View {
                 Section(header: Text("Bank")) {
                     row("Balance", Player.formatCurrency(f.balance), spoken: Player.spokenCurrency(f.balance))
                     row("Transfer Budget", Player.formatCurrency(f.transferBudget), spoken: Player.spokenCurrency(f.transferBudget))
-                    row("Weekly Wage Budget", Player.formatCurrency(f.wageBudget) + "/w", spoken: Player.spokenCurrency(f.wageBudget) + " per week")
+                    row("Recommended Wage Budget", Player.formatCurrency(f.wageBudget) + "/w", spoken: Player.spokenCurrency(f.wageBudget) + " per week")
                     row("Current Wage Bill", Player.formatCurrency(f.currentWageBill) + "/w", spoken: Player.spokenCurrency(f.currentWageBill) + " per week")
                     row("Wage Headroom", Player.formatCurrency(f.weeklyWageSurplus) + "/w", spoken: Player.spokenCurrency(f.weeklyWageSurplus) + " per week")
                 }

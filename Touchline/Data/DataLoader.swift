@@ -657,8 +657,14 @@ public final class DataLoader {
             let variance = Int.random(in: -3...4)
             let overall = max(35, min(70, base + variance))
             // Potential scales with youth-development investment, scouting and youth.
-            let potBonus = Int.random(in: 6...18) + (club.youthAcademyLevel - 2) * 3 + max(0, scoutBonus)
-            let potential = max(overall + 5, min(88, overall + potBonus))
+            var potBonus = Int.random(in: 6...18) + (club.youthAcademyLevel - 2) * 3 + max(0, scoutBonus)
+            // Now and then an academy turns up a real gem; the best academies
+            // and the biggest clubs find them more often.
+            let gemChance = 0.02 + Double(max(0, club.youthAcademyLevel - 1)) * 0.015 + Double(max(0, club.reputation - 70)) * 0.002
+            if Double.random(in: 0..<1) < gemChance { potBonus += Int.random(in: 8...16) }
+            // The ceiling rises with the academy: about 82 at level 1, 94 at level 5.
+            let ceiling = min(95, 79 + club.youthAcademyLevel * 3)
+            let potential = max(overall + 5, min(ceiling, overall + potBonus))
 
             let attrs = generateAttributes(overall: overall, position: pos)
             // Academies are mostly local, with some overseas recruits.
