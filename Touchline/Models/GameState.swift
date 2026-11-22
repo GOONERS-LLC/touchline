@@ -987,6 +987,9 @@ public final class GameState: Codable {
         reviewFanPressureOnManager()
         checkOwnerWeeklyAchievements()
 
+        // 5d. Promotion play-offs follow the last league round, as real matches.
+        progressLeaguePlayOffs()
+
         // 6. Check if season has completed
         if season.isSeasonFinished && season.currentPhase != .endOfSeason {
             // A calendar that ends before the European final (a datapack of
@@ -1108,7 +1111,7 @@ public final class GameState: Codable {
         for player in homeClub.players + awayClub.players {
             discipline[player.id] = (player.suspendedMatches, player.yellowCards)
         }
-        let config = MatchEngine.SimulationConfig(
+        var config = MatchEngine.SimulationConfig(
             neutralVenue: false,
             matchWeek: week,
             competition: competition,
@@ -1118,6 +1121,18 @@ public final class GameState: Codable {
             homeCoachingMultiplier: coachingMultiplier(for: home),
             awayCoachingMultiplier: coachingMultiplier(for: away)
         )
+        // A second leg level on aggregate goes to extra time and penalties
+        // (the final, a single match, is a knockout too).
+        if let tie = europeanTie(home: home, away: away, week: week) {
+            if let carry = europeanSecondLegCarry(tieId: tie.id) {
+                config.isKnockout = true
+                config.isSecondLeg = true
+                config.homeAggregateCarry = carry.home
+                config.awayAggregateCarry = carry.away
+            } else if tie.stage == "Final" {
+                config.isKnockout = true
+            }
+        }
         let result = MatchEngine.simulateFullMatch(home: &homeClub, away: &awayClub, config: config)
         for club in [homeClub, awayClub] {
             var updated = club
@@ -1132,6 +1147,31 @@ public final class GameState: Codable {
             if let i = clubs.firstIndex(where: { $0.id == updated.id }) { clubs[i] = updated }
         }
         return (result.homeGoals, result.awayGoals)
+    }
+
+    /// The unplayed European tie between these clubs in this matchweek.
+    private func europeanTie(home: UUID, away: UUID, week: Int) -> EuropeanFixture? {
+        for competition in europeanCompetitions {
+            if let tie = competition.fixtures.first(where: {
+                $0.homeClubId == home && $0.awayClubId == away && $0.matchweek == week && !$0.isPlayed
+            }) { return tie }
+        }
+        return nil
+    }
+
+    /// For the second leg of a two-legged European tie: the goals tonight's
+    /// home and away sides scored in the first leg. Nil for anything else.
+    func europeanSecondLegCarry(tieId: UUID) -> (home: Int, away: Int)? {
+        for competition in europeanCompetitions {
+            guard let tie = competition.fixtures.first(where: { $0.id == tieId }) else { continue }
+            guard tie.leg == 2,
+                  let first = competition.fixtures.first(where: {
+                      $0.stage == tie.stage && $0.leg == 1 && $0.isPlayed
+                          && $0.homeClubId == tie.awayClubId && $0.awayClubId == tie.homeClubId
+                  }) else { return nil }
+            return (home: first.awayGoals, away: first.homeGoals)
+        }
+        return nil
     }
 
     private func payEuropeanMoney(_ clubId: UUID, _ amount: Int) {
@@ -2284,18 +2324,25 @@ public final class GameState: Codable {
             .filter { $0.suspendedMatches > 0 }
             .reduce(into: [UUID: Int]()) { $0[$1.id] = $1.suspendedMatches }
         
+        // European ties are two-legged: a first leg is an ordinary match, a
+        // second leg level on aggregate goes to extra time and penalties.
+        let carry = fixture.europeanFixtureId.flatMap { europeanSecondLegCarry(tieId: $0) }
         var config = MatchEngine.SimulationConfig(
-            neutralVenue: false,
+            // A play-off final is played at a neutral ground.
+            neutralVenue: fixture.cupRound == "Final" && fixture.competition.hasSuffix(Self.playOffSuffix),
             matchWeek: fixture.matchWeek,
             competition: fixture.competition,
             date: fixture.date,
-            // European ties are decided over two legs by the competition, so
-            // only a European final goes to extra time and penalties here.
-            isKnockout: fixture.isCupTie && (!fixture.isEuropean || fixture.cupRound == "Final"),
+            isKnockout: fixture.isCupTie && (!fixture.isEuropean || fixture.cupRound == "Final" || carry != nil),
             derbyIntensity: rivalry(between: fixture.homeClubId, and: fixture.awayClubId)?.intensity ?? 0,
             homeCoachingMultiplier: coachingMultiplier(for: fixture.homeClubId),
             awayCoachingMultiplier: coachingMultiplier(for: fixture.awayClubId)
         )
+        if let carry {
+            config.isSecondLeg = true
+            config.homeAggregateCarry = carry.home
+            config.awayAggregateCarry = carry.away
+        }
         // The manager's own side is his: the engine leaves its tactics and
         // substitutions alone unless he has handed subs to his assistant.
         if gameMode == .manageClub, let uid = userClubId, fixture.involves(clubId: uid) {
@@ -4867,7 +4914,8 @@ public final class GameState: Codable {
                     let upper = min(autoCount + 4, n)
                     if lower < upper {
                         let playOffClubs = Array(table[lower..<upper])
-                        let winner = simulatePlayOffFinal(for: tier, contenders: playOffClubs)
+                        let winner = playedPlayOffWinner(for: tier, contenders: playOffClubs)
+                            ?? simulatePlayOffFinal(for: tier, contenders: playOffClubs)
                         playOffPromotions[tier] = [winner.clubId]
                         addNews(
                             headline: "\(clubName(for: winner.clubId)) Win the \(tier.displayName) Play-Off Final!",
@@ -5360,6 +5408,111 @@ public final class GameState: Codable {
     
     /// Resolves a four-team play-off by seeded single-elimination, favouring the club
     /// that finished higher in the league table while still allowing upsets.
+    // MARK: - Promotion Play-Offs
+
+    static let playOffSuffix = " Play-Offs"
+
+    /// Promotion play-offs are real matches. Once all of a division's league
+    /// games are played, the four clubs below the automatic places meet in
+    /// one-off semi-finals at the higher seed's ground (3rd v 6th, 4th v 5th
+    /// in a three-up league), then the winners meet in a final at a neutral
+    /// ground the week after. Ties are decided by extra time and penalties.
+    private func progressLeaguePlayOffs() {
+        let existingTiers = Set(leagues.map { $0.tier })
+        // Runs every slot: skip divisions still playing without rescanning
+        // every fixture for each of them.
+        let stillPlaying = Set(season.fixtures.lazy.filter { !$0.isPlayed }.map { $0.competition })
+        for league in leagues where !stillPlaying.contains(league.name) {
+            let tier = league.tier
+            guard !tier.isTopFlight, tier.playoffPromotionCount > 0,
+                  let higher = tier.higherTier, existingTiers.contains(higher) else { continue }
+            guard season.fixtures.contains(where: { $0.competition == league.name }) else { continue }
+            let name = league.name + Self.playOffSuffix
+            let playOffs = season.fixtures.filter { $0.competition == name }
+            let order = standings(for: league).map { $0.clubId }
+
+            if playOffs.isEmpty {
+                let automatic = min(tier.autoPromotionCount, order.count)
+                let contenders = Array(order.dropFirst(automatic).prefix(4))
+                guard contenders.count >= 2 else { continue }
+                let slot = nextSaturdaySlot(after: season.currentWeek)
+                if contenders.count == 4 {
+                    addPlayOffFixture(home: contenders[0], away: contenders[3], round: "Semi-Final", competition: name, slot: slot)
+                    addPlayOffFixture(home: contenders[1], away: contenders[2], round: "Semi-Final", competition: name, slot: slot)
+                } else {
+                    addPlayOffFixture(home: contenders[0], away: contenders[1], round: "Final", competition: name, slot: slot)
+                }
+                if let uid = userClubId, let seed = contenders.firstIndex(of: uid),
+                   let tie = season.fixtures.last(where: { $0.competition == name && $0.involves(clubId: uid) }),
+                   let opponent = tie.opponentId(for: uid) {
+                    let position = automatic + seed + 1
+                    addNews(
+                        headline: "Into the \(tier.displayName) Play-Offs",
+                        body: "We finished \(position)\(standingRankSuffix(position)) and play \(clubName(for: opponent)) \(tie.homeClubId == uid ? "at home" : "away") in the play-off \(tie.cupRound?.lowercased() ?? "semi-final") on \(Self.longDateText(tie.date)). Win through to the final and we are promoted.",
+                        category: .promotion,
+                        sender: "The Board"
+                    )
+                }
+                continue
+            }
+
+            // Both semi-finals played: draw up the final.
+            let semis = playOffs.filter { $0.cupRound == "Semi-Final" }
+            guard semis.count == 2, semis.allSatisfy({ $0.isPlayed }),
+                  !playOffs.contains(where: { $0.cupRound == "Final" }) else { continue }
+            let winners = semis.map { $0.winnerClubId ?? $0.homeClubId }
+                .sorted { (order.firstIndex(of: $0) ?? 99) < (order.firstIndex(of: $1) ?? 99) }
+            let slot = nextSaturdaySlot(after: season.currentWeek)
+            addPlayOffFixture(home: winners[0], away: winners[1], round: "Final", competition: name, slot: slot)
+            if let uid = userClubId {
+                if let opponent = winners.first(where: { $0 != uid }), winners.contains(uid) {
+                    addNews(
+                        headline: "Play-Off Final!",
+                        body: "We are one game from promotion. \(clubName(for: opponent)) stand in the way in the \(tier.displayName) play-off final at a neutral ground on \(Self.longDateText(dateForWeek(slot))).",
+                        category: .promotion,
+                        sender: "The Board"
+                    )
+                } else if semis.contains(where: { $0.involves(clubId: uid) }) {
+                    addNews(
+                        headline: "Play-Off Heartbreak",
+                        body: "Our promotion bid ends in the play-off semi-final. We go again next season in the \(tier.displayName).",
+                        category: .promotion,
+                        sender: "The Board"
+                    )
+                }
+            }
+        }
+    }
+
+    /// The first Saturday on the calendar after the given slot.
+    private func nextSaturdaySlot(after slot: Int) -> Int {
+        for n in 1...60 where SeasonCalendar.saturday(n) > slot {
+            return SeasonCalendar.saturday(n)
+        }
+        return slot + 1
+    }
+
+    private func addPlayOffFixture(home: UUID, away: UUID, round: String, competition: String, slot: Int) {
+        season.fixtures.append(Fixture(
+            homeClubId: home,
+            awayClubId: away,
+            matchWeek: slot,
+            date: dateForWeek(slot),
+            competition: competition,
+            cupRound: round
+        ))
+    }
+
+    /// The winner of a division's play-off final, when it was played.
+    private func playedPlayOffWinner(for tier: LeagueTier, contenders: [LeagueStanding]) -> LeagueStanding? {
+        guard let league = leagues.first(where: { $0.tier == tier }),
+              let final = season.fixtures.first(where: {
+                  $0.competition == league.name + Self.playOffSuffix && $0.cupRound == "Final" && $0.isPlayed
+              }) else { return nil }
+        let winnerId = final.winnerClubId ?? final.homeClubId
+        return contenders.first { $0.clubId == winnerId } ?? LeagueStanding(clubId: winnerId)
+    }
+
     private func simulatePlayOffFinal(for tier: LeagueTier, contenders: [LeagueStanding]) -> LeagueStanding {
         guard !contenders.isEmpty else {
             return LeagueStanding(clubId: UUID())

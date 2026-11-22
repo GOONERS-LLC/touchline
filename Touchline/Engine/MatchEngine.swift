@@ -48,6 +48,13 @@ public struct MatchEngine {
         /// the user's side.
         public var userAutoSubs: MatchSettings.AutoSubTiming
         public var userAutoSubAggression: MatchSettings.AutoSubAggression
+        /// The second leg of a two-legged knockout tie: extra time and
+        /// penalties follow if the sides are level on aggregate. The carries
+        /// are the goals each side (as home and away tonight) scored in the
+        /// first leg.
+        public var isSecondLeg: Bool = false
+        public var homeAggregateCarry: Int = 0
+        public var awayAggregateCarry: Int = 0
 
         public init(
             neutralVenue: Bool = false,
@@ -427,6 +434,11 @@ public struct MatchEngine {
 
     // MARK: - Core Simulation Loop
 
+    /// Whether the tie is level: on the night, or on aggregate in a second leg.
+    private static func tieIsLevel(_ state: PausedMatch, config: SimulationConfig) -> Bool {
+        state.home.goals + config.homeAggregateCarry == state.away.goals + config.awayAggregateCarry
+    }
+
     private static func simulateCore(
         homeClub: inout Club,
         awayClub: inout Club,
@@ -485,14 +497,21 @@ public struct MatchEngine {
                 state.events.append(MatchEvent(minute: 45, type: .halfTime, shortText: ht.short, detailText: ht.detail, isHomeTeam: true))
             }
 
-            // A knockout tie level after 90 minutes goes to extra time.
+            // A knockout tie level after 90 minutes (on aggregate, in a
+            // second leg) goes to extra time.
             if minute == 90 + state.secondHalfStoppage && config.isKnockout
-                && state.home.goals == state.away.goals && state.maxMinute < 120 {
+                && tieIsLevel(state, config: config) && state.maxMinute < 120 {
+                let aggHome = state.home.goals + config.homeAggregateCarry
+                let aggAway = state.away.goals + config.awayAggregateCarry
                 state.events.append(MatchEvent(
                     minute: minute,
                     type: .extraTimeStart,
-                    shortText: "EXTRA TIME! Scores tied at \(state.home.goals)-\(state.away.goals)",
-                    detailText: "Ninety minutes could not separate these sides. Thirty more to come, and one more substitution each.",
+                    shortText: config.isSecondLeg
+                        ? "EXTRA TIME! Level at \(aggHome)-\(aggAway) on aggregate"
+                        : "EXTRA TIME! Scores tied at \(state.home.goals)-\(state.away.goals)",
+                    detailText: config.isSecondLeg
+                        ? "Two legs could not separate these sides: \(aggHome)-\(aggAway) on aggregate. Thirty more minutes to come, and one more substitution each."
+                        : "Ninety minutes could not separate these sides. Thirty more to come, and one more substitution each.",
                     isHomeTeam: true
                 ))
                 state.maxMinute = 120
@@ -512,7 +531,7 @@ public struct MatchEngine {
 
         // Penalty shootout if still level after extra time.
         var shootout: (Int, Int)? = nil
-        if config.isKnockout && state.home.goals == state.away.goals {
+        if config.isKnockout && tieIsLevel(state, config: config) {
             shootout = resolvePenaltyShootout(homeClub: homeClub, awayClub: awayClub, state: &state)
         }
 
