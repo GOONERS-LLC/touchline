@@ -136,7 +136,7 @@ struct HistoryView: View {
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
                 Text(highlight).font(.subheadline.weight(.bold).monospacedDigit())
-                Text("\(legend.appearances) apps • \(legend.goals) g • \(legend.assists) a")
+                Text(legend.position == "GK" ? "\(legend.appearances) apps" : "\(legend.appearances) apps • \(legend.goals) g • \(legend.assists) a")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

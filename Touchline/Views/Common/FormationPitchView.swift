@@ -313,11 +313,18 @@ public struct PlayerPitchCard: View {
                 }
             }
             HStack(spacing: 5) {
-                if stats.goals > 0 {
-                    Label("\(stats.goals)", systemImage: "soccerball")
-                }
-                if stats.assists > 0 {
-                    Label("\(stats.assists)", systemImage: "shoe.fill")
+                if player.primaryPosition == .GK {
+                    // Keepers: clean sheets.
+                    if stats.cleanSheets > 0 {
+                        Label("\(stats.cleanSheets)", systemImage: "hand.raised.fill")
+                    }
+                } else {
+                    if stats.goals > 0 {
+                        Label("\(stats.goals)", systemImage: "soccerball")
+                    }
+                    if stats.assists > 0 {
+                        Label("\(stats.assists)", systemImage: "shoe.fill")
+                    }
                 }
             }
             .labelStyle(TightLabelStyle())
@@ -385,8 +392,14 @@ public struct PlayerPitchCard: View {
         var parts = ["\(position.displayName): \(player.fullName)", ratingWords, trend.words,
                      "fitness \(Int(player.matchFitness)) percent"]
         if outOfPosition { parts.append("playing out of position, usually \(player.primaryPosition.displayName)") }
-        if player.seasonStats.goals > 0 { parts.append("\(player.seasonStats.goals) goals") }
-        if player.seasonStats.assists > 0 { parts.append("\(player.seasonStats.assists) assists") }
+        if player.primaryPosition == .GK {
+            if player.seasonStats.appearances > 0 {
+                parts.append("\(player.seasonStats.cleanSheets) clean sheets, \(player.seasonStats.goalsConceded) conceded")
+            }
+        } else {
+            if player.seasonStats.goals > 0 { parts.append("\(player.seasonStats.goals) goals") }
+            if player.seasonStats.assists > 0 { parts.append("\(player.seasonStats.assists) assists") }
+        }
         if player.isInjured { parts.append("injured") }
         if player.isSuspended { parts.append("suspended") }
         return parts.joined(separator: ", ")

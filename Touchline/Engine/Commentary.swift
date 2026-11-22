@@ -69,7 +69,20 @@ public struct Commentary {
                                             teamGoals: teamGoals, oppGoals: oppGoals, scorer: scorer)
         let crowd = crowdReactionText(isHome: isHome, club: club, minute: minute,
                                       isLateWinner: minute > 82 && teamGoals == oppGoals + 1)
-        return (shortText, "\(body) \(situation)\n\n\(crowd)")
+        // A little extra, now and then: credit for the provider, the keeper's
+        // reaction, the celebration.
+        var extras: [String] = []
+        if let assister, Double.random(in: 0..<1) < 0.5 {
+            extras.append(CommentaryLines.assistPraise(assister: assister, scorer: scorer).randomElement()!)
+        }
+        if type != .clinicalPenalty && Double.random(in: 0..<1) < 0.3 {
+            extras.append(CommentaryLines.keeperReaction(keeper: keeper).randomElement()!)
+        }
+        if Double.random(in: 0..<1) < 0.6 {
+            extras.append(CommentaryLines.celebration(scorer: scorer, club: club).randomElement()!)
+        }
+        let extra = extras.isEmpty ? "" : " " + extras.joined(separator: " ")
+        return (shortText, "\(body) \(situation)\(extra)\n\n\(crowd)")
     }
 
     /// A finish that suits the scorer's position and strengths.
@@ -118,7 +131,7 @@ public struct Commentary {
     }
 
     // MARK: - Chances & Shots
-    
+
     public static func chance(
         shooter: Player,
         assister: Player?,
@@ -127,26 +140,11 @@ public struct Commentary {
         isHome: Bool
     ) -> (short: String, detail: String) {
         let shortText = "CHANCE! \(shooter.displayName) (\(club.name)) \(minute)'"
-        
-        let templates = [
-            "\(shooter.fullName) carves out a yard of space just outside the box and lets fly with a ferocious drive that whistles inches over the crossbar!",
-            "Great vision from \(assister?.fullName ?? "the midfield") to thread a ball behind the backline. \(shooter.fullName) takes it in his stride, but his snapshot flashes agonizingly wide of the upright.",
-            "A scramble in the six-yard box! The ball ricochets around like a pinball before \(shooter.fullName) stabs a shot toward goal, only for a desperate defensive block to deflect it behind for a corner.",
-            "\(shooter.fullName) cuts inside onto his stronger foot and curls a wicked effort toward the far top corner—it looks in all the way, but just shaves the outside of the post!",
-            "Fast build-up play from \(club.name)! \(shooter.fullName) connects first-time with a cross from the byline, but can't quite direct his header on target under heavy defensive pressure.",
-            "Thunderous strike from 25 yards out by \(shooter.fullName)! It skims across the slick turf and forces the keeper to scramble across his goal line.",
-            "\(shooter.fullName) finds himself unmarked at the back post from a deep cross! He cushions a volley down into the ground, but it bounces up and over the crossbar.",
-            "A sweeping team move across the pitch finishes with \(shooter.fullName) receiving the ball in the D. He pulls the trigger quickly, sending the ball skimming just past the post.",
-            "Clever flick around the corner sets \(shooter.fullName) into the area! He fires across the face of goal, but there's nobody at the back stick to turn it in.",
-            "\(shooter.fullName) twists and turns his marker inside out before firing toward the near post, hitting the side netting! Half the stadium thought that was in!"
-        ]
-        
-        let detailText = templates.randomElement()!
-        return (shortText, detailText)
+        return (shortText, CommentaryLines.chance(shooter: shooter, assister: assister, club: club).randomElement()!)
     }
-    
+
     // MARK: - Saves
-    
+
     public static func save(
         keeper: Player,
         shooter: Player,
@@ -155,23 +153,11 @@ public struct Commentary {
         isHome: Bool
     ) -> (short: String, detail: String) {
         let shortText = "SENSATIONAL SAVE! \(keeper.displayName) \(minute)'"
-        
-        let templates = [
-            "WHAT A REFLEX STOP! \(shooter.fullName) looked certain to score with a bullet header from point-blank range, but \(keeper.fullName) flung out a strong hand to tip it over the bar!",
-            "\(keeper.fullName) comes to \(keeperClub.name)'s rescue! \(shooter.fullName) went through clean on goal, but the keeper stood tall and smothered the one-on-one attempt brilliantly.",
-            "Incredible agility from \(keeper.fullName)! Dipping and swerving from 30 yards, the shot looked destined for the top corner before the goalkeeper made a full-stretch fingertip save.",
-            "Double save from \(keeper.fullName)! First parrying the stinging drive from distance, then reacting with superhuman speed to block the rebound with his legs!",
-            "A flying save! \(shooter.fullName) unleashed a venomous curler, but \(keeper.fullName) launched himself across the goalmouth to push the ball wide of the post.",
-            "Pure bravery! \(keeper.fullName) dives right at the feet of \(shooter.fullName) to snatch the ball away just as the striker was about to pull the trigger.",
-            "Strong wrists from \(keeper.fullName)! The striker struck it with immense power from 12 yards, but the goalkeeper parried it firmly away from danger.",
-            "A crucial intervention by \(keeper.fullName)! Sticking out an outstretched boot, he deflects what looked like a guaranteed goal behind for a corner."
-        ]
-        
-        return (shortText, templates.randomElement()!)
+        return (shortText, CommentaryLines.bigSave(keeper: keeper, shooter: shooter, keeperClub: keeperClub).randomElement()!)
     }
-    
+
     // MARK: - Misses & Woodwork
-    
+
     public static func miss(
         shooter: Player,
         club: Club,
@@ -179,66 +165,45 @@ public struct Commentary {
         isWoodwork: Bool = false
     ) -> (short: String, detail: String) {
         if isWoodwork {
-            let shortText = "OFF THE WOODWORK! \(shooter.displayName) \(minute)'"
-            let woodworkTemplates = [
-                "OFF THE BAR! \(shooter.fullName) crashes a thunderbolt against the crossbar! The goalframe is still rattling as the defense scrambles the ball away.",
-                "OFF THE POST! Beautiful curling strike from \(shooter.fullName), beat the goalkeeper all ends up, but smacks against the inside of the far post and bounces clear!",
-                "HOW HAS THAT STAYED OUT?! \(shooter.fullName)'s header loops over the keeper, cannons against the crossbar, bounces on the goal line, and is hooked clear!",
-                "WOODWORK AGAIN! \(shooter.fullName) drills a low drive that rebounds off the base of the upright with the goalkeeper beaten."
-            ]
-            return (shortText, woodworkTemplates.randomElement()!)
+            return ("OFF THE WOODWORK! \(shooter.displayName) \(minute)'",
+                    CommentaryLines.woodwork(shooter: shooter).randomElement()!)
         }
-        
-        let shortText = "CHANCE MISSED! \(shooter.displayName) \(minute)'"
-        let missTemplates = [
-            "HOW DID HE MISS THAT?! Sitter of the season! The ball was served on a silver platter inside the six-yard box, but \(shooter.fullName) somehow skewed his finish wide!",
-            "A wasted opportunity for \(club.name). \(shooter.fullName) had time and space to pick his spot, but rushed his effort and blasted it high into the stands.",
-            "Groans around the ground as \(shooter.fullName) drags his left-footed effort wide of the target when passing to a teammate was the better option.",
-            "\(shooter.fullName) can only hold his head in his hands. He created the opening with fantastic footwork, but snatched at the final shot, slicing it harmlessly into the crowd.",
-            "A great counter-attack comes to nothing. \(shooter.fullName) was in on goal with runners either side, but his chipped attempt drifted harmlessly over the bar.",
-            "Frustration boils over as \(shooter.fullName) scuffs a tame shot straight into the turf from a prime scoring position.",
-            "\(shooter.fullName) blazes over! With the defense retreating, the striker opted for power over placement and cleared the crossbar by ten yards.",
-            "A glorious delivery went begging as \(shooter.fullName) completely mistimed his jump, brushing the ball with his shoulder instead of making solid contact."
-        ]
-        return (shortText, missTemplates.randomElement()!)
+        return ("CHANCE MISSED! \(shooter.displayName) \(minute)'",
+                CommentaryLines.bigMiss(shooter: shooter, club: club).randomElement()!)
     }
-    
-    // MARK: - Disciplinary Cards
-    
+
+    // MARK: - Fouls & Disciplinary Cards
+
+    /// A foul that brings nothing more than a free kick.
+    public static func foul(player: Player, victim: Player?, club: Club, minute: Int) -> (short: String, detail: String) {
+        let against = victim.map { " on \($0.displayName)" } ?? ""
+        return ("Foul: \(player.displayName) (\(club.name))\(against) \(minute)'",
+                CommentaryLines.foul(player: player, victim: victim, club: club).randomElement()!)
+    }
+
     public static func card(
         player: Player,
         club: Club,
         isRed: Bool,
         isSecondYellow: Bool = false,
-        minute: Int
+        minute: Int,
+        victim: Player? = nil
     ) -> (short: String, detail: String) {
         let minuteStr = "\(minute)'"
-        if isRed || isSecondYellow {
-            let shortText = isSecondYellow ? "RED CARD (SECOND YELLOW)! \(player.displayName) \(minuteStr)" : "STRAIGHT RED CARD! \(player.displayName) \(minuteStr)"
-            
-            let redTemplates = [
-                "HE'S OFF! A reckless, two-footed lunge with studs showing leaves the referee with absolutely no choice. The referee reaches straight into his back pocket and produces a red card for \(player.fullName)! \(club.name) are down to 10 men!",
-                "DISASTER FOR \(club.name)! A professional foul as the last defender! \(player.fullName) tugged back the advancing attacker who was clean through on goal. Clear denial of an obvious goalscoring opportunity. Off he goes!",
-                "DRAMA! Tempers boil over off the ball! An altercation breaks out and the referee spots \(player.fullName) raising his hands aggressively. The red card is brandished immediately amidst furious protests!",
-                "SECOND YELLOW! \(player.fullName) mistimes a cynical trip to halt a promising counter-attack. The referee blows his whistle, issues a second caution, followed immediately by the red! Walking down the tunnel in disbelief."
-            ]
-            return (shortText, redTemplates.randomElement()!)
+        if isSecondYellow {
+            return ("RED CARD (SECOND YELLOW)! \(player.displayName) \(minuteStr)",
+                    CommentaryLines.secondYellow(player: player, victim: victim, club: club).randomElement()!)
         }
-        
-        let shortText = "YELLOW CARD — \(player.displayName) (\(club.name)) \(minuteStr)"
-        let yellowTemplates = [
-            "Late challenge by \(player.fullName). He arrived a fraction of a second after the ball was released and wiped out his opponent. A deserved caution.",
-            "Tactical foul. \(player.fullName) deliberately pulls back the attacker's shirt to break up a dangerous break. The referee reaches into his pocket without hesitation.",
-            "Dissent from \(player.fullName). After disputing a throw-in decision aggressively in the referee's face, he talks himself into the referee's notebook.",
-            "Persistent infringement. After several warnings for niggling fouls, \(player.fullName) commits one foul too many and receives a yellow card.",
-            "A heavy sliding tackle on the wet pitch. \(player.fullName) got a piece of the ball, but followed through with too much force. The referee brandishes yellow.",
-            "Time wasting caution. The referee penalizes \(player.fullName) for delaying the restart of play by kicking the ball away."
-        ]
-        return (shortText, yellowTemplates.randomElement()!)
+        if isRed {
+            return ("STRAIGHT RED CARD! \(player.displayName) \(minuteStr)",
+                    CommentaryLines.straightRed(player: player, victim: victim, club: club).randomElement()!)
+        }
+        return ("YELLOW CARD — \(player.displayName) (\(club.name)) \(minuteStr)",
+                CommentaryLines.yellow(player: player, victim: victim, club: club).randomElement()!)
     }
-    
+
     // MARK: - Injuries & Substitutions
-    
+
     public static func injury(
         player: Player,
         club: Club,
@@ -246,21 +211,18 @@ public struct Commentary {
         injuryType: InjuryType
     ) -> (short: String, detail: String) {
         let shortText = "INJURY — \(player.displayName) (\(club.name)) \(minute)'"
-        let detailText = "Play stops as \(player.fullName) goes down clutching his leg in obvious pain. The physios rush onto the pitch with the medical kit. After a brief assessment, he is signaled off the pitch with what looks like a \(injuryType.displayName.lowercased())."
-        return (shortText, detailText)
+        return (shortText, CommentaryLines.injuryOff(player: player, club: club, injury: injuryType.commentaryPhrase).randomElement()!)
     }
-    
+
     public static func substitution(
         playerIn: Player,
         playerOut: Player,
         club: Club,
         minute: Int
     ) -> (short: String, detail: String) {
-        let shortText = "SUB — \(club.name): \(playerIn.displayName) ON, \(playerOut.displayName) OFF \(minute)'"
-        let detailText = "Tactical change for \(club.name). \(playerOut.fullName) makes way after a tireless shift, receiving applause from the traveling supporters as \(playerIn.fullName) trots on with fresh instructions from the touchline."
-        return (shortText, detailText)
+        substitution(playerIn: playerIn, playerOut: playerOut, club: club, minute: minute, reason: .manager)
     }
-    
+
     // MARK: - Atmospheric & Tactical Color
     
     public static func atmosphere(
@@ -313,7 +275,9 @@ public struct Commentary {
             ]
         }
         
-        let chosen = templates.randomElement()!
+        let pool = templates + CommentaryLines.atmosphereExtra(home: homeClub, away: awayClub, minute: minute,
+                                                               homeGoals: homeGoals, awayGoals: awayGoals)
+        let chosen = pool.randomElement()!
         return ("● \(chosen)", chosen)
     }
     
@@ -355,7 +319,7 @@ public struct Commentary {
     }
     
     // MARK: - Half-Time & Full-Time Summaries
-    
+
     public static func halfTimeSummary(
         home: Club,
         away: Club,
@@ -363,21 +327,9 @@ public struct Commentary {
         awayGoals: Int
     ) -> (short: String, detail: String) {
         let shortText = "Half-Time: \(home.name) \(homeGoals) - \(awayGoals) \(away.name)"
-        let detailText: String
-        
-        if homeGoals == awayGoals && homeGoals == 0 {
-            detailText = "The referee blows the whistle for half-time. A cagey, tactical 45 minutes with limited clear-cut openings. Both managers will be demanding more creative spark after the break."
-        } else if homeGoals == awayGoals {
-            detailText = "An entertaining first half comes to a close with the sides deadlocked at \(homeGoals)-\(awayGoals). Plenty of attacking intent on display; this one is poised on a knife-edge for the second half."
-        } else if homeGoals > awayGoals {
-            detailText = "Half-time at \(home.stadium). \(home.name) head into the tunnel with a deserved \(homeGoals)-\(awayGoals) lead having controlled the tempo. \(away.name) need a tactical response."
-        } else {
-            detailText = "The whistle sounds for the interval. An impressive away display so far as \(away.name) take a \(awayGoals)-\(homeGoals) lead into the dressing rooms."
-        }
-        
-        return (shortText, detailText)
+        return (shortText, CommentaryLines.halfTime(home: home, away: away, homeGoals: homeGoals, awayGoals: awayGoals).randomElement()!)
     }
-    
+
     public static func fullTimeSummary(
         home: Club,
         away: Club,
@@ -386,17 +338,8 @@ public struct Commentary {
         motm: Player?
     ) -> (short: String, detail: String) {
         let shortText = "FULL-TIME: \(home.name) \(homeGoals) - \(awayGoals) \(away.name)"
-        let motmText = motm != nil ? "\n\nMan of the Match: \(motm!.fullName) (\(motm!.primaryPosition.abbreviation))" : ""
-        let detailText: String
-        
-        if homeGoals == awayGoals {
-            detailText = "The final whistle blows! Points shared after 90 hard-fought minutes. Both teams gave everything, and a draw is probably a fair reflection of a fiercely contested match.\(motmText)"
-        } else if homeGoals > awayGoals {
-            detailText = "FULL TIME! A resounding victory for \(home.name) in front of their home supporters, claiming all three points with a \(homeGoals)-\(awayGoals) triumph.\(motmText)"
-        } else {
-            detailText = "FULL TIME! An outstanding away performance from \(away.name), silencing the home crowd to take the spoils with a \(awayGoals)-\(homeGoals) win.\(motmText)"
-        }
-        
-        return (shortText, detailText)
+        let motmText = motm.map { "\n\nMan of the Match: \($0.fullName) (\($0.primaryPosition.abbreviation))" } ?? ""
+        let line = CommentaryLines.fullTime(home: home, away: away, homeGoals: homeGoals, awayGoals: awayGoals).randomElement()!
+        return (shortText, line + motmText)
     }
 }

@@ -51,6 +51,8 @@ public struct JobOffer: Codable, Identifiable, Hashable {
     public var offeredWage: Int
     /// Season the offer was made (e.g., "2026-27").
     public var seasonYear: String
+    /// For an international post: the national team's id.
+    public var nationalTeamId: String? = nil
 
     public init(
         id: UUID = UUID(),
@@ -60,8 +62,10 @@ public struct JobOffer: Codable, Identifiable, Hashable {
         leagueName: String,
         reputation: Int,
         offeredWage: Int,
-        seasonYear: String
+        seasonYear: String,
+        nationalTeamId: String? = nil
     ) {
+        self.nationalTeamId = nationalTeamId
         self.id = id
         self.clubId = clubId
         self.kind = kind

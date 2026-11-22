@@ -236,6 +236,7 @@ public struct Player: Codable, Identifiable, Hashable {
         yellowCard: Bool = false,
         redCard: Bool = false,
         cleanSheet: Bool = false,
+        goalsConceded: Int = 0,
         isMotm: Bool = false,
         redCardBan: Int = 3,
         matchFatigue: Double? = nil
@@ -245,6 +246,7 @@ public struct Player: Codable, Identifiable, Hashable {
         seasonStats.goals += goals
         seasonStats.assists += assists
         seasonStats.cleanSheets += cleanSheet ? 1 : 0
+        seasonStats.goalsConceded += goalsConceded
         seasonStats.manOfTheMatch += isMotm ? 1 : 0
         
         let previousTotalScore = seasonStats.averageRating * Double(seasonStats.appearances - 1)
@@ -778,6 +780,41 @@ public struct SeasonStats: Codable, Hashable {
         self.minutesPlayed = minutesPlayed
         self.manOfTheMatch = manOfTheMatch
     }
+
+    /// Goals let in while he was in goal (keepers).
+    public var goalsConceded: Int = 0
+
+    private enum CodingKeys: String, CodingKey {
+        case appearances, goals, assists, cleanSheets, yellowCards, redCards
+        case averageRating, minutesPlayed, manOfTheMatch, goalsConceded
+    }
+
+    // Saves from before goals conceded were tracked still load.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        appearances = try c.decodeIfPresent(Int.self, forKey: .appearances) ?? 0
+        goals = try c.decodeIfPresent(Int.self, forKey: .goals) ?? 0
+        assists = try c.decodeIfPresent(Int.self, forKey: .assists) ?? 0
+        cleanSheets = try c.decodeIfPresent(Int.self, forKey: .cleanSheets) ?? 0
+        yellowCards = try c.decodeIfPresent(Int.self, forKey: .yellowCards) ?? 0
+        redCards = try c.decodeIfPresent(Int.self, forKey: .redCards) ?? 0
+        averageRating = try c.decodeIfPresent(Double.self, forKey: .averageRating) ?? 0
+        minutesPlayed = try c.decodeIfPresent(Int.self, forKey: .minutesPlayed) ?? 0
+        manOfTheMatch = try c.decodeIfPresent(Int.self, forKey: .manOfTheMatch) ?? 0
+        goalsConceded = try c.decodeIfPresent(Int.self, forKey: .goalsConceded) ?? 0
+    }
+}
+
+extension Player {
+    /// This season's numbers in a line: clean sheets and goals conceded for
+    /// a keeper, goals and assists for everyone else.
+    public var seasonStatSummary: String {
+        let s = seasonStats
+        if primaryPosition == .GK {
+            return "\(s.appearances) apps • \(s.cleanSheets) clean sheet\(s.cleanSheets == 1 ? "" : "s") • \(s.goalsConceded) conceded"
+        }
+        return "\(s.appearances) apps • \(s.goals) goal\(s.goals == 1 ? "" : "s") • \(s.assists) assist\(s.assists == 1 ? "" : "s")"
+    }
 }
 
 // MARK: - Contract
@@ -792,6 +829,9 @@ public struct PlayerSeasonLine: Codable, Hashable, Identifiable {
     public var assists: Int
     public var averageRating: Double
     public var overall: Int
+    /// For keepers (absent in older saves).
+    public var cleanSheets: Int? = nil
+    public var goalsConceded: Int? = nil
 }
 
 /// A season-long loan: the player trains and plays for the borrowing club,
@@ -944,7 +984,8 @@ extension PlayerAttributes {
         for keyPath in Self.allKeyPaths {
             self[keyPath: keyPath] = Swift.min(99, Swift.max(1, self[keyPath: keyPath] + delta))
         }
-        if age >= 30 {
+        // Legs go from 35; until then fitness is maintained.
+        if age >= 35 && age < 40 {
             for keyPath in Self.physicalKeyPaths {
                 self[keyPath: keyPath] = Swift.max(1, self[keyPath: keyPath] - 1)
             }
@@ -964,38 +1005,64 @@ extension Player {
     ///
     /// Call after `age` has been incremented for the new season. `appearances`
     /// is last season's league appearance count.
-    public mutating func applySeasonalDevelopment(appearances: Int, trainingLevel: Int = 2, averageRating: Double = 0) {
-        // Dynamic potential: a young player's ceiling moves with how he
-        // actually plays. A breakout season raises it; a season of poor
-        // displays lowers it.
-        if age <= 24 && appearances >= 10 && averageRating > 0 {
+    public mutating func applySeasonalDevelopment(appearances: Int, trainingLevel: Int = 2, averageRating: Double = 0,
+                                                  goals: Int = 0, assists: Int = 0, cleanSheets: Int = 0) {
+        // How good his season really was: his average rating, plus credit
+        // for goals and assists (or clean sheets for a keeper). A striker
+        // scoring every other game has had a great season even on 7.0s.
+        var performance = averageRating
+        if appearances > 0 {
+            if primaryPosition == .GK {
+                let rate = Double(cleanSheets) / Double(appearances)
+                performance += rate >= 0.45 ? 0.35 : rate >= 0.3 ? 0.15 : 0
+            } else {
+                let involvement = (Double(goals) + Double(assists) * 0.6) / Double(appearances)
+                performance += involvement >= 0.8 ? 0.6 : involvement >= 0.55 ? 0.4 : involvement >= 0.35 ? 0.2 : 0
+            }
+        }
+        let played = appearances >= 10 && averageRating > 0
+        let great = played && performance >= 7.6
+        let good = played && performance >= 7.2
+        let poor = played && performance < 6.4
+
+        // Dynamic potential, at any age: a great season raises the ceiling
+        // (most for young players), a poor one lowers it.
+        if played {
             var shift = 0
-            switch averageRating {
-            case 7.6...: shift = Int.random(in: 2...5)
-            case 7.2..<7.6: shift = Int.random(in: 1...3)
-            case 6.9..<7.2: shift = Int.random(in: 0...1)
-            case 6.4..<6.9: shift = 0
-            case 6.0..<6.4: shift = -Int.random(in: 0...2)
-            default: shift = -Int.random(in: 1...3)
+            if great {
+                shift = age <= 24 ? Int.random(in: 2...5) : age <= 29 ? Int.random(in: 1...3) : Int.random(in: 1...2)
+            } else if good {
+                shift = age <= 24 ? Int.random(in: 1...3) : age <= 29 ? Int.random(in: 1...2) : Int.random(in: 0...1)
+            } else if performance >= 6.9 {
+                shift = age <= 24 ? Int.random(in: 0...1) : 0
+            } else if performance < 6.0 {
+                shift = -Int.random(in: 1...3)
+            } else if poor {
+                shift = -Int.random(in: 0...2)
             }
             // Regulars earn more of a bump than squad players.
             if shift > 0 && appearances >= 25 { shift += 1 }
             // The very top is reserved for the very few.
-            if shift > 0 && potential >= 90 { shift = (shift + 1) / 2 }
-            potential = Swift.min(97, Swift.max(overall, potential + shift))
+            if shift > 0 && potential >= 92 { shift = (shift + 1) / 2 }
+            // A great season always leaves at least a little room to grow.
+            if shift > 0 { potential = Swift.max(potential + shift, overall + (great ? 2 : 1)) }
+            else { potential += shift }
+            potential = Swift.min(99, Swift.max(overall, potential))
         }
         let headroom = Swift.max(0, potential - overall)
+
+        // Ability only falls for a poor season, or with age from 35 to 39;
+        // at 40 and over a player has settled where he is.
         var delta: Int
         switch age {
         case ..<20: delta = Int.random(in: 1...5)
         case 20...22: delta = Int.random(in: 0...3)
-        case 23...25: delta = Int.random(in: -1...2)
-        case 26...29: delta = Int.random(in: -1...1)
-        case 30...31: delta = Int.random(in: -2...0)
-        case 32...33: delta = Int.random(in: -3...(-1))
-        default: delta = Int.random(in: -5...(-2))
+        case 23...25: delta = poor ? Int.random(in: -1...0) : Int.random(in: 0...2)
+        case 26...29: delta = poor ? Int.random(in: -1...0) : (good ? Int.random(in: 0...2) : Int.random(in: 0...1))
+        case 30...34: delta = poor ? Int.random(in: -2...(-1)) : (good ? Int.random(in: 0...1) : 0)
+        case 35...39: delta = Int.random(in: -3...(-1)) - (poor ? 1 : 0)
+        default: delta = 0
         }
-
         // Regular first-team football accelerates development of young players;
         // without it, prospects stall and their ceiling erodes. (Every young
         // player reaching his potential inflated ratings across the world.)
@@ -1015,8 +1082,9 @@ extension Player {
         // Improving gets harder near the top of the game: growth halves above
         // 83 and is at most one point a season above 87. (Without this the
         // number of 85+ players grew by two-thirds in two seasons.)
-        if delta > 0 && overall >= 83 { delta = (delta + 1) / 2 }
-        if delta > 0 && overall >= 87 { delta = Swift.min(delta, 1) }
+        // A great season can still be worth two points at the very top.
+        if delta > 0 && overall >= 83 && !great { delta = (delta + 1) / 2 }
+        if delta > 0 && overall >= 87 { delta = Swift.min(delta, great ? 2 : 1) }
         // Growth can never exceed the player's ceiling.
         if delta > 0 { delta = Swift.min(delta, headroom) }
 

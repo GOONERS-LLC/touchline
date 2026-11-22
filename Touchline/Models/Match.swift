@@ -288,4 +288,17 @@ public struct SeasonReview: Codable, Hashable {
     public var topScorer: String?
     public var playerOfSeason: String?
     public var europe: String?
+    /// The league cup (and any other domestic trophy) run.
+    public var leagueCupRun: String? = nil
+    /// How far the club went in each European competition it played in.
+    public var europeanRuns: [String]? = nil
+    /// The division's top three clubs, best three players, top scorers and
+    /// top providers, and its team of the season.
+    public var topClubs: [String]? = nil
+    public var bestPlayers: [AwardEntry]? = nil
+    public var topScorers: [AwardEntry]? = nil
+    public var topAssists: [AwardEntry]? = nil
+    public var teamOfTheSeason: [AwardEntry]? = nil
+    /// The same for every other division in the world.
+    public var otherDivisions: [DivisionHonours]? = nil
 }

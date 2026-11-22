@@ -79,6 +79,12 @@ public struct ContentView: View {
             }
             .stadiumBackground()
         }
+        // Awards nights (the Ballon d'Or in October, the Team of the Year in
+        // January) take over the screen when they are held.
+        .fullScreenCover(item: Binding(get: { gameState.ceremonyToShow }, set: { gameState.ceremonyToShow = $0 })) { ceremony in
+            AwardCeremonyView(ceremony: ceremony)
+                .environment(gameState)
+        }
         .groupBoxStyle(GFGroupBoxStyle())
         .environment(\.stadiumTheme, stadiumTheme)
         .preferredColorScheme(stadiumTheme ? .dark : nil)
@@ -720,6 +726,13 @@ public struct JobOffersView: View {
                     ForEach(gameState.jobOffers) { offer in
                         offerRow(offer)
                     }
+                    Button {
+                        gameState.generateJobOffers(maxCount: 5)
+                    } label: {
+                        Label("Look for More Vacancies", systemImage: "magnifyingglass")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .accessibilityHint("Other clubs, and sometimes national teams, may approach you")
                 }
             }
         }
@@ -754,13 +767,24 @@ public struct JobOffersView: View {
                     Text("\(offer.leagueName) • Reputation \(offer.reputation)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if offer.kind == .nationalTeam {
+                        Text(gameState.userClub.map { "International post: you keep your job at \($0.name)." } ?? "International post.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
             }
 
             HStack(spacing: 12) {
                 Button {
-                    if gameState.acceptJobOffer(offer) != nil {
+                    if offer.kind == .nationalTeam {
+                        if gameState.acceptNationalTeamOffer(offer) {
+                            try? SaveManager.shared.autoSave(gameState: gameState)
+                        } else {
+                            actionError = "That post is no longer available."
+                        }
+                    } else if gameState.acceptJobOffer(offer) != nil {
                         try? SaveManager.shared.autoSave(gameState: gameState)
                         gameState.currentScreen = .dashboard
                     } else {
@@ -977,6 +1001,14 @@ struct SeasonReviewCard: View {
             }
             if let cup = review.cupRun {
                 Label(cup, systemImage: "trophy")
+                    .font(.subheadline)
+            }
+            if let leagueCup = review.leagueCupRun {
+                Label(leagueCup, systemImage: "trophy")
+                    .font(.subheadline)
+            }
+            ForEach(review.europeanRuns ?? [], id: \.self) { run in
+                Label(run, systemImage: "star.circle")
                     .font(.subheadline)
             }
             if let scorer = review.topScorer {
@@ -1220,7 +1252,7 @@ public struct SquadView: View {
                             RatingBadge(rating: entry.player.overall, size: 28)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(entry.player.fullName).font(.subheadline)
-                                Text("\(entry.club.name) • \(entry.player.seasonStats.appearances) apps, \(entry.player.seasonStats.goals) goals")
+                                Text("\(entry.club.name) • \(entry.player.seasonStatSummary)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -3166,8 +3198,8 @@ extension PlayerDetailView {
                 } else {
                     bigStat("\(stats.goals)", "Goals")
                 }
-                bigStat(player.primaryPosition == .GK ? "\(stats.manOfTheMatch)" : "\(stats.assists)",
-                        player.primaryPosition == .GK ? "MVP awards" : "Assists")
+                bigStat(player.primaryPosition == .GK ? "\(stats.goalsConceded)" : "\(stats.assists)",
+                        player.primaryPosition == .GK ? "Conceded" : "Assists")
             }
             HStack {
                 bigStat(stats.appearances > 0 ? String(format: "%.2f", stats.averageRating) : "–", "Avg rating",
@@ -3289,7 +3321,7 @@ extension PlayerDetailView {
         .gfCard()
 
         if let log = player.careerLog, !log.isEmpty {
-            CareerHistoryCard(log: log)
+            CareerHistoryCard(log: log, isKeeper: player.primaryPosition == .GK)
         }
     }
 
@@ -3431,25 +3463,31 @@ extension PlayerDetailView {
                     Text("YEAR").frame(width: 62, alignment: .leading)
                     Text("TEAM").frame(maxWidth: .infinity, alignment: .leading)
                     Text("P").frame(width: 30)
-                    Image(systemName: isKeeper ? "hand.raised.fill" : "soccerball").frame(width: 30)
-                    Image(systemName: isKeeper ? "star.fill" : "shoe.fill").frame(width: 30)
+                    // Keepers: clean sheets and goals conceded.
+                    Text(isKeeper ? "CS" : "").frame(width: 30)
+                        .overlay { if !isKeeper { Image(systemName: "soccerball") } }
+                    Text(isKeeper ? "GA" : "").frame(width: 30)
+                        .overlay { if !isKeeper { Image(systemName: "shoe.fill") } }
                     Image(systemName: "star.circle.fill").frame(width: 42)
                 }
                 .font(.gfLabel(13))
                 .accessibilityHidden(true)
                 Divider()
                 ForEach(log) { line in
-                    statLine(year: line.season, team: line.club, p: line.appearances, a: line.goals, b: line.assists, rating: line.averageRating, bold: false)
+                    statLine(year: line.season, team: line.club, p: line.appearances,
+                             a: isKeeper ? (line.cleanSheets ?? 0) : line.goals,
+                             b: isKeeper ? (line.goalsConceded ?? 0) : line.assists,
+                             rating: line.averageRating, bold: false, isKeeper: isKeeper)
                 }
                 statLine(year: gameState.season.year, team: club?.name ?? "–", p: now.appearances,
-                         a: isKeeper ? now.cleanSheets : now.goals, b: isKeeper ? now.manOfTheMatch : now.assists,
-                         rating: now.averageRating, bold: false)
+                         a: isKeeper ? now.cleanSheets : now.goals, b: isKeeper ? now.goalsConceded : now.assists,
+                         rating: now.averageRating, bold: false, isKeeper: isKeeper)
                 Divider()
                 let totalP = log.reduce(0) { $0 + $1.appearances } + now.appearances
                 statLine(year: "", team: "TOTAL", p: totalP,
-                         a: log.reduce(0) { $0 + $1.goals } + (isKeeper ? now.cleanSheets : now.goals),
-                         b: log.reduce(0) { $0 + $1.assists } + (isKeeper ? now.manOfTheMatch : now.assists),
-                         rating: 0, bold: true)
+                         a: log.reduce(0) { $0 + (isKeeper ? ($1.cleanSheets ?? 0) : $1.goals) } + (isKeeper ? now.cleanSheets : now.goals),
+                         b: log.reduce(0) { $0 + (isKeeper ? ($1.goalsConceded ?? 0) : $1.assists) } + (isKeeper ? now.goalsConceded : now.assists),
+                         rating: 0, bold: true, isKeeper: isKeeper)
             }
             .gfCard()
         case .awards:
@@ -3488,7 +3526,7 @@ extension PlayerDetailView {
         }
     }
 
-    private func statLine(year: String, team: String, p: Int, a: Int, b: Int, rating: Double, bold: Bool) -> some View {
+    private func statLine(year: String, team: String, p: Int, a: Int, b: Int, rating: Double, bold: Bool, isKeeper: Bool = false) -> some View {
         HStack {
             Text(year).frame(width: 62, alignment: .leading)
             Text(team).frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
@@ -3500,7 +3538,7 @@ extension PlayerDetailView {
         }
         .font(bold ? .gfLabel(15).monospacedDigit() : .subheadline.monospacedDigit())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(year) \(team): \(p) played, \(a) and \(b), rating \(rating > 0 ? String(format: "%.2f", rating) : "none")")
+        .accessibilityLabel("\(year) \(team): \(p) played, \(a) \(isKeeper ? "clean sheets" : "goals"), \(b) \(isKeeper ? "goals conceded" : "assists"), rating \(rating > 0 ? String(format: "%.2f", rating) : "none")")
     }
 
     // MARK: Actions
@@ -3567,7 +3605,7 @@ private struct LoanActionsCard: View {
                      : "On loan at \(club.name) from \(loan.parentClubName) until the end of the season.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text("\(player.seasonStats.appearances) apps • \(player.seasonStats.goals) goals • \(player.seasonStats.assists) assists this season")
+                Text("\(player.seasonStatSummary) this season")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let option = loan.buyOptionFee {
@@ -4978,8 +5016,14 @@ public struct InternationalHubView: View {
                 }
             }
 
+            // Pick the squad and play the nation's matches.
+            if gameState.managedNationalTeam != nil {
+                NationalMatchSection()
+            }
+
             // Take over a nation
-            Section(header: Text("Available Nations")) {
+            Section(header: Text("Nations That Would Appoint You"),
+                    footer: Text("You can manage a nation alongside your club or on its own. Bigger nations want a manager with a bigger reputation; federations also approach you through Job Offers.")) {
                 ForEach(availablenations) { team in
                     Button {
                         gameState.takeOverNationalTeam(id: team.id)
@@ -5104,10 +5148,13 @@ public struct InternationalHubView: View {
     }
 
     /// Nations the user can take over, ordered by ranking.
+    /// Nations whose federation would appoint you: none ask for a manager
+    /// with a much smaller reputation than their standing.
     private var availablenations: [NationalTeam] {
         let current = gameState.managedNationalTeamId
+        let reputation = gameState.manager.reputation
         return gameState.nationalTeams
-            .filter { $0.id != current }
+            .filter { $0.id != current && gameState.nationalTeamReputation($0) <= reputation + 8 }
             .sorted { lhs, rhs in
                 switch (lhs.fifaRanking, rhs.fifaRanking) {
                 case let (l?, r?): return l < r

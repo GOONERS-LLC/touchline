@@ -313,7 +313,11 @@ public enum InternationalTournament {
         /// Plays every fixture dated on or before `date` (earliest first),
         /// moving on to the next stage as each one finishes, until nothing more
         /// is due. Fixtures without a date (older saves) are played at once.
-        public mutating func play(through date: String, simulate: (String, String) -> (Int, Int)) {
+        ///
+        /// Fixtures of `holdingTeam` (the nation the user manages) are left for
+        /// the user to play.
+        public mutating func play(through date: String, holdingTeam: String? = nil,
+                                  simulate: (String, String) -> (Int, Int)) {
             var progressed = true
             var passes = 0
             while progressed && passes < 12 {
@@ -321,6 +325,7 @@ public enum InternationalTournament {
                 progressed = false
                 let due = fixtures.indices
                     .filter { !fixtures[$0].isPlayed && (fixtures[$0].date ?? "") <= date }
+                    .filter { holdingTeam == nil || (fixtures[$0].homeTeamId != holdingTeam && fixtures[$0].awayTeamId != holdingTeam) }
                     .sorted { (fixtures[$0].date ?? "") < (fixtures[$1].date ?? "") }
                 for idx in due {
                     let (hg, ag) = simulate(fixtures[idx].homeTeamId, fixtures[idx].awayTeamId)
@@ -333,6 +338,16 @@ public enum InternationalTournament {
                 rollStage()
                 if stage != before.0 || fixtures.count != before.1 { progressed = true }
             }
+        }
+
+        /// Records a match the user played, and moves the tournament on if
+        /// that completes a stage.
+        public mutating func recordResult(fixtureId: UUID, homeGoals: Int, awayGoals: Int) {
+            guard let idx = fixtures.firstIndex(where: { $0.id == fixtureId }) else { return }
+            fixtures[idx].homeGoals = homeGoals
+            fixtures[idx].awayGoals = awayGoals
+            fixtures[idx].isPlayed = true
+            rollStage()
         }
 
         /// Moves from the group stage to the knockouts, and draws each

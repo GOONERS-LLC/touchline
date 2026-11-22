@@ -172,6 +172,21 @@ public struct DashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 header
+                // The national team's match is waiting for its manager.
+                if let due = gameState.dueInternationalMatch {
+                    Button {
+                        gameState.currentScreen = .international
+                    } label: {
+                        Label("\(gameState.managedNationalTeam?.name ?? "International") match day: \(due.tournament.title), \(due.fixture.stage)",
+                              systemImage: "flag.2.crossed.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(Color.gfSurface))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Pick the squad and play the match")
+                }
                 if gameState.isUnemployed {
                     Button {
                         gameState.generateJobOffers(maxCount: 5)
@@ -181,20 +196,27 @@ public struct DashboardView: View {
                                          caption: gameState.jobOffers.isEmpty ? "You are out of work" : "\(gameState.jobOffers.count) clubs interested")
                     }
                     .buttonStyle(.gfPrimary)
+                    Button {
+                        gameState.advanceWhileUnemployed()
+                        try? SaveManager.shared.autoSave(gameState: gameState)
+                    } label: {
+                        HubContinueLabel(title: gameState.isEndOfSeason ? "Start New Season" : "Wait a Week",
+                                         caption: gameState.managedNationalTeam.map { "Managing \($0.name)" } ?? "Let the offers come to you")
+                    }
+                    .buttonStyle(.gfOutline)
                     HubGrid {
                         tile("Profile", "person.crop.circle", .managerProfile)
                         tile("News", "newspaper.fill", .news)
+                        tile("Nations", "flag.2.crossed.fill", .international)
+                        tile("Jobs", "briefcase.fill", .jobOffers)
                         tile("Settings", "gearshape.fill", .settings)
                         tile("Menu", "house.fill", .mainMenu)
                     }
                 } else {
                     NextMatchLine(verb: "Play")
                     if gameState.isEndOfSeason, let review = gameState.lastSeasonReview {
-                        NavigationLink {
-                            ScrollView { SeasonReviewCard(review: review).padding() }
-                                .stadiumBackground()
-                                .navigationTitle("Season Review")
-                                .navigationBarTitleDisplayMode(.inline)
+                        Button {
+                            gameState.showingSeasonReview = true
                         } label: {
                             Label("Season review ready", systemImage: "star.circle.fill")
                                 .font(.subheadline.weight(.semibold))
@@ -224,6 +246,17 @@ public struct DashboardView: View {
         .stadiumBackground()
         .navigationTitle(gameState.userClub?.name ?? "Home")
         .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(isPresented: Binding(get: { gameState.showingSeasonReview },
+                                              set: { gameState.showingSeasonReview = $0 })) {
+            if let review = gameState.lastSeasonReview {
+                SeasonReviewScreen(review: review) {
+                    gameState.showingSeasonReview = false
+                    gameState.startNewSeason()
+                    try? SaveManager.shared.autoSave(gameState: gameState)
+                }
+                .environment(gameState)
+            }
+        }
         .fullScreenCover(isPresented: $showingCalendar) {
             CalendarAdvanceView { _ in
                 showingCalendar = false
@@ -329,8 +362,13 @@ public struct DashboardView: View {
 
     private func primaryAction() {
         if gameState.isEndOfSeason {
-            gameState.startNewSeason()
-            try? SaveManager.shared.autoSave(gameState: gameState)
+            // The season in review first; its button starts the next one.
+            if gameState.lastSeasonReview != nil {
+                gameState.showingSeasonReview = true
+            } else {
+                gameState.startNewSeason()
+                try? SaveManager.shared.autoSave(gameState: gameState)
+            }
         } else if gameState.todaysUserFixture != nil {
             // Today's fixture, freshly selected, so the last match can never reopen.
             if gameState.selectTodaysUserFixture() { gameState.currentScreen = .matchDay }

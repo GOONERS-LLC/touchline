@@ -358,29 +358,44 @@ enum GoalLines {
         if teamGoals == oppGoals {
             lines = minute > 80
                 ? ["EQUALISER! Pandemonium!", "Level at \(score) with the clock ticking down. Game on!",
-                   "\(club.name) have rescued something late on!", "Just when it looked lost, \(club.name) are level!"]
+                   "\(club.name) have rescued something late on!", "Just when it looked lost, \(club.name) are level!",
+                   "Late, late drama! It's \(score)!", "\(opponent.name) were moments from the win. Not any more.",
+                   "\(club.name) refuse to lie down. \(score)!", "The comeback is complete, and there's still time for more!"]
                 : ["That levels it at \(score).", "All square again at \(score).", "\(club.name) are back in it!",
-                   "Parity restored. \(score).", "And just like that, we have a new game."]
+                   "Parity restored. \(score).", "And just like that, we have a new game.",
+                   "\(opponent.name)'s lead lasted no time at all.", "Level pegging at \(score).",
+                   "\(club.name) answer straight back!", "It's anybody's game again at \(score)."]
         } else if teamGoals == oppGoals + 1 {
             if minute > 82 {
                 lines = ["A CRUCIAL LATE GOAL! \(club.name) lead \(score)!", "Surely that's the winner!",
-                         "That could be worth three points!", "\(club.name) lead at the death!"]
+                         "That could be worth three points!", "\(club.name) lead at the death!",
+                         "Is that the winner? It surely must be!", "\(opponent.name) are stunned. \(score) with minutes left!",
+                         "\(scorer.lastName) could be the hero today!"]
             } else if teamGoals == 1 {
                 lines = ["\(club.name) take the lead!", "The deadlock is broken!", "1-0 \(club.name)!",
-                         "The breakthrough \(club.name) were looking for!", "First blood to \(club.name)."]
+                         "The breakthrough \(club.name) were looking for!", "First blood to \(club.name).",
+                         "\(club.name) are in front!", "The opening goal, and it belongs to \(club.name).",
+                         "Finally, someone breaks the deadlock: \(club.name) lead.", "\(opponent.name) are behind for the first time."]
             } else {
                 lines = ["\(club.name) are back in front, \(score)!", "\(club.name) lead \(score) again.",
-                         "The lead is restored!", "Back in front!"]
+                         "The lead is restored!", "Back in front!",
+                         "\(club.name) edge ahead again, \(score).", "Another twist! \(club.name) lead \(score)."]
             }
         } else if teamGoals == oppGoals + 2 {
             lines = ["\(club.name) have a two-goal cushion now.", "That's \(score), and \(club.name) are in control.",
-                     "\(opponent.name) have a mountain to climb.", "Daylight between the sides: \(score)."]
+                     "\(opponent.name) have a mountain to climb.", "Daylight between the sides: \(score).",
+                     "Breathing space for \(club.name).", "That should settle the nerves: \(score).",
+                     "\(club.name) are pulling away. \(score)."]
         } else if teamGoals > oppGoals + 2 {
             lines = ["This is turning into a rout: \(score)!", "\(opponent.name) have collapsed. \(score).",
-                     "The goals keep coming. \(score)!", "\(scorer.lastName) twists the knife. \(score)."]
+                     "The goals keep coming. \(score)!", "\(scorer.lastName) twists the knife. \(score).",
+                     "It's a procession now. \(score).", "\(opponent.name) can't wait for the final whistle. \(score).",
+                     "Humiliation for \(opponent.name). \(score)."]
         } else {
             lines = ["A goal back for \(club.name). \(score).", "\(club.name) pull one back!",
-                     "Is this the start of a comeback? \(score).", "Consolation, or the spark for a fightback?"]
+                     "Is this the start of a comeback? \(score).", "Consolation, or the spark for a fightback?",
+                     "\(club.name) have a lifeline at \(score).", "Game on? \(club.name) are back within reach.",
+                     "\(opponent.name) had it under control. Did they?"]
         }
         return lines.randomElement()!
     }

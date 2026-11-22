@@ -427,6 +427,12 @@ public struct MatchEngine {
         side.active[outIndex] = fresh
         side.bench.removeAll { $0.id == incoming.id }
         side.registerSubstitution(atMinute: minute)
+        // An injury line names the man who replaces him.
+        if reason == .injury,
+           let i = events.lastIndex(where: { $0.type == .injury && $0.playerId == out.player.id }) {
+            events[i].detailText += " " + Commentary.injuryReplacement(incoming: incoming, injured: out.player)
+            events[i].shortText += " · \(incoming.displayName) on"
+        }
         let text = Commentary.substitution(playerIn: incoming, playerOut: out.player, club: club, minute: minute, reason: reason)
         events.append(MatchEvent(minute: minute, type: .substitution, clubId: club.id, playerId: incoming.id,
                                  assistPlayerId: out.player.id, shortText: text.short, detailText: text.detail, isHomeTeam: isHome))
@@ -1221,11 +1227,17 @@ public struct MatchEngine {
         let fouler = side.active[foulerIdx]
         side.active[foulerIdx].currentRating -= 0.05
 
+        // The man fouled: an outfield player of the other side.
+        let otherSide = defendingIsHome ? state.away : state.home
+        let victimIdx = otherSide.active.indices
+            .filter { otherSide.active[$0].isOnPitch && otherSide.active[$0].slot != .GK }
+            .randomElement()
+        let victim = victimIdx.map { otherSide.active[$0].player }
+
         // Some fouls hurt the man fouled.
         if Double.random(in: 0..<1) < 0.008 + Double(config.derbyIntensity) * 0.003 {
             var victimSide = defendingIsHome ? state.away : state.home
-            let victims = victimSide.active.indices.filter { victimSide.active[$0].isOnPitch && victimSide.active[$0].slot != .GK }
-            if let v = victims.randomElement() {
+            if let v = victimIdx, v < victimSide.active.count, victimSide.active[v].isOnPitch {
                 injure(&victimSide, index: v, club: defendingIsHome ? awayClub : homeClub, isHome: !defendingIsHome,
                        minute: minute, contact: true, events: &state.events)
                 if defendingIsHome { state.away = victimSide } else { state.home = victimSide }
@@ -1248,9 +1260,14 @@ public struct MatchEngine {
 
         if straightRed {
             sendOff(&side, index: foulerIdx, club: foulingClub, isHome: defendingIsHome, minute: minute, secondYellow: false,
-                    ban: isPenalty ? 1 : (Double.random(in: 0..<1) < 0.6 ? 3 : 1), events: &state.events)
+                    ban: isPenalty ? 1 : (Double.random(in: 0..<1) < 0.6 ? 3 : 1), victim: victim, events: &state.events)
         } else if Double.random(in: 0..<1) < cardChance {
-            book(&side, index: foulerIdx, club: foulingClub, isHome: defendingIsHome, minute: minute, events: &state.events)
+            book(&side, index: foulerIdx, club: foulingClub, isHome: defendingIsHome, minute: minute, victim: victim, events: &state.events)
+        } else if !isPenalty && Double.random(in: 0..<1) < 0.5 {
+            // An ordinary foul: a line of commentary, not every time.
+            let text = Commentary.foul(player: fouler.player, victim: victim, club: foulingClub, minute: minute)
+            state.events.append(MatchEvent(minute: minute, type: .commentary, clubId: foulingClub.id, playerId: fouler.player.id,
+                                           shortText: text.short, detailText: text.detail, isHomeTeam: defendingIsHome))
         }
         if defendingIsHome { state.home = side } else { state.away = side }
 
@@ -1261,27 +1278,30 @@ public struct MatchEngine {
         }
     }
 
-    private static func book(_ side: inout SideState, index: Int, club: Club, isHome: Bool, minute: Int, events: inout [MatchEvent]) {
+    private static func book(_ side: inout SideState, index: Int, club: Club, isHome: Bool, minute: Int, victim: Player? = nil,
+                             events: inout [MatchEvent]) {
         let player = side.active[index].player
         if side.active[index].yellowCards >= 1 {
             side.active[index].yellowCards += 1
-            sendOff(&side, index: index, club: club, isHome: isHome, minute: minute, secondYellow: true, ban: 1, events: &events)
+            sendOff(&side, index: index, club: club, isHome: isHome, minute: minute, secondYellow: true, ban: 1, victim: victim,
+                    events: &events)
             return
         }
         side.active[index].yellowCards = 1
         side.active[index].currentRating -= 0.3
-        let text = Commentary.card(player: player, club: club, isRed: false, minute: minute)
+        let text = Commentary.card(player: player, club: club, isRed: false, minute: minute, victim: victim)
         events.append(MatchEvent(minute: minute, type: .yellowCard, clubId: club.id, playerId: player.id,
                                  shortText: text.short, detailText: text.detail, isHomeTeam: isHome))
     }
 
     private static func sendOff(_ side: inout SideState, index: Int, club: Club, isHome: Bool, minute: Int, secondYellow: Bool,
-                                ban: Int, events: inout [MatchEvent]) {
+                                ban: Int, victim: Player? = nil, events: inout [MatchEvent]) {
         let player = side.active[index].player
         side.active[index].isSentOff = true
         side.active[index].redCardBan = ban
         side.active[index].currentRating -= secondYellow ? 1.2 : 1.5
-        let text = Commentary.card(player: player, club: club, isRed: !secondYellow, isSecondYellow: secondYellow, minute: minute)
+        let text = Commentary.card(player: player, club: club, isRed: !secondYellow, isSecondYellow: secondYellow, minute: minute,
+                                   victim: victim)
         events.append(MatchEvent(minute: minute, type: secondYellow ? .secondYellow : .redCard, clubId: club.id, playerId: player.id,
                                  shortText: text.short, detailText: text.detail, isHomeTeam: isHome))
     }
@@ -1628,6 +1648,11 @@ public struct MatchEngine {
                 yellowCard: ap.yellowCards == 1 && !ap.isSentOff,
                 redCard: ap.isSentOff,
                 cleanSheet: opponentGoals == 0 && ap.minutesPlayed >= 60,
+                // A keeper is charged with the goals let in while he played
+                // (all of them over a full match; a share for a part).
+                goalsConceded: ap.slot == .GK
+                    ? Int((Double(opponentGoals) * min(1.0, Double(ap.minutesPlayed) / 90.0)).rounded())
+                    : 0,
                 isMotm: p.id == motmId,
                 redCardBan: ap.redCardBan,
                 matchFatigue: ap.currentFatigue

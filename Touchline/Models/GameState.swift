@@ -200,6 +200,16 @@ public final class GameState: Codable {
     /// Transfer fees still to be paid: later installments and conditional
     /// add-ons, settled as their dates come round.
     public var transferInstallments: [TransferInstallment] = []
+    /// Awards nights still to come (the Ballon d'Or, the Team of the Year).
+    public var pendingCeremonies: [AwardCeremony] = []
+    /// An awards night just held, waiting to be shown on screen.
+    public var ceremonyToShow: AwardCeremony? = nil
+    /// The end-of-season review is on screen (from Start New Season).
+    public var showingSeasonReview = false
+    /// The eleven, formation and approach the user picked for his nation.
+    public var nationalTactics: Tactics? = nil
+    /// The last international match the user managed.
+    public var lastInternationalReport: InternationalReport? = nil
     /// Rounds of contract-renewal talks with each of the user's players this
     /// session. A player tires of haggling after a few.
     var renewalRounds: [UUID: Int] = [:]
@@ -427,6 +437,11 @@ public final class GameState: Codable {
         sponsorAgencyCooldown = other.sponsorAgencyCooldown
         awaitingClubPurchase = other.awaitingClubPurchase
         transferInstallments = other.transferInstallments
+        pendingCeremonies = other.pendingCeremonies
+        ceremonyToShow = other.ceremonyToShow
+        showingSeasonReview = false
+        nationalTactics = other.nationalTactics
+        lastInternationalReport = other.lastInternationalReport
         renewalRounds = [:]
     }
 
@@ -488,6 +503,10 @@ public final class GameState: Codable {
         snapshot.sponsorAgencyCooldown = sponsorAgencyCooldown
         snapshot.awaitingClubPurchase = awaitingClubPurchase
         snapshot.transferInstallments = transferInstallments
+        snapshot.pendingCeremonies = pendingCeremonies
+        snapshot.ceremonyToShow = ceremonyToShow
+        snapshot.nationalTactics = nationalTactics
+        snapshot.lastInternationalReport = lastInternationalReport
         return snapshot
     }
 
@@ -966,6 +985,8 @@ public final class GameState: Codable {
         
         // Transfer installments and add-ons that have fallen due.
         if !isCupNight { payDueInstallments() }
+        // Awards nights: the Ballon d'Or in October, the Team of the Year in January.
+        holdDueCeremonies()
 
         // 3. AI manager autonomous dealings and transfer negotiation resolution
         processAITransfers()
@@ -2203,6 +2224,8 @@ public final class GameState: Codable {
     public func takeOverNationalTeam(id: String) {
         guard nationalTeams.contains(where: { $0.id == id }) else { return }
         managedNationalTeamId = id
+        // A new squad: the old selection no longer applies.
+        nationalTactics = nil
         if let team = nationalTeam(withId: id) {
             addNews(
                 headline: "You Are the New \(team.name) Manager",
@@ -2215,6 +2238,7 @@ public final class GameState: Codable {
 
     public func resignNationalTeam() {
         managedNationalTeamId = nil
+        nationalTactics = nil
     }
 
     /// Plays every international fixture dated on or before the game's date
@@ -2227,7 +2251,9 @@ public final class GameState: Codable {
         for idx in internationalTournaments.indices {
             var tournament = internationalTournaments[idx]
             guard tournament.stage != .complete else { continue }
-            tournament.play(through: cutoff) { homeId, awayId in
+            // The nation the user manages plays its own matches.
+            let held = gameMode == .manageClub ? managedNationalTeamId : nil
+            tournament.play(through: cutoff, holdingTeam: held) { homeId, awayId in
                 guard let home = nationalTeam(withId: homeId),
                       let away = nationalTeam(withId: awayId) else { return (0, 0) }
                 return Self.simulateNationalScore(home: home.strength, away: away.strength)
@@ -4426,6 +4452,8 @@ public final class GameState: Codable {
     public func startNewSeason() {
         // Loanees go home before contracts, retirements and squad sizes are reviewed.
         returnLoanedPlayers()
+        // Older saves: leagues no longer in the game leave between seasons.
+        pruneLeaguesOutsideTheGame()
         ageManagerContract()
         // Keep three seasons of world transfer history (and all of the user's).
         if let startYear = Int(season.year.prefix(4)) {
@@ -4512,6 +4540,7 @@ public final class GameState: Codable {
             for pIdx in 0..<clubs[cIdx].players.count {
                 let appearances = clubs[cIdx].players[pIdx].seasonStats.appearances
                 let averageRating = clubs[cIdx].players[pIdx].seasonStats.averageRating
+                let finished = clubs[cIdx].players[pIdx].seasonStats
                 let potentialBefore = clubs[cIdx].players[pIdx].potential
                 clubs[cIdx].players[pIdx].seasonStats = SeasonStats()
                 clubs[cIdx].players[pIdx].yellowCards = 0
@@ -4522,8 +4551,10 @@ public final class GameState: Codable {
                 // Young players develop, veterans decline; values are re-rated.
                 clubs[cIdx].players[pIdx].applySeasonalDevelopment(appearances: appearances,
                                                                     trainingLevel: clubs[cIdx].trainingFacilityLevel,
-                                                                    averageRating: averageRating)
-                if clubs[cIdx].isUserClub && clubs[cIdx].players[pIdx].age <= 25 {
+                                                                    averageRating: averageRating,
+                                                                    goals: finished.goals, assists: finished.assists,
+                                                                    cleanSheets: finished.cleanSheets)
+                if clubs[cIdx].isUserClub && clubs[cIdx].players[pIdx].age <= 34 {
                     let change = clubs[cIdx].players[pIdx].potential - potentialBefore
                     if change >= 2 || change <= -2 { potentialChanges.append((clubs[cIdx].players[pIdx].fullName, change)) }
                 }
@@ -4600,7 +4631,7 @@ public final class GameState: Codable {
             }
             addNews(
                 headline: "Scouts Revise Potential Ratings",
-                body: "After last season's performances the staff have reassessed our young players' ceilings. " + lines.joined(separator: " "),
+                body: "After last season's performances the staff have reassessed our players' ceilings. " + lines.joined(separator: " "),
                 category: .general,
                 sender: "Head of Youth Development"
             )
@@ -5375,7 +5406,7 @@ public final class GameState: Codable {
         let best = club.players.filter { $0.seasonStats.appearances >= 10 }
             .max { $0.seasonStats.averageRating < $1.seasonStats.averageRating }
 
-        return SeasonReview(
+        var review = SeasonReview(
             season: season.year,
             clubName: club.name,
             leagueName: league.name,
@@ -5393,6 +5424,11 @@ public final class GameState: Codable {
             topScorer: topScorer.flatMap { $0.seasonStats.goals > 0 ? "\($0.fullName) (\($0.seasonStats.goals))" : nil },
             playerOfSeason: best.map { "\($0.fullName) (\(String(format: "%.2f", $0.seasonStats.averageRating)))" }
         )
+        let runs = otherCompetitionRuns(for: club.id, country: league.tier.country)
+        review.leagueCupRun = runs.leagueCup
+        review.europeanRuns = runs.europe.isEmpty ? nil : runs.europe
+        addDivisionHonours(to: &review, table: table, finalTables: finalTables)
+        return review
     }
 
     /// Golden Boot and Player of the Season for every top flight, plus the
@@ -5697,6 +5733,21 @@ public final class GameState: Codable {
         }
     }
 
+    /// Out of a club job (perhaps running a national team instead): a week
+    /// passes while the rest of the world plays on, and clubs or federations
+    /// may call. At the end of a season, the next one begins.
+    public func advanceWhileUnemployed() {
+        guard gameMode == .manageClub, userClubId == nil else { return }
+        if isEndOfSeason {
+            startNewSeason()
+        } else {
+            advanceWeek()
+        }
+        if Double.random(in: 0..<1) < 0.35 {
+            generateJobOffers(maxCount: 2, excludeUserClub: false)
+        }
+    }
+
     /// Ends every live negotiation tied to the user's current club. Called when
     /// the manager leaves, so a bid made for the old club cannot complete for
     /// (or charge) the new one, and old inbox actions stop being actionable.
@@ -5736,9 +5787,19 @@ public final class GameState: Codable {
             candidates.append(contentsOf: fallback)
         }
 
-        // Weight selection toward the best-fitting roles without randomising the
-        // whole world every week — offers are generated on demand (job screen / news).
-        let sorted = candidates.sorted { $0.reputation > $1.reputation }
+        // Clubs already offering are not asked again, and the rest are drawn
+        // from across the manager's whole range (most near his level, some a
+        // step up, some a step down), not just the biggest dozen, so every
+        // search turns up different clubs.
+        let alreadyOffering = Set(jobOffers.compactMap { $0.clubId })
+        candidates.removeAll { alreadyOffering.contains($0.id) }
+        func fit(_ club: Club) -> Double {
+            let gap = Double(club.reputation - userRep)
+            return gap > 0 ? max(0.15, 1 - gap / 18) : max(0.25, 1 + gap / 40)
+        }
+        var weighted = candidates.map { ($0, fit($0) * Double.random(in: 0.3...1.0)) }
+        weighted.sort { $0.1 > $1.1 }
+        let sorted = weighted.map { $0.0 }
         var newOffers: [JobOffer] = []
         for club in sorted.prefix(requestedCount * 3) {
             let league = leagues.first { $0.tier == club.leagueTier }
@@ -5756,9 +5817,7 @@ public final class GameState: Codable {
             )
         }
 
-        // Shuffle a little so the ordering isn't strictly by reputation.
-        newOffers.shuffle()
-        let chosen = Array(newOffers.prefix(requestedCount))
+        let chosen = Array(newOffers.prefix(requestedCount)).shuffled()
 
         // De-duplicate against offers we already hold.
         let existingClubIds = Set(jobOffers.compactMap { $0.clubId })
@@ -5776,6 +5835,62 @@ public final class GameState: Codable {
                 sender: "\(offer.teamName) Board"
             )
         }
+        generateNationalTeamOffers()
+    }
+
+    /// The standing a national team asks of its manager: its strength, a bit
+    /// more for the very best sides.
+    func nationalTeamReputation(_ team: NationalTeam) -> Int {
+        let ranked = team.fifaRanking.map { $0 <= 10 ? 8 : $0 <= 30 ? 4 : 0 } ?? 0
+        return min(99, Int(team.strength) + ranked)
+    }
+
+    /// National federations looking for a manager approach the user if his
+    /// reputation is high enough. An international post can be held alongside
+    /// a club job, or on its own.
+    func generateNationalTeamOffers() {
+        guard gameMode == .manageClub, managedNationalTeamId == nil, !nationalTeams.isEmpty else { return }
+        // Not every search: federations change managers rarely.
+        guard Double.random(in: 0..<1) < (userClubId == nil ? 0.6 : 0.35) else { return }
+        let rep = manager.reputation
+        let offered = Set(jobOffers.compactMap { $0.nationalTeamId })
+        let candidates = nationalTeams.filter { team in
+            !offered.contains(team.id) && nationalTeamReputation(team) <= rep + 8 && nationalTeamReputation(team) >= rep - 30
+        }
+        for team in candidates.shuffled().prefix(Int.random(in: 1...2)) {
+            let offer = JobOffer(
+                clubId: nil,
+                kind: .nationalTeam,
+                teamName: team.name,
+                leagueName: "\(team.confederation.rawValue) national team",
+                reputation: nationalTeamReputation(team),
+                offeredWage: max(2_000, nationalTeamReputation(team) * 600),
+                seasonYear: season.year,
+                nationalTeamId: team.id
+            )
+            jobOffers.append(offer)
+            addNews(
+                headline: "\(team.name) Want You as Head Coach",
+                body: "The \(team.name) federation would like you to lead the national team. You can take it on alongside your club job, or on its own. Visit Job Offers to respond.",
+                category: .board,
+                sender: "\(team.name) Federation"
+            )
+        }
+    }
+
+    /// Accepts an international post. It does not affect the club job.
+    @discardableResult
+    public func acceptNationalTeamOffer(_ offer: JobOffer) -> Bool {
+        guard let id = offer.nationalTeamId, nationalTeams.contains(where: { $0.id == id }) else {
+            jobOffers.removeAll { $0.id == offer.id }
+            return false
+        }
+        takeOverNationalTeam(id: id)
+        hasStartedCareer = true
+        manager.reputation = min(100, max(manager.reputation, min(offer.reputation, manager.reputation + 5)))
+        // Only one national team at a time.
+        jobOffers.removeAll { $0.kind == .nationalTeam }
+        return true
     }
 
     /// Accepts a job offer, moving the user to that club. Any current club is
@@ -6092,6 +6207,10 @@ public final class GameState: Codable {
         case sponsorAgencyCooldown
         case awaitingClubPurchase
         case transferInstallments
+        case pendingCeremonies
+        case ceremonyToShow
+        case nationalTactics
+        case lastInternationalReport
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -6148,6 +6267,10 @@ public final class GameState: Codable {
         try container.encode(sponsorAgencyCooldown, forKey: .sponsorAgencyCooldown)
         try container.encode(awaitingClubPurchase, forKey: .awaitingClubPurchase)
         try container.encode(transferInstallments, forKey: .transferInstallments)
+        try container.encode(pendingCeremonies, forKey: .pendingCeremonies)
+        try container.encodeIfPresent(ceremonyToShow, forKey: .ceremonyToShow)
+        try container.encodeIfPresent(nationalTactics, forKey: .nationalTactics)
+        try container.encodeIfPresent(lastInternationalReport, forKey: .lastInternationalReport)
     }
     
     public required init(from decoder: Decoder) throws {
@@ -6205,6 +6328,10 @@ public final class GameState: Codable {
         self.sponsorAgencyCooldown = try container.decodeIfPresent(Int.self, forKey: .sponsorAgencyCooldown) ?? 0
         self.awaitingClubPurchase = try container.decodeIfPresent(Bool.self, forKey: .awaitingClubPurchase) ?? false
         self.transferInstallments = try container.decodeIfPresent([TransferInstallment].self, forKey: .transferInstallments) ?? []
+        self.pendingCeremonies = try container.decodeIfPresent([AwardCeremony].self, forKey: .pendingCeremonies) ?? []
+        self.ceremonyToShow = try container.decodeIfPresent(AwardCeremony.self, forKey: .ceremonyToShow)
+        self.nationalTactics = try container.decodeIfPresent(Tactics.self, forKey: .nationalTactics)
+        self.lastInternationalReport = try container.decodeIfPresent(InternationalReport.self, forKey: .lastInternationalReport)
         // Saves written before this flag existed: any save with a user club, or
         // a manager career (possibly between jobs), is a real career.
         // (Re-decoded into locals: reading `self` properties is not allowed until

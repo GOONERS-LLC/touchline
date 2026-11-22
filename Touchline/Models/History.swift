@@ -165,7 +165,8 @@ extension GameState {
                 log.append(PlayerSeasonLine(season: season.year, club: club.shortName,
                                             appearances: stats.appearances, goals: stats.goals,
                                             assists: stats.assists, averageRating: stats.averageRating,
-                                            overall: player.overall))
+                                            overall: player.overall,
+                                            cleanSheets: stats.cleanSheets, goalsConceded: stats.goalsConceded))
                 if log.count > 12 { log.removeFirst(log.count - 12) }
                 clubs[c].players[p].careerLog = log
             }
@@ -176,18 +177,14 @@ extension GameState {
     /// five leagues.
     private func recordWorldAwards(finalTables: [LeagueTier: [LeagueStanding]]) {
         let year = season.year
-        let bigFive: [LeagueCountry] = [.england, .spain, .italy, .germany, .france]
-        let topClubs = clubs.filter { $0.leagueTier.level == 1 && bigFive.contains($0.leagueTier.country) }
+        // Every league in the world, top flight and below. The awards weigh
+        // the strength of the league (see seasonScore), so a big season in a
+        // small league does not outrank one in the Premier League.
         let champions = Set(finalTables.values.compactMap { $0.first?.clubId })
-        let pool = topClubs.flatMap { club in club.players.map { (player: $0, club: club) } }
+        let pool = clubs.flatMap { club in club.players.map { (player: $0, club: club) } }
             .filter { $0.player.seasonStats.appearances >= 20 }
         guard !pool.isEmpty else { return }
 
-        func score(_ entry: (player: Player, club: Club)) -> Double {
-            let s = entry.player.seasonStats
-            return s.averageRating * 10 + Double(s.goals) * 0.6 + Double(s.assists) * 0.35
-                + Double(entry.player.overall) * 0.2 + (champions.contains(entry.club.id) ? 4 : 0)
-        }
         func give(_ award: String, _ entry: (player: Player, club: Club)?, _ detail: (Player) -> String) {
             guard let entry else { return }
             let record = AwardRecord(season: year, award: award, playerId: entry.player.id,
@@ -201,21 +198,27 @@ extension GameState {
                 sender: entry.club.id == userClubId ? "Awards Committee" : "World Football Awards"
             )
         }
-        give("World Player of the Year", pool.max { score($0) < score($1) }) {
-            "\($0.seasonStats.goals) goals, \($0.seasonStats.assists) assists, average rating \(String(format: "%.2f", $0.seasonStats.averageRating))"
+        // The Golden Shoe: goals weighted by the league, as the real award
+        // is (double in Europe's big five, one and a half in other top
+        // flights). It goes to the top scorer as the season ends.
+        let bigFive: Set<LeagueCountry> = [.england, .spain, .italy, .germany, .france]
+        func shoePoints(_ entry: (player: Player, club: Club)) -> Double {
+            let tier = entry.club.leagueTier
+            let factor = tier.level == 1 ? (bigFive.contains(tier.country) ? 2.0 : 1.5) : 1.0
+            return Double(entry.player.seasonStats.goals) * factor
         }
-        give("Young Player of the Year", pool.filter { $0.player.age <= 21 }.max { score($0) < score($1) }) {
-            "Aged \($0.age): \($0.seasonStats.appearances) games, \($0.seasonStats.goals) goals"
-        }
-        give("Goalkeeper of the Year", pool.filter { $0.player.primaryPosition == .GK }
-            .max { ($0.player.seasonStats.cleanSheets, $0.player.seasonStats.averageRating) < ($1.player.seasonStats.cleanSheets, $1.player.seasonStats.averageRating) }) {
-            "\($0.seasonStats.cleanSheets) clean sheets in \($0.seasonStats.appearances) games"
-        }
-        give("European Golden Shoe", pool.max { $0.player.seasonStats.goals < $1.player.seasonStats.goals }) {
+        give("European Golden Shoe", pool.max { shoePoints($0) < shoePoints($1) }) {
             "\($0.seasonStats.goals) goals in \($0.seasonStats.appearances) games"
         }
+        // The Ballon d'Or and the Team of the Year are decided now but
+        // presented later, in October and January. Lifting the Champions
+        // League counts for a lot.
+        var winners = champions
+        if let europeanChampion = europeanCompetitions.first(where: { $0.competition == .championsLeague })?.championClubId {
+            winners.insert(europeanChampion)
+        }
+        scheduleAwardCeremonies(pool: pool, champions: winners)
     }
-
     /// Adds this season's appearances to the Hall of Fame of the user's club.
     private func recordLegends() {
         guard let club = userClub else { return }

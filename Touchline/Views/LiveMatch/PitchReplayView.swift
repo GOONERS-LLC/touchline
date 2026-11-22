@@ -203,14 +203,16 @@ public struct LiveMatchView: View {
     @State private var didSimulate = false
     @State private var ticker: Timer?
     @State private var goalFlash: MatchEvent?
-    @State private var pane: Pane = .pitch
+    @State private var pane: Pane = .commentary
     /// Why the match is stopped for the manager (half-time, an injury, or
     /// his own call); nil while it is running.
     @State private var touchline: String?
     @State private var editingLineup = false
     @State private var editingTactics = false
 
-    enum Pane: String, CaseIterable { case pitch = "Pitch", commentary = "Commentary", stats = "Stats", lineups = "Lineups" }
+    // The animated pitch view is gone: the match is followed in the
+    // commentary, with the stats and line-ups alongside.
+    enum Pane: String, CaseIterable { case commentary = "Commentary", stats = "Stats", lineups = "Lineups" }
 
     private var fixture: Fixture? { gameState.activeMatchFixture }
     private var session: LiveMatchSession? {
@@ -249,10 +251,6 @@ public struct LiveMatchView: View {
 
                 Group {
                     switch pane {
-                    case .pitch:
-                        PitchReplayView(fixture: fixture, homeClub: home, awayClub: away, minute: minute)
-                            .padding(.horizontal, 12)
-                        timelineFeed(home: home, away: away)
                     case .commentary:
                         commentaryCards(home: home, away: away)
                     case .stats:

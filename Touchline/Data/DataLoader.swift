@@ -63,7 +63,8 @@ public final class DataLoader {
         var allClubs: [Club] = []
         var allLeagues: [League] = []
 
-        for tier in LeagueTier.allCases {
+        // Only countries whose club football is in the game (see WorldScope).
+        for tier in LeagueTier.allCases where tier.country.hasClubLeagues {
             let raw = loadRawLeague(for: tier)
             if let rawLeague = raw {
                 var leagueClubIds: [UUID] = []
@@ -662,8 +663,9 @@ public final class DataLoader {
             // and the biggest clubs find them more often.
             let gemChance = 0.02 + Double(max(0, club.youthAcademyLevel - 1)) * 0.015 + Double(max(0, club.reputation - 70)) * 0.002
             if Double.random(in: 0..<1) < gemChance { potBonus += Int.random(in: 8...16) }
-            // The ceiling rises with the academy: about 82 at level 1, 94 at level 5.
-            let ceiling = min(95, 79 + club.youthAcademyLevel * 3)
+            // The ceiling rises with the academy: about 85 at level 1, 97 at
+            // level 5, and a true gem can go higher still.
+            let ceiling = min(99, 82 + club.youthAcademyLevel * 3 + (potBonus >= 26 ? 2 : 0))
             let potential = max(overall + 5, min(ceiling, overall + potBonus))
 
             let attrs = generateAttributes(overall: overall, position: pos)
