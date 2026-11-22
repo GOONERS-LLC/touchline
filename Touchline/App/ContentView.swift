@@ -1069,7 +1069,7 @@ public struct SquadView: View {
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         lineupBar(club)
-                        LineupEditorView(onProfile: { gameState.currentScreen = .playerDetail($0) })
+                        LineupEditorView(onProfile: { gameState.openProfile($0) })
                     case .players:
                         fullSquad(club)
                     case .contracts:
@@ -1600,6 +1600,28 @@ public struct TrainingView: View {
                     }
                 }
 
+                Section(header: Text("Facilities"),
+                        footer: Text("Better training facilities mean players improve during the season, month by month, as well as in the summer. Good form helps too.")) {
+                    ForEach(FacilityKind.allCases) { kind in
+                        let level = gameState.facilityLevel(kind)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(kind.title).fontWeight(.semibold)
+                                Spacer()
+                                Text("Level \(level) of 5").font(.subheadline.monospacedDigit())
+                            }
+                            Text(kind.effect).font(.caption).foregroundStyle(.secondary)
+                            if level < 5 {
+                                Button("Ask the Board to Upgrade (\(Player.formatCurrency(gameState.facilityUpgradeCost(kind))))") {
+                                    message = gameState.requestFacilityUpgrade(kind)
+                                    try? SaveManager.shared.autoSave(gameState: gameState)
+                                }
+                                .font(.subheadline)
+                            }
+                        }
+                    }
+                }
+
                 Section("Squad Pulse") {
                     let healthy = club.players.filter { $0.injury == nil }
                     LabeledContent("Healthy players", value: "\(healthy.count) / \(club.players.count)")
@@ -1754,7 +1776,7 @@ public struct StandingsView: View {
             }
             ForEach(Array(entries.prefix(25).enumerated()), id: \.element.player.id) { index, entry in
                 Button {
-                    gameState.currentScreen = .playerDetail(entry.player.id)
+                    gameState.openProfile(entry.player.id)
                 } label: {
                     HStack(spacing: 10) {
                         Text("\(index + 1)")
@@ -1852,7 +1874,7 @@ public struct StandingsView: View {
                     Text(current.name)
                         .font(.headline)
                         .foregroundStyle(.primary)
-                    Text("\(current.tier.country.displayName) • Matchweek \(min(gameState.season.currentWeek, gameState.season.totalMatchWeeks)) • \(gameState.season.year)")
+                    Text("\(current.tier.country.displayName) • Matchweek \(gameState.currentLeagueRound(competition: current.name)) •\(gameState.season.year)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -2602,7 +2624,7 @@ public struct MatchDayView: View {
                let away = gameState.club(withId: fixture.awayClubId) {
                 VStack(spacing: 16) {
                     GFScreenTitle(title: "Pre-Match Zone",
-                                  subtitle: fixture.cupRound.map { "\(fixture.competition) · \($0)" } ?? "\(fixture.competition) · Matchweek \(fixture.matchWeek)")
+                                  subtitle: fixture.cupRound.map { "\(fixture.competition) · \($0)" } ?? "\(fixture.competition) · Matchweek \(gameState.leagueRound(of: fixture))")
                     GFTabs(selection: $zone)
                     switch zone {
                     case .info:
@@ -2678,7 +2700,7 @@ public struct MatchDayView: View {
 
     private func hero(fixture: Fixture, home: Club, away: Club) -> some View {
         VStack(spacing: 12) {
-            Text(fixture.cupRound.map { "\(fixture.competition) • \($0)" } ?? "\(fixture.competition) • Matchweek \(fixture.matchWeek)")
+            Text(fixture.cupRound.map { "\(fixture.competition) • \($0)" } ?? "\(fixture.competition) • Matchweek \(gameState.leagueRound(of: fixture))")
                 .font(.caption.weight(.bold))
                 .foregroundStyle(.white.opacity(0.85))
             HStack {
@@ -3008,7 +3030,7 @@ public struct PlayerDetailView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Done") {
                     if case .playerDetail = gameState.currentScreen {
-                        gameState.currentScreen = .squad
+                        gameState.closeProfile()
                     } else {
                         dismiss()
                     }

@@ -69,7 +69,7 @@ public struct InjuryEngine {
         if carryingKnock { risk *= 1.8 }
         // The factors overlap (an old, unfit, tired player is one risk, not
         // five stacked ones); uncapped, a tired squad broke down in clusters.
-        return min(risk, 3.5)
+        return min(risk, 2.5)
     }
 
     /// How bad it is. About two in five are knocks he runs off.
@@ -129,7 +129,7 @@ public struct InjuryEngine {
     /// injury-prone players most of all. Better medical facilities help.
     public static func trainingInjury(player: Player, medicalLevel: Int, days: Int = 7) -> Injury? {
         guard player.injury == nil else { return nil }
-        var chance = 0.003 * Double(days) / 7.0
+        var chance = 0.002 * Double(days) / 7.0
         chance *= proneness(of: player)
         if player.matchFitness < 60 { chance *= 1.6 }
         if player.age >= 32 { chance *= 1.4 }

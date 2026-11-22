@@ -19,13 +19,15 @@ public struct MatchSettings: Codable, Hashable {
 
         public var id: String { rawValue }
 
-        /// Seconds between displayed minutes during replay.
+        /// Seconds between displayed minutes during replay. Each step is one
+        /// faster than it used to be (the old Normal is now Slow, the old
+        /// Very Fast is now Fast), with a genuinely very fast top speed.
         public var tickInterval: Double {
             switch self {
-            case .slow: return 0.7
-            case .normal: return 0.35
-            case .fast: return 0.18
-            case .veryFast: return 0.08
+            case .slow: return 0.35
+            case .normal: return 0.18
+            case .fast: return 0.08
+            case .veryFast: return 0.03
             }
         }
 

@@ -820,6 +820,9 @@ public struct LiveMatchView: View {
                 Haptics.matchEvent(ev.type)
             }
         }
+        if inProgress, let capacity = fixture.flatMap({ gameState.club(withId: $0.homeClubId)?.stadiumCapacity }) {
+            CrowdAtmosphere.shared.ensureRunning(capacity: capacity)
+        }
         CrowdAtmosphere.shared.tickMinute(homeLeading: currentHomeGoals > currentAwayGoals)
 
         // VoiceOver follows the match: everything that happened this minute is

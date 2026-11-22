@@ -59,10 +59,15 @@ public struct MailboxView: View {
             } else {
                 ForEach(dayGroups, id: \.date) { group in
                     Section(header: Text(Self.headerDate(group.date)).font(.gfLabel(14)).foregroundStyle(.white)) {
+                        // Just the subject: tap it to open the message, with
+                        // any actions it needs.
                         ForEach(group.items) { item in
-                            MailRow(item: item)
-                                .listRowBackground(item.isRead ? Color.gfSurface : Color(hex: "1E3E70"))
-                                .onTapGesture { gameState.markMailRead(id: item.id) }
+                            NavigationLink {
+                                MailDetailView(item: item)
+                            } label: {
+                                MailSubjectRow(item: item)
+                            }
+                            .listRowBackground(item.isRead ? Color.gfSurface : Color(hex: "1E3E70"))
                         }
                     }
                 }
@@ -149,6 +154,55 @@ public struct MailboxView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Filter by \(label)")
         .accessibilityAddTraits(filter == category ? .isSelected : [])
+    }
+}
+
+/// An inbox line: who it's from and the subject.
+struct MailSubjectRow: View {
+    let item: NewsItem
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: item.category.iconName)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 26)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.headline)
+                    .font(.subheadline.weight(item.isRead ? .regular : .bold))
+                    .lineLimit(2)
+                Text(item.sender)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if !item.isRead {
+                Circle().fill(Color.white).frame(width: 8, height: 8)
+                    .accessibilityHidden(true)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(item.isRead ? "" : "Unread. ")\(item.headline). From \(item.sender)")
+        .accessibilityHint("Opens the message")
+    }
+}
+
+/// One message in full, with its actions; opening it marks it read.
+struct MailDetailView: View {
+    @Environment(GameState.self) private var gameState
+    let item: NewsItem
+
+    var body: some View {
+        ScrollView {
+            MailRow(item: item)
+                .padding()
+                .gfCard()
+                .padding()
+        }
+        .stadiumBackground()
+        .navigationTitle(item.sender)
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { gameState.markMailRead(id: item.id) }
     }
 }
 

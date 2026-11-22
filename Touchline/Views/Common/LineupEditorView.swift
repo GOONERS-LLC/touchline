@@ -16,6 +16,13 @@ struct LineupEditorView: View {
     var onProfile: ((UUID) -> Void)? = nil
 
     @State private var selectedId: UUID?
+    /// A profile shown over the lineup (when no `onProfile` was given), so
+    /// looking at a player never moves him.
+    @State private var sheetProfileId: UUID?
+
+    private func showProfile(_ id: UUID) {
+        if let onProfile { onProfile(id) } else { sheetProfileId = id }
+    }
     @State private var message: String?
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
 
@@ -53,6 +60,11 @@ struct LineupEditorView: View {
                         players: club.reservePlayers.sorted { $0.overall > $1.overall }, club: club)
             }
             .animation(voiceOver ? nil : .snappy, value: selectedId)
+            .sheet(isPresented: Binding(get: { sheetProfileId != nil }, set: { if !$0 { sheetProfileId = nil } })) {
+                if let id = sheetProfileId {
+                    NavigationStack { PlayerDetailView(playerId: id) }
+                }
+            }
         }
     }
 
@@ -103,9 +115,7 @@ struct LineupEditorView: View {
                     tap(player.id)
                 }
                 .accessibilityActions {
-                    if let onProfile {
-                        Button("View profile") { onProfile(player.id) }
-                    }
+                    Button("View profile") { showProfile(player.id) }
                     if case .reserve = gameState.lineupSlot(of: player.id), club.tactics.substitutes.count < 7 {
                         Button("Add to bench") {
                             message = gameState.addToBench(player.id)
@@ -146,12 +156,10 @@ struct LineupEditorView: View {
                 } label: { Image(systemName: "arrow.down.circle.fill").font(.title2) }
                 .accessibilityLabel("Drop to reserves")
             }
-            if let onProfile {
-                Button {
-                    onProfile(player.id)
-                } label: { Image(systemName: "person.text.rectangle").font(.title2) }
-                .accessibilityLabel("View profile")
-            }
+            Button {
+                showProfile(player.id)
+            } label: { Image(systemName: "person.text.rectangle").font(.title2) }
+            .accessibilityLabel("View profile")
             Button {
                 selectedId = nil
             } label: { Image(systemName: "xmark.circle.fill").font(.title2).foregroundStyle(.secondary) }
@@ -180,13 +188,18 @@ struct LineupEditorView: View {
                         ForEach(players) { player in
                             SquadPlayerCard(player: player, isSelected: player.id == selectedId)
                                 .onTapGesture { tap(player.id) }
+                                // Press and hold for the profile, without
+                                // touching the lineup.
+                                .contextMenu {
+                                    Button { showProfile(player.id) } label: {
+                                        Label("View profile", systemImage: "person.text.rectangle")
+                                    }
+                                }
                                 .accessibilityAddTraits(player.id == selectedId ? [.isButton, .isSelected] : .isButton)
                                 .accessibilityHint(selectedId == nil ? "Double tap to select" : "Double tap to swap with the selected player")
                                 .accessibilityAction { tap(player.id) }
                                 .accessibilityActions {
-                                    if let onProfile {
-                                        Button("View profile") { onProfile(player.id) }
-                                    }
+                                    Button("View profile") { showProfile(player.id) }
                                     if title == "Reserves", club.tactics.substitutes.count < 7 {
                                         Button("Add to bench") {
                                             message = gameState.addToBench(player.id)

@@ -307,7 +307,6 @@ public struct DashboardView: View {
                 tile("Inbox", "tray.full.fill", .mailbox, badge: gameState.unreadMailCount)
                 tile("News", "newspaper.fill", .news)
                 tile("Squad", "person.3.fill", .squad)
-                tile("Tactics", "list.bullet.clipboard.fill", .tactics)
                 tile("Training", "figure.run", .training)
                 tile("Table", "list.number", .standings)
                 tile("Fixtures", "calendar", .matchHistory)
@@ -349,7 +348,7 @@ public struct DashboardView: View {
     private var primaryCaption: String? {
         if gameState.isEndOfSeason { return "Season \(gameState.season.year) is over" }
         if let fixture = gameState.todaysUserFixture {
-            return fixture.cupRound.map { "\(fixture.competition) · \($0)" } ?? "\(fixture.competition) · Matchweek \(fixture.matchWeek)"
+            return fixture.cupRound.map { "\(fixture.competition) · \($0)" } ?? "\(fixture.competition) · Matchweek \(gameState.leagueRound(of: fixture))"
         }
         if let fixture = gameState.nextUserFixture { return "To match day · \(DashboardView.shortDate(fixture.date))" }
         return nil

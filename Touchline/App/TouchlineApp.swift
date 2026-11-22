@@ -16,6 +16,9 @@ struct TouchlineApp: App {
     @Environment(\.scenePhase) private var scenePhase
     
     init() {
+        // The crowd recordings are loaded up front, so the first live match
+        // has its crowd from kick-off.
+        CrowdAtmosphere.shared.warmUp()
         // Native segmented controls match the capsule tabs: navy track,
         // white selected segment, condensed capitals.
         let seg = UISegmentedControl.appearance()

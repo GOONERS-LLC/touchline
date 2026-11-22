@@ -19,6 +19,9 @@ public struct PostMatchView: View {
     private enum Step { case report, playerOfMatch, results }
     @State private var step: Step = .report
     @State private var playedVerdict = false
+    /// The player-of-the-match profile opens over this screen, so closing it
+    /// comes straight back here.
+    @State private var profilePlayerId: UUID?
     @AccessibilityFocusState private var headingFocused: Bool
 
     public var body: some View {
@@ -44,7 +47,7 @@ public struct PostMatchView: View {
                                 .padding(.top, 60)
                         }
                     case .results:
-                        Text(fixture.cupRound.map { "\(fixture.competition), \($0)" } ?? "\(fixture.competition), Matchweek \(fixture.matchWeek)")
+                        Text(fixture.cupRound.map { "\(fixture.competition), \($0)" } ?? "\(fixture.competition), Matchweek \(gameState.leagueRound(of: fixture))")
                             .font(.gfDisplay(20))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .accessibilityAddTraits(.isHeader)
@@ -81,6 +84,11 @@ public struct PostMatchView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         .onChange(of: step) { _, _ in headingFocused = true }
+        .sheet(isPresented: Binding(get: { profilePlayerId != nil }, set: { if !$0 { profilePlayerId = nil } })) {
+            if let id = profilePlayerId {
+                NavigationStack { PlayerDetailView(playerId: id) }
+            }
+        }
         .onAppear {
             guard !playedVerdict,
                   let fixture = gameState.activeMatchFixture,
@@ -112,7 +120,7 @@ public struct PostMatchView: View {
         let awayScorers = res.goalEvents.filter { !$0.isHomeTeam }
         return VStack(spacing: 14) {
             HStack(spacing: 6) {
-                Text(fixture.cupRound.map { "\(fixture.competition) • \($0)" } ?? "\(fixture.competition) • Matchweek \(fixture.matchWeek)")
+                Text(fixture.cupRound.map { "\(fixture.competition) • \($0)" } ?? "\(fixture.competition) • Matchweek \(gameState.leagueRound(of: fixture))")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.85))
                 if let derby = gameState.derbyName(for: fixture) {
@@ -339,7 +347,7 @@ public struct PostMatchView: View {
                 .accessibilityFocused($headingFocused)
                 .padding(.top, 10)
             Button {
-                gameState.currentScreen = .playerDetail(potm.player.id)
+                profilePlayerId = potm.player.id
             } label: {
                 VStack(spacing: 14) {
                     FaceView(player: potm.player, size: 130, style: .full)
@@ -386,7 +394,7 @@ public struct PostMatchView: View {
         let goals = res.goalEvents.filter { $0.playerId == potm.player.id && $0.type != .ownGoal }.count
         let assists = res.goalEvents.filter { $0.assistPlayerId == potm.player.id }.count
         return Button {
-            gameState.currentScreen = .playerDetail(potm.player.id)
+            profilePlayerId = potm.player.id
         } label: {
             VStack(spacing: 10) {
                 FaceView(player: potm.player, size: 76, style: .full)
@@ -510,7 +518,7 @@ public struct PostMatchView: View {
                 } label: {
                     HStack {
                         Image(systemName: "list.bullet.rectangle.portrait").foregroundStyle(Color.accentColor)
-                        Text("Elsewhere in Matchweek \(fixture.matchWeek)").font(.headline)
+                        Text("Elsewhere in Matchweek \(gameState.leagueRound(of: fixture))").font(.headline)
                         Spacer()
                         Text("\(others.count)").font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
                         Image(systemName: "chevron.down")

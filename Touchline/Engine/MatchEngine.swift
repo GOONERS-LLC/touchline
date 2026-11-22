@@ -112,7 +112,7 @@ public struct MatchEngine {
         static let xgSpread = 0.95
         static let blockRate = 0.23
         /// Chance per player per minute of something going wrong physically.
-        static let injuryHazard = 0.00017
+        static let injuryHazard = 0.00011
         static let maxSubs = 5
         static let maxWindows = 3
     }
@@ -1235,7 +1235,7 @@ public struct MatchEngine {
         let victim = victimIdx.map { otherSide.active[$0].player }
 
         // Some fouls hurt the man fouled.
-        if Double.random(in: 0..<1) < 0.008 + Double(config.derbyIntensity) * 0.003 {
+        if Double.random(in: 0..<1) < 0.005 + Double(config.derbyIntensity) * 0.002 {
             var victimSide = defendingIsHome ? state.away : state.home
             if let v = victimIdx, v < victimSide.active.count, victimSide.active[v].isOnPitch {
                 injure(&victimSide, index: v, club: defendingIsHome ? awayClub : homeClub, isHome: !defendingIsHome,

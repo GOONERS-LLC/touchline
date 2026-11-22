@@ -516,11 +516,33 @@ public enum FormationPreset: String, Codable, CaseIterable, Identifiable, Hashab
     case f3412 = "3-4-1-2"
     case f4321wide = "4-3-3 (Attack)"
     case f4312 = "4-3-1-2"
+    // Variations of the common shapes.
+    case f433hold = "4-3-3 (Defend)"
+    case f433f9 = "4-3-3 (False 9)"
+    case f442hold = "4-4-2 (Holding)"
+    case f442diamond = "4-1-2-1-2 (Diamond)"
+    case f4231wide = "4-2-3-1 (Wide)"
+    case f4231narrow = "4-2-3-1 (Narrow)"
+    case f4141att = "4-1-4-1 (Attack)"
+    case f352def = "3-5-2 (Defend)"
+    case f343flat = "3-4-3 (Flat)"
+    case f5212 = "5-2-1-2"
+    case f541 = "5-4-1"
+    case f424 = "4-2-4"
     
     public var id: String { rawValue }
     
     public var displayName: String { rawValue }
-    
+
+    /// The outfield lines, back to front, as the name says: 4-3-3 is
+    /// [4, 3, 3], 4-1-2-1-2 is [4, 1, 2, 1, 2]. The positions in
+    /// `defaultPositions` (after the keeper) are listed line by line.
+    public var lines: [Int] {
+        let shape = rawValue.split(separator: " ").first.map(String.init) ?? rawValue
+        let counts = shape.split(separator: "-").compactMap { Int($0) }
+        return counts.reduce(0, +) == 10 ? counts : [4, 4, 2]
+    }
+
     /// Exactly 11 positions designated by the formation.
     public var defaultPositions: [Position] {
         switch self {
@@ -560,6 +582,30 @@ public enum FormationPreset: String, Codable, CaseIterable, Identifiable, Hashab
             return [.GK, .LB, .CB, .CB, .RB, .CM, .CM, .CAM, .LW, .ST, .RW]
         case .f4312:
             return [.GK, .LB, .CB, .CB, .RB, .CM, .CM, .CM, .CAM, .ST, .ST]
+        case .f433hold:
+            return [.GK, .LB, .CB, .CB, .RB, .CDM, .CDM, .CM, .LW, .ST, .RW]
+        case .f433f9:
+            return [.GK, .LB, .CB, .CB, .RB, .CM, .CDM, .CM, .LW, .CF, .RW]
+        case .f442hold:
+            return [.GK, .LB, .CB, .CB, .RB, .LM, .CDM, .CDM, .RM, .ST, .ST]
+        case .f442diamond:
+            return [.GK, .LB, .CB, .CB, .RB, .CDM, .CM, .CM, .CAM, .ST, .ST]
+        case .f4231wide:
+            return [.GK, .LB, .CB, .CB, .RB, .CDM, .CM, .LW, .CAM, .RW, .ST]
+        case .f4231narrow:
+            return [.GK, .LB, .CB, .CB, .RB, .CDM, .CDM, .CAM, .CAM, .CAM, .ST]
+        case .f4141att:
+            return [.GK, .LB, .CB, .CB, .RB, .CDM, .LW, .CM, .CM, .RW, .ST]
+        case .f352def:
+            return [.GK, .CB, .CB, .CB, .LWB, .CDM, .CDM, .CM, .RWB, .ST, .ST]
+        case .f343flat:
+            return [.GK, .CB, .CB, .CB, .LWB, .CM, .CM, .RWB, .LW, .ST, .RW]
+        case .f5212:
+            return [.GK, .LWB, .CB, .CB, .CB, .RWB, .CM, .CM, .CAM, .ST, .ST]
+        case .f541:
+            return [.GK, .LWB, .CB, .CB, .CB, .RWB, .LM, .CM, .CM, .RM, .ST]
+        case .f424:
+            return [.GK, .LB, .CB, .CB, .RB, .CM, .CM, .LW, .ST, .ST, .RW]
         }
     }
     

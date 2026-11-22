@@ -208,6 +208,8 @@ public final class GameState: Codable {
     public var showingSeasonReview = false
     /// The eleven, formation and approach the user picked for his nation.
     public var nationalTactics: Tactics? = nil
+    /// Where the manager was before opening a player's profile screen.
+    var screenBeforeProfile: AppScreen? = nil
     /// The last international match the user managed.
     public var lastInternationalReport: InternationalReport? = nil
     /// Rounds of contract-renewal talks with each of the user's players this
@@ -914,6 +916,7 @@ public final class GameState: Codable {
         // A Wednesday cup night is not a new week: no second round of wages,
         // weekly income or training injuries.
         let isCupNight = SeasonCalendar.isMidweek(season.currentWeek) && thisWeek.allSatisfy { $0.cupRound != nil }
+        let monthBefore = String(season.currentDate.prefix(7))
 
         // 2. The days until the next match: fitness, injuries and sharpness.
         // Runs for every slot, cup nights included, over the real number of
@@ -1005,6 +1008,9 @@ public final class GameState: Codable {
         
         // 5. Advance matchweek counter
         season.currentWeek += 1
+
+        // A new month: a month's work on every training ground.
+        if String(season.currentDate.prefix(7)) != monthBefore { applyMonthlyTraining() }
 
         // 5b. Advance European competitions (one European matchweek from domestic week 3).
         advanceEuropeanCompetitions()
@@ -5988,12 +5994,20 @@ public final class GameState: Codable {
         manager.reputation = (manager.reputation * 2 + target) / 3
         manager.age += 1
 
-        // Experience sharpens a manager: every season adds a little, and a
-        // strong season (top third of the table, or silverware) adds more.
-        // Coaching ability feeds straight into match performance.
+        // Coaching is judged against expectations: where the club "should"
+        // have finished (its standing among the division's clubs) against
+        // where it did, plus every trophy. Winning the treble with a side
+        // expected to finish mid-table is a career-making season; finishing
+        // where you were expected to adds a little; falling well short
+        // costs. Coaching ability feeds straight into match performance.
         let tableSize = max(1, finalTableSize(for: club))
-        let strongSeason = position <= max(1, tableSize / 3) || !honours.isEmpty
-        let gains = strongSeason ? 6 : 2
+        let divisionClubs = clubs.filter { $0.leagueTier == club.leagueTier }
+        let expected = min(tableSize, (divisionClubs.filter { $0.reputation > club.reputation }.count) + 1)
+        let beatBy = expected - position                       // places above expectation
+        let trophies = honours.filter { $0 != "Relegated" }.count
+        var gains = 1 + max(0, min(10, beatBy)) + trophies * 3
+        if trophies >= 3 { gains += 4 }                         // a treble (or better)
+        let losses = beatBy <= -6 ? 2 : (beatBy <= -3 ? 1 : 0)
         for _ in 0..<gains {
             switch Int.random(in: 0..<4) {
             case 0: manager.tactical = min(99, manager.tactical + 1)
@@ -6002,11 +6016,30 @@ public final class GameState: Codable {
             default: manager.youthDevelopment = min(99, manager.youthDevelopment + 1)
             }
         }
-        if strongSeason {
+        for _ in 0..<losses {
+            switch Int.random(in: 0..<3) {
+            case 0: manager.tactical = max(1, manager.tactical - 1)
+            case 1: manager.attacking = max(1, manager.attacking - 1)
+            default: manager.defending = max(1, manager.defending - 1)
+            }
+        }
+        // Overachieving and silverware make a manager's name, too.
+        manager.reputation = min(100, manager.reputation + max(0, beatBy) / 2 + trophies * 3)
+        if gains >= 4 {
+            let summary = trophies > 0
+                ? "\(trophies) \(trophies == 1 ? "trophy" : "trophies") and a\(position)\(position == 1 ? "st" : position == 2 ? "nd" : position == 3 ? "rd" : "th")-place finish with a side expected to come \(expected)\(expected == 1 ? "st" : expected == 2 ? "nd" : expected == 3 ? "rd" : "th")"
+                : "finishing \(position)\(position == 1 ? "st" : position == 2 ? "nd" : position == 3 ? "rd" : "th") with a side expected to come \(expected)\(expected == 1 ? "st" : expected == 2 ? "nd" : expected == 3 ? "rd" : "th")"
             addNews(
                 headline: "Your Coaching Reputation Grows",
-                body: "A strong season has sharpened your coaching. Your overall coaching rating is now \(manager.overallCoaching).",
+                body: "The game has noticed: \(summary). Your coaching rating rises to \(manager.overallCoaching) and your reputation to \(manager.reputation).",
                 category: .award,
+                sender: "League Managers Association"
+            )
+        } else if losses > 0 {
+            addNews(
+                headline: "A Disappointing Season",
+                body: "Finishing \(position) with a side expected to come \(expected) has cost you some standing. Your coaching rating is now \(manager.overallCoaching).",
+                category: .board,
                 sender: "League Managers Association"
             )
         }

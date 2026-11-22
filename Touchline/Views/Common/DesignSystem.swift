@@ -50,6 +50,9 @@ struct GFSectionHeader<Trailing: View>: View {
                     .foregroundStyle(.white)
                     .frame(width: 26, height: 26)
                     .background(Circle().fill(Color(hex: "E4573D")))
+                    // Decoration only: VoiceOver read the symbol's name
+                    // ("bulleted list, rectangle") before every heading.
+                    .accessibilityHidden(true)
             }
             Text(title)
                 .font(.system(.headline, design: .rounded))

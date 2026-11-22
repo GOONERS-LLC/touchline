@@ -1055,8 +1055,10 @@ extension Player {
         // at 40 and over a player has settled where he is.
         var delta: Int
         switch age {
-        case ..<20: delta = Int.random(in: 1...5)
-        case 20...22: delta = Int.random(in: 0...3)
+        // (Some of a young player's growth now comes month by month on the
+        // training ground during the season, so the summer jump is smaller.)
+        case ..<20: delta = Int.random(in: 0...3)
+        case 20...22: delta = Int.random(in: 0...2)
         case 23...25: delta = poor ? Int.random(in: -1...0) : Int.random(in: 0...2)
         case 26...29: delta = poor ? Int.random(in: -1...0) : (good ? Int.random(in: 0...2) : Int.random(in: 0...1))
         case 30...34: delta = poor ? Int.random(in: -2...(-1)) : (good ? Int.random(in: 0...1) : 0)
@@ -1101,6 +1103,39 @@ extension Player {
             age: age,
             position: primaryPosition
         )
+    }
+
+    /// A month on the training ground during the season. Players can gain a
+    /// point in-season (young ones most, with room below their ceiling, in
+    /// good form, at a club with good facilities) or, in poor form past
+    /// their peak, lose one. Returns the change in overall.
+    public mutating func applyMonthlyTraining(trainingLevel: Int) -> Int {
+        guard injury == nil else { return 0 }
+        let level = Double(max(1, min(5, trainingLevel)))
+        let facilities = 0.4 + level * 0.2                     // 0.6 (level 1) to 1.4 (level 5)
+        let recent = form.isEmpty ? 6.6 : form.reduce(0, +) / Double(form.count)
+        let formFactor = recent >= 7.3 ? 1.5 : recent >= 6.8 ? 1.0 : recent >= 6.3 ? 0.7 : 0.4
+        let base: Double
+        switch age {
+        case ..<21: base = 0.22
+        case 21...23: base = 0.15
+        case 24...27: base = 0.07
+        case 28...31: base = 0.03
+        default: base = 0
+        }
+        var change = 0
+        if potential > overall && Double.random(in: 0..<1) < base * facilities * formFactor {
+            change = overall >= 85 && Double.random(in: 0..<1) < 0.5 ? 0 : 1
+        } else if !form.isEmpty && recent < 6.0 && age >= 28 && Double.random(in: 0..<1) < 0.08 {
+            change = -1
+        }
+        guard change != 0 else { return 0 }
+        overall = Swift.min(99, Swift.max(1, overall + change))
+        // (An age of 30 applies the shift alone, with no ageing effects.)
+        attributes.applySeasonalChange(delta: change, age: 30)
+        potential = Swift.max(potential, overall)
+        value = Player.calculateMarketValue(overall: overall, potential: potential, age: age, position: primaryPosition)
+        return change
     }
 
     /// Probability that a player hangs up his boots this summer.

@@ -90,24 +90,32 @@ enum FormationLayout {
     }
 
     /// The formation as lines of slot indices, attack first and goalkeeper
-    /// last, each line ordered left to right. Slots at nearly the same
-    /// depth (a full-back and a centre-back) share a line.
+    /// last, each line ordered left to right. The lines come from the
+    /// formation's name, so a 4-3-3 shows four, three and three (grouping by
+    /// how far up the pitch each position sits made it look like 4-1-2-2-1).
     static func rows(for formation: FormationPreset) -> [[Int]] {
-        let points = resolvedSlots(for: formation)
-        let order = points.indices.sorted { points[$0].y < points[$1].y }
-        var rows: [[Int]] = []
-        var lastY: CGFloat = -1
-        for i in order {
-            if rows.isEmpty || points[i].y - lastY > 0.06 {
-                rows.append([i])
-                lastY = points[i].y
-            } else {
-                rows[rows.count - 1].append(i)
-            }
+        let positions = formation.defaultPositions
+        var rows: [[Int]] = [[0]]
+        var next = 1
+        for count in formation.lines {
+            let end = min(positions.count, next + count)
+            if next < end { rows.append(Array(next..<end)) }
+            next = end
         }
-        return rows.map { $0.sorted { points[$0].x < points[$1].x } }
+        if next < positions.count { rows.append(Array(next..<positions.count)) }
+        return rows
+            .map { line in line.sorted { (side(positions[$0]), $0) < (side(positions[$1]), $1) } }
+            .reversed()
     }
 
+    /// Left (0), centre (1) or right (2), to order a line across the pitch.
+    private static func side(_ position: Position) -> Int {
+        switch position {
+        case .LB, .LWB, .LM, .LW: return 0
+        case .RB, .RWB, .RM, .RW: return 2
+        default: return 1
+        }
+    }
     /// Spreads players who share a lane and a row evenly and symmetrically
     /// around that lane (two centre-backs sit either side of centre rather
     /// than both drifting to the right).

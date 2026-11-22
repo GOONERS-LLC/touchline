@@ -493,52 +493,42 @@ public struct Club: Codable, Identifiable, Hashable {
         }
         
         let requiredPositions = tactics.formation.defaultPositions
-        
-        // 1. Fill each designated position with the best suited player
-        // available. A natural in the role is preferred, but a clearly better
-        // player from the same area of the pitch (a left winger in a left
-        // midfield slot) gets the shirt rather than sitting out all season.
-        for targetPos in requiredPositions {
-            func baseFit(_ p: Player) -> Int? {
-                if targetPos == .GK {
-                    if p.primaryPosition == .GK { return p.overall + 100 }
-                    if p.positions.contains(.GK) { return p.overall + 50 }
-                    // No keeper fit to play: the best shot-stopper among the rest.
-                    let a = p.attributes
-                    return (a.reflexes + a.handling + a.gkPositioning) / 3 - 60
-                }
-                guard p.primaryPosition != .GK else { return nil }
-                if p.positions.contains(targetPos) { return p.overall }
-                if p.primaryPosition.category == targetPos.category { return p.overall - 4 }
-                return nil
+
+        // 1. Match players to positions across the whole eleven at once: the
+        // best (player, position) pairing first, then the next best among
+        // the rest, and so on. Filling the positions one by one in order
+        // used to put a centre-back at left-back (he was the best player
+        // left for that slot) and leave the real left-back out. A player is
+        // rated in a position by the match engine, so playing out of
+        // position costs what it costs on the pitch; tired legs cost too.
+        func value(_ p: Player, _ slot: Position) -> Double {
+            if slot == .GK {
+                return p.primaryPosition == .GK ? Double(p.overall) + 100
+                    : (p.positions.contains(.GK) ? Double(p.overall) + 50 : -1000)
             }
-            func fit(_ p: Player) -> Int? {
-                // A player short of fitness is a worse pick than his rating says.
-                let tired = Int(max(0, 88 - p.matchFitness) / 3)
-                return baseFit(p).map { $0 - tired }
-            }
-            var bestIdx: Int?
-            var bestScore = Int.min
-            for idx in pool.indices {
-                if let score = fit(pool[idx]), score > bestScore {
-                    bestScore = score
-                    bestIdx = idx
-                }
-            }
-            if let bestIdx {
-                selectedStarters.append(pool.remove(at: bestIdx).id)
-            } else if !pool.isEmpty {
-                // Fallback to highest overall player remaining (excluding GKs unless slot is GK)
-                let nonGkPool = pool.filter { targetPos == .GK ? $0.primaryPosition == .GK : $0.primaryPosition != .GK }
-                let candidates = nonGkPool.isEmpty ? pool : nonGkPool
-                if let bestAny = candidates.max(by: { $0.overall < $1.overall }),
-                   let idx = pool.firstIndex(where: { $0.id == bestAny.id }) {
-                    let chosen = pool.remove(at: idx)
-                    selectedStarters.append(chosen.id)
-                }
-            }
+            if p.primaryPosition == .GK { return -1000 }
+            let tired = max(0, 88 - p.matchFitness) / 3
+            return MatchEngine.rating(of: p, in: slot) - tired
         }
-        
+        // Every pairing is rated once (this runs for every club every week).
+        let scores: [[Double]] = pool.map { p in requiredPositions.map { value(p, $0) } }
+        var slots = [UUID?](repeating: nil, count: requiredPositions.count)
+        var openSlots = Set(requiredPositions.indices)
+        var usedPlayers = Set<Int>()
+        while !openSlots.isEmpty && usedPlayers.count < pool.count {
+            var best: (slot: Int, player: Int, score: Double)?
+            for i in pool.indices where !usedPlayers.contains(i) {
+                for s in openSlots where best == nil || scores[i][s] > best!.score {
+                    best = (s, i, scores[i][s])
+                }
+            }
+            guard let pick = best else { break }
+            slots[pick.slot] = pool[pick.player].id
+            openSlots.remove(pick.slot)
+            usedPlayers.insert(pick.player)
+        }
+        pool = pool.indices.filter { !usedPlayers.contains($0) }.map { pool[$0] }
+        selectedStarters = slots.compactMap { $0 }
         tactics.startingXI = selectedStarters
         
         // 2. Select up to 7 substitute options (1 backup GK + defenders, midfielders, forwards)

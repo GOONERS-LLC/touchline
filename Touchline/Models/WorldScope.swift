@@ -25,6 +25,39 @@ extension LeagueCountry {
 
 extension GameState {
 
+    /// Opens a player's profile as its own screen, remembering where the
+    /// manager came from so Done takes him back there (it used to drop him
+    /// on the squad screen whatever he was doing).
+    public func openProfile(_ playerId: UUID) {
+        if case .playerDetail = currentScreen {} else { screenBeforeProfile = currentScreen }
+        currentScreen = .playerDetail(playerId)
+    }
+
+    /// Leaves a profile opened with `openProfile`.
+    public func closeProfile() {
+        currentScreen = screenBeforeProfile ?? .squad
+        screenBeforeProfile = nil
+    }
+
+    /// The league round a fixture belongs to (1 for the opening round).
+    /// A fixture's `matchWeek` is its calendar slot, which counts cup nights
+    /// too, so it is not the round number.
+    public func leagueRound(of fixture: Fixture) -> Int {
+        let slots = Set(season.fixtures.lazy
+            .filter { $0.competition == fixture.competition && $0.cupRound == nil }
+            .map(\.matchWeek)).sorted()
+        return (slots.firstIndex(of: fixture.matchWeek) ?? 0) + 1
+    }
+
+    /// The league round a division is on now.
+    public func currentLeagueRound(competition: String) -> Int {
+        let slots = Set(season.fixtures.lazy
+            .filter { $0.competition == competition && $0.cupRound == nil }
+            .map(\.matchWeek))
+        guard !slots.isEmpty else { return 1 }
+        return min(slots.count, slots.filter { $0 < season.currentWeek }.count + 1)
+    }
+
     /// Takes the leagues of countries no longer in the game (Australia,
     /// Asia, Africa and South America) out of an older save, between
     /// seasons. A league is left alone if the user's own club is in it.

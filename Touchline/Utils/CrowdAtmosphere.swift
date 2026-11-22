@@ -83,6 +83,35 @@ public final class CrowdAtmosphere {
         play(.whistle, volume: 0.9)
     }
 
+    /// Called every minute of a live match: if the crowd is not running
+    /// (the first match of a session could start silent, when the screen
+    /// appeared and disappeared once as it opened), bring it in.
+    public func ensureRunning(capacity: Int) {
+        guard enabled else { return }
+        if let bed, bed.isPlaying { return }
+        try? AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+        try? AVAudioSession.sharedInstance().setActive(true)
+        let clip: Clip = capacity >= 50_000 ? .bedLarge : capacity >= 18_000 ? .bedMedium : .bedSmall
+        guard let p = player(clip) else { return }
+        p.numberOfLoops = -1
+        p.volume = 0
+        p.play()
+        p.setVolume(bedVolume, fadeDuration: 1.0)
+        bed = p
+    }
+
+    /// Loads the crowd recordings ahead of the first match, so the crowd is
+    /// there from kick-off.
+    public func warmUp() {
+        DispatchQueue.global(qos: .utility).async {
+            for clip in [Clip.bedSmall, .bedMedium, .bedLarge, .whistle, .goal1, .groan] {
+                guard let url = Bundle.main.url(forResource: clip.rawValue, withExtension: "m4a"),
+                      let d = try? Data(contentsOf: url) else { continue }
+                DispatchQueue.main.async { [weak self] in self?.cache[clip] = d }
+            }
+        }
+    }
+
     public func pause() { bed?.pause(); reactions.forEach { $0.pause() } }
     public func resume() { if enabled { bed?.play() } }
 
