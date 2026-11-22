@@ -2208,6 +2208,7 @@ public struct PlayerSearchView: View {
         case loanable = "Loan candidates"
         case freeAgent = "Free agents"
         case affordable = "Within budget"
+        case mine = "My players"
     }
 
     private var budget: Int { gameState.userClub?.finances.transferBudget ?? 0 }
@@ -2221,7 +2222,9 @@ public struct PlayerSearchView: View {
             minOverall: f.minRating,
             maxAge: f.maxAge,
             maxFee: f.maxValue,
-            includeFreeAgents: true
+            includeFreeAgents: true,
+            // Your own players are listed too, so you can see where they rank.
+            includeOwnPlayers: true
         )
         .filter { entry in
             let p = entry.player
@@ -2233,10 +2236,13 @@ public struct PlayerSearchView: View {
             case .listed: return p.transferStatus == .transferListed
             case .loanListed: return p.transferStatus == .loanListed
             case .loanable:
-                guard let club = entry.club else { return false }
+                guard let club = entry.club, !club.isUserClub else { return false }
                 return gameState.isLoanable(p, at: club)
             case .freeAgent: return entry.club == nil
-            case .affordable: return entry.club == nil || p.value <= budget
+            case .affordable:
+                guard let club = entry.club else { return true }
+                return !club.isUserClub && p.value <= budget
+            case .mine: return entry.club?.isUserClub == true
             }
         }
         switch sortMode {
@@ -2309,9 +2315,9 @@ public struct PlayerSearchView: View {
                             .foregroundStyle(.secondary)
                             .padding(30)
                     }
-                    ForEach(slice, id: \.player.id) { entry in
+                    ForEach(Array(slice.enumerated()), id: \.element.player.id) { offset, entry in
                         NavigationLink(destination: PlayerDetailView(playerId: entry.player.id)) {
-                            marketRow(entry.player, club: entry.club)
+                            marketRow(entry.player, club: entry.club, rank: current * pageSize + offset + 1)
                         }
                         .buttonStyle(.plain)
                     }
@@ -2337,8 +2343,13 @@ public struct PlayerSearchView: View {
         .accessibilityAddTraits(sortMode == mode ? [.isButton, .isSelected] : .isButton)
     }
 
-    private func marketRow(_ player: Player, club: Club?) -> some View {
-        HStack(spacing: 8) {
+    private func marketRow(_ player: Player, club: Club?, rank: Int) -> some View {
+        let mine = club?.isUserClub == true
+        return HStack(spacing: 8) {
+            Text("\(rank)")
+                .font(.caption2.weight(.bold).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 30, alignment: .trailing)
             Text(player.primaryPosition.abbreviation)
                 .font(.gfLabel(12))
                 .foregroundStyle(.black)
@@ -2349,9 +2360,9 @@ public struct PlayerSearchView: View {
                 Text(player.displayName.uppercased())
                     .font(.gfLabel(14))
                     .lineLimit(1)
-                Text(club?.name ?? "Free agent")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                Text(mine ? "YOUR PLAYER" : (club?.name ?? "Free agent"))
+                    .font(.caption2.weight(mine ? .bold : .regular))
+                    .foregroundStyle(mine ? Color.gfMint : Color.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
@@ -2370,9 +2381,10 @@ public struct PlayerSearchView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
+        .background(mine ? Color.gfMint.opacity(0.15) : Color.clear)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(player.primaryPosition.displayName), \(player.fullName), \(club?.name ?? "free agent"), age \(player.age), rated \(player.overall), value \(Player.spokenCurrency(player.value))\(player.transferStatus == .transferListed ? ", transfer listed" : "")")
+        .accessibilityLabel("Number \(rank). \(player.primaryPosition.displayName), \(player.fullName), \(mine ? "your player" : (club?.name ?? "free agent")), age \(player.age), rated \(player.overall), value \(Player.spokenCurrency(player.value))\(player.transferStatus == .transferListed ? ", transfer listed" : "")")
     }
 
     // MARK: Filters
@@ -3675,9 +3687,12 @@ public struct ContractRenewalView: View {
 
     @State private var wage: Double = 1_000
     @State private var years = 3
+    @State private var signingBonus: Double = 0
     @State private var outcomeMessage: String?
     @State private var showOutcome = false
     @State private var acceptedOffer = false
+    /// His latest answer, when he countered.
+    @State private var lastAnswer: ContractRenewalResult?
 
     private var lookup: (player: Player, club: Club?)? {
         gameState.player(withId: playerId)
@@ -3729,6 +3744,37 @@ public struct ContractRenewalView: View {
                 .accessibilityValue("\(Player.formatCurrency(Int(wage))) per week")
 
                 Stepper("Contract Length: \(years) \(years == 1 ? "year" : "years")", value: $years, in: 1...5)
+
+                VStack(alignment: .leading) {
+                    Text("Signing-on Bonus: \(signingBonus == 0 ? "None" : Player.formatCurrency(Int(signingBonus)))")
+                    Slider(value: $signingBonus, in: 0...max(50_000, wageUpperBound(for: player) * 26), step: 10_000)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Signing-on bonus")
+                .accessibilityValue(signingBonus == 0 ? "None" : Player.formatCurrency(Int(signingBonus)))
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment: signingBonus = min(max(50_000, wageUpperBound(for: player) * 26), signingBonus + 10_000)
+                    case .decrement: signingBonus = max(0, signingBonus - 10_000)
+                    @unknown default: break
+                    }
+                }
+                Text("He may take less than his expected wage if he is happy, not a regular, or a veteran offered security. A bonus, paid now, also lets you offer a lower wage.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let answer = lastAnswer, !answer.accepted {
+                Section(header: Text("His Response")) {
+                    Text(answer.message)
+                    if let counter = answer.demandedWage {
+                        Button("Accept \(Player.formatCurrency(counter))/w") {
+                            wage = Double(counter)
+                            submit()
+                        }
+                        .accessibilityLabel("Accept his counter of \(Player.formatCurrency(counter)) a week")
+                    }
+                }
             }
 
             if let userClub = gameState.userClub {
@@ -3773,12 +3819,17 @@ public struct ContractRenewalView: View {
 
     private func submit() {
         guard let player = lookup?.player else { return }
-        let result = gameState.renewContract(playerId: player.id, wage: Int(wage), years: years)
+        let result = gameState.renewContract(playerId: player.id, wage: Int(wage), years: years,
+                                             signingBonus: Int(signingBonus))
         acceptedOffer = result.accepted
-        outcomeMessage = result.message
-        showOutcome = true
+        lastAnswer = result
         if result.accepted {
+            outcomeMessage = result.message
+            showOutcome = true
             try? SaveManager.shared.autoSave(gameState: gameState)
+        } else {
+            // He countered: his answer and an Accept button appear in the form.
+            AccessibilityNotification.Announcement(result.message).post()
         }
     }
 }
@@ -4206,34 +4257,37 @@ public struct NegotiationView: View {
         if let onClose { onClose() } else { gameState.currentScreen = .dashboard }
     }
 
+    // The fee, with the selling club.
     @State private var bidFee: Double = 0
+    @State private var installments = 1
+    @State private var sellOnPercent = 0
+    @State private var addOn: Double = 0
+    // Personal terms, with the player.
     @State private var wage: Double = 1_000
     @State private var contractYears = 3
+    @State private var signingBonus: Double = 0
+
+    /// The other side's latest answer.
+    @State private var reply: NegotiationReply?
     @State private var outcomeMessage: String?
     @State private var showOutcome = false
-    
+
     private var target: (player: Player, club: Club?)? {
         guard let id = gameState.negotiationTargetPlayerId else { return nil }
         return gameState.player(withId: id)
     }
-    
-    /// The most recent live offer involving the current target and the user.
+
+    /// The most recent live talks for the current target.
     private var liveOffer: TransferOffer? {
         guard let id = gameState.negotiationTargetPlayerId else { return nil }
-        return gameState.pendingTransferOffers.first { $0.playerId == id && $0.isLive && !$0.isIncoming }
+        return gameState.pendingTransferOffers.first { $0.playerId == id && $0.isLive && !$0.isIncoming && !$0.isLoan }
     }
 
-    private var submitButtonLabel: String {
-        if liveOffer?.status == .counterOffer { return "Raise Bid" }
-        if liveOffer?.status == .personalTerms { return "Meet Wage Demand" }
-        if liveOffer?.status == .pending || liveOffer?.status == .accepted { return "Await Response" }
-        return "Submit Bid"
+    /// Personal terms are on the table: the fee is agreed, or he is a free agent.
+    private func onTerms(club: Club?) -> Bool {
+        club == nil || liveOffer?.status == .personalTerms
     }
 
-    private var isAwaitingResponse: Bool {
-        liveOffer?.status == .pending || liveOffer?.status == .accepted
-    }
-    
     public var body: some View {
         Group {
             if let lookup = target {
@@ -4257,7 +4311,7 @@ public struct NegotiationView: View {
         }
         .onAppear(perform: primeFields)
     }
-    
+
     @State private var negotiationPage = 0
 
     private func form(for player: Player, club: Club?) -> some View {
@@ -4289,6 +4343,12 @@ public struct NegotiationView: View {
                     GFValuePill(title: "Salary", value: "\(Player.formatCurrency(player.wage))/w")
                 }
                 .gfCard(padding: 14)
+                Text(club == nil
+                     ? "A free agent: agree personal terms with the player."
+                     : "Two steps: agree the fee with \(club?.name ?? "the club"), then agree personal terms with the player. Both answer straight away.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
                 Button("Start") { withAnimation { negotiationPage = 1 } }
                     .buttonStyle(.gfOutline)
                     .padding(.horizontal, 70)
@@ -4319,14 +4379,18 @@ public struct NegotiationView: View {
 
     /// What the other side is saying right now.
     private func theirMessage(player: Player, club: Club?) -> String {
+        if let reply { return reply.message }
         if let offer = liveOffer {
             switch offer.status {
             case .counterOffer:
-                return "We value \(player.lastName) at \(Player.formatCurrency(offer.counterFee ?? offer.askingPrice)). Your offer of \(Player.formatCurrency(offer.fee)) is not enough."
+                return "\(club?.name ?? "The club") would accept \(Player.formatCurrency(offer.counterFee ?? offer.askingPrice)). Your last offer was \(Player.formatCurrency(offer.fee))."
             case .personalTerms:
-                return "The clubs have agreed a fee. \(player.lastName) wants \(Player.formatCurrency(offer.demandedWage ?? player.wage)) a week to sign."
-            case .pending, .accepted:
-                return "We're considering your offer of \(Player.formatCurrency(offer.fee)) and will reply shortly."
+                if let demand = offer.demandedWage {
+                    return "\(player.lastName)'s agent wants \(Player.formatCurrency(demand)) a week."
+                }
+                return club == nil
+                    ? "My client is a free agent. Make him a fair offer and he will listen."
+                    : "The fee is agreed with \(club?.name ?? "the club"). Now offer \(player.lastName) a contract."
             default:
                 break
             }
@@ -4342,7 +4406,8 @@ public struct NegotiationView: View {
 
     /// Page two: the haggling.
     private func offerPage(player: Player, club: Club?) -> some View {
-        ScrollView {
+        let terms = onTerms(club: club)
+        return ScrollView {
             VStack(spacing: 14) {
                 Text(player.fullName.uppercased())
                     .font(.gfDisplay(18))
@@ -4353,7 +4418,7 @@ public struct NegotiationView: View {
                 Text(club?.name ?? "Free agent").font(.subheadline)
                 negotiationChips(player)
 
-                Text("TRANSFER OFFER").font(.gfLabel(15))
+                Text(terms ? "STEP 2 · PERSONAL TERMS" : "STEP 1 · TRANSFER FEE").font(.gfLabel(15))
                 Text(theirMessage(player: player, club: club))
                     .font(.body)
                     .multilineTextAlignment(.center)
@@ -4361,78 +4426,116 @@ public struct NegotiationView: View {
                     .padding(14)
                     .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.gfSurface))
                     .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.gfStroke))
+                    .accessibilityAddTraits(.updatesFrequently)
 
-                if club != nil {
-                    VStack(spacing: 10) {
-                        Text("TRANSFER FEE").font(.gfDisplay(18))
-                        HStack(spacing: 14) {
-                            GFValuePill(title: "Market value", value: Player.formatCurrency(player.value))
-                            if let offer = liveOffer, let counter = offer.counterFee {
-                                GFValuePill(title: "Their price", value: Player.formatCurrency(counter), tone: .bad)
-                            } else {
-                                GFValuePill(title: "Budget", value: Player.formatCurrency(gameState.userClub?.finances.transferBudget ?? 0), tone: .good)
-                            }
-                        }
-                        Text("YOUR OFFER").font(.gfLabel(14))
-                        valueStepper(value: $bidFee, step: feeStep(player), range: 0...feeUpperBound(for: player), label: "Transfer fee") {
-                            Player.formatCurrency(Int($0))
-                        }
-                    }
-                    .gfCard(padding: 14)
+                if terms {
+                    termsCard(player: player)
+                } else {
+                    feeCard(player: player)
                 }
-
-                VStack(spacing: 10) {
-                    Text("PERSONAL TERMS").font(.gfDisplay(18))
-                    Text("WEEKLY WAGE").font(.gfLabel(14))
-                    valueStepper(value: $wage, step: max(500, (wage / 20 / 500).rounded() * 500), range: 500...bidWageUpperBound(for: player), label: "Weekly wage") {
-                        "\(Player.formatCurrency(Int($0)))/w"
-                    }
-                    Text("CONTRACT").font(.gfLabel(14))
-                    valueStepper(value: Binding(get: { Double(contractYears) }, set: { contractYears = Int($0) }),
-                                 step: 1, range: 1...5, label: "Contract length") {
-                        "\(Int($0)) YEAR\(Int($0) == 1 ? "" : "S")"
-                    }
-                    if let user = gameState.userClub {
-                        Text("Wage room \(Player.formatCurrency(user.finances.weeklyWageSurplus))/w")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                .gfCard(padding: 14)
 
                 if club != nil && liveOffer == nil && !gameState.isTransferWindowOpen {
                     Text("\(gameState.transferWindowStatus). Players under contract can only be signed in a window; free agents any time.")
                         .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
 
-                if let offer = liveOffer, offer.status == .counterOffer, let counter = offer.counterFee {
-                    HStack(spacing: 12) {
-                        Button("Accept \(Player.formatCurrency(counter))") {
-                            let name = player.fullName
-                            outcomeMessage = gameState.acceptCounter(offerId: offer.id)
-                                ? "Deal done! \(name) has joined for \(Player.formatCurrency(counter))."
-                                : "The deal fell through: the fee or wage no longer fits your budgets."
-                            showOutcome = true
-                        }
-                        .buttonStyle(.gfSolid)
-                        Button("Withdraw") {
-                            gameState.withdrawOffer(offerId: offer.id)
-                            close()
-                        }
-                        .buttonStyle(.gfDanger)
+                // Accept their counter as it stands.
+                if let counter = reply?.counter, reply?.kind == .countered || reply?.kind == .rejected {
+                    Button(terms ? "Accept \(Player.formatCurrency(counter))/w" : "Accept \(Player.formatCurrency(counter))") {
+                        if terms { wage = Double(counter) } else { bidFee = Double(counter) }
+                        submit(player: player, club: club)
                     }
+                    .buttonStyle(.gfSolid)
+                    .padding(.horizontal, 40)
                 }
 
-                Button(submitButtonLabel, action: submit)
+                Button(terms ? "Offer Contract" : "Make Offer") { submit(player: player, club: club) }
                     .buttonStyle(.gfPrimary)
                     .padding(.horizontal, 40)
-                    .disabled(isAwaitingResponse
-                              || (club != nil && liveOffer == nil && !gameState.isTransferWindowOpen)
-                              || isRivalSeller(club))
-                    .accessibilityHint(isAwaitingResponse ? "The selling club has not responded yet" : "")
+                    .disabled((club != nil && !gameState.isTransferWindowOpen && liveOffer == nil) || isRivalSeller(club))
+
+                if liveOffer != nil {
+                    Button("Walk Away") {
+                        gameState.abandonTalks(playerId: player.id)
+                        close()
+                    }
+                    .buttonStyle(.gfDanger)
+                    .padding(.horizontal, 60)
+                }
             }
             .padding()
             .padding(.bottom, 30)
         }
+    }
+
+    /// Step one: the fee and how it is paid.
+    private func feeCard(player: Player) -> some View {
+        let fee = Int(bidFee)
+        let upfront = installments == 1 ? fee : fee - (fee / installments) * (installments - 1)
+        return VStack(spacing: 10) {
+            HStack(spacing: 14) {
+                GFValuePill(title: "Market value", value: Player.formatCurrency(player.value))
+                GFValuePill(title: "Budget", value: Player.formatCurrency(gameState.userClub?.finances.transferBudget ?? 0), tone: .good)
+            }
+            Text("FEE").font(.gfLabel(14))
+            valueStepper(value: $bidFee, step: feeStep(player), range: 0...feeUpperBound(for: player), label: "Transfer fee") {
+                Player.formatCurrency(Int($0))
+            }
+            Text("PAID IN").font(.gfLabel(14))
+            valueStepper(value: Binding(get: { Double(installments) }, set: { installments = Int($0) }),
+                         step: 1, range: 1...4, label: "Installments") {
+                Int($0) == 1 ? "ONE PAYMENT" : "\(Int($0)) YEARLY PAYMENTS"
+            }
+            if installments > 1 {
+                Text("\(Player.formatCurrency(upfront)) now, then \(Player.formatCurrency(fee / installments)) a year. Clubs value money later a little less.")
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+            Text("SELL-ON CLAUSE").font(.gfLabel(14))
+            valueStepper(value: Binding(get: { Double(sellOnPercent) }, set: { sellOnPercent = Int($0) }),
+                         step: 5, range: 0...40, label: "Sell-on clause") {
+                Int($0) == 0 ? "NONE" : "\(Int($0))% OF NEXT SALE"
+            }
+            Text("ADD-ON").font(.gfLabel(14))
+            valueStepper(value: $addOn, step: feeStep(player), range: 0...max(feeStep(player), feeUpperBound(for: player) / 2), label: "Add-on") {
+                Int($0) == 0 ? "NONE" : Player.formatCurrency(Int($0))
+            }
+            if addOn > 0 {
+                Text("Paid after a year if he is still at the club.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .gfCard(padding: 14)
+    }
+
+    /// Step two: wage, length and signing-on bonus.
+    private func termsCard(player: Player) -> some View {
+        VStack(spacing: 10) {
+            if let offer = liveOffer, offer.fee > 0 {
+                Text("Agreed fee: " + GameState.dealStructureText(fee: offer.fee, installments: offer.installments,
+                                                                 sellOnPercent: offer.sellOnPercent, addOn: offer.addOnAmount))
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+            Text("WEEKLY WAGE").font(.gfLabel(14))
+            valueStepper(value: $wage, step: max(100, (wage / 20 / 100).rounded() * 100), range: 500...bidWageUpperBound(for: player), label: "Weekly wage") {
+                "\(Player.formatCurrency(Int($0)))/w"
+            }
+            Text("CONTRACT").font(.gfLabel(14))
+            valueStepper(value: Binding(get: { Double(contractYears) }, set: { contractYears = Int($0) }),
+                         step: 1, range: 1...5, label: "Contract length") {
+                "\(Int($0)) YEAR\(Int($0) == 1 ? "" : "S")"
+            }
+            Text("SIGNING-ON BONUS").font(.gfLabel(14))
+            valueStepper(value: $signingBonus, step: max(10_000, (wage * 4 / 10_000).rounded() * 10_000), range: 0...max(100_000, wage * 52), label: "Signing-on bonus") {
+                Int($0) == 0 ? "NONE" : Player.formatCurrency(Int($0))
+            }
+            Text("A bonus is paid now and lets you offer a lower wage.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let user = gameState.userClub {
+                Text("Wage room \(Player.formatCurrency(user.finances.weeklyWageSurplus))/w (the board's recommendation)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .gfCard(padding: 14)
     }
 
     private func feeStep(_ player: Player) -> Double {
@@ -4478,13 +4581,11 @@ public struct NegotiationView: View {
         return gameState.rivalry(between: club.id, and: userClub.id) != nil
     }
 
-    /// Slider ceiling for the fee. It must always reach the seller's counter or
-    /// asking price, which can exceed twice the market value for young players
-    /// on long contracts; otherwise the user could never meet the demand.
+    /// Slider ceiling for the fee: always above the club's counter.
     private func feeUpperBound(for player: Player) -> Double {
         var ceiling = max(Double(player.value) * 2.5, 100_000)
-        if let offer = liveOffer {
-            ceiling = max(ceiling, Double(offer.counterFee ?? 0) * 1.25)
+        if let counter = reply?.counter ?? liveOffer?.counterFee {
+            ceiling = max(ceiling, Double(counter) * 1.25)
         }
         return ceiling.rounded(.up)
     }
@@ -4500,70 +4601,38 @@ public struct NegotiationView: View {
 
     private func primeFields() {
         guard let lookup = target else { return }
-        let isFreeAgent = lookup.club == nil
-        if let offer = liveOffer, offer.status == .counterOffer, let counter = offer.counterFee {
-            bidFee = Double(counter)
-            wage = Double(max(offer.offeredWage ?? lookup.player.wage, 1_000))
-        } else if let offer = liveOffer, offer.status == .personalTerms {
-            bidFee = Double(offer.fee)
-            wage = Double(offer.demandedWage ?? max(lookup.player.wage, 1_000))
-        } else if isFreeAgent {
-            bidFee = 0
-            wage = Double(max(lookup.player.wage, 1_000))
+        if let offer = liveOffer {
+            bidFee = Double(offer.counterFee ?? offer.fee)
+            installments = offer.installments
+            sellOnPercent = offer.sellOnPercent
+            addOn = Double(offer.addOnAmount)
+            wage = Double(offer.demandedWage ?? offer.offeredWage ?? max(lookup.player.wage, 1_000))
+            contractYears = offer.contractYears ?? 3
         } else {
-            bidFee = Double(lookup.player.value)
+            bidFee = lookup.club == nil ? 0 : Double(lookup.player.value)
             wage = Double(max(lookup.player.wage, 1_000))
         }
     }
-    
-    private func submit() {
-        guard let id = gameState.negotiationTargetPlayerId else { return }
-        if let offer = liveOffer, offer.status == .counterOffer,
-           let counter = offer.counterFee, Int(bidFee) >= counter {
-            // Meeting the club's own counter closes the deal.
-            let name = gameState.player(withId: id)?.player.fullName ?? "The player"
-            outcomeMessage = gameState.acceptCounter(offerId: offer.id)
-                ? "Deal done! \(name) has joined for \(Player.formatCurrency(counter))."
-                : "The deal fell through: the fee or wage no longer fits your budgets."
-        } else if let offer = liveOffer, offer.status == .counterOffer {
-            gameState.bumpOffer(offerId: offer.id, newFee: Int(bidFee), newWage: Int(wage))
-            outcomeMessage = "Your revised offer of \(Player.formatCurrency(Int(bidFee))) has been submitted. Expect a reply next week."
-        } else if let offer = liveOffer, offer.status == .personalTerms {
-            gameState.bumpOffer(offerId: offer.id, newFee: offer.fee, newWage: Int(wage))
-            let status = gameState.pendingTransferOffers.first { $0.id == offer.id }?.status
-            let name = gameState.player(withId: id)?.player.fullName ?? "The player"
-            if status == .completed {
-                outcomeMessage = "Deal done! \(name) has signed on \(Player.formatCurrency(Int(wage)))/w."
-            } else if status == .rejected {
-                outcomeMessage = "The deal fell through: his wage does not fit your wage budget."
-            } else {
-                outcomeMessage = "You have offered \(Player.formatCurrency(Int(wage)))/w. His agent will reply next week."
-            }
-        } else if let offer = gameState.submitTransferBid(
-            playerId: id,
-            fee: Int(bidFee),
-            offeredWage: Int(wage),
-            contractYears: contractYears
-        ) {
-            if offer.status == .rejected {
-                outcomeMessage = gameState.news.first?.body
-                    ?? "The bid could not be submitted. Check the club's transfer budget and weekly wage headroom, then try again."
-            } else if gameState.player(withId: id)?.club == nil {
-                outcomeMessage = "Your offer has been submitted. The player and his agent will respond shortly — watch your inbox."
-            } else {
-                outcomeMessage = "Your bid has been submitted. The selling club will respond in the coming days — watch your inbox."
-            }
+
+    private func submit(player: Player, club: Club?) {
+        let answer: NegotiationReply
+        if onTerms(club: club) {
+            answer = gameState.negotiatePersonalTerms(playerId: player.id, wage: Int(wage), years: contractYears,
+                                                      signingBonus: Int(signingBonus))
         } else {
-            let p = gameState.player(withId: id)?.player
-            if p?.isOnLoan == true {
-                outcomeMessage = "He is on loan and cannot be signed until his loan ends."
-            } else if gameState.player(withId: id)?.club != nil && !gameState.isTransferWindowOpen {
-                outcomeMessage = "The transfer window is closed. Clubs can only sell players in the summer and January windows."
-            } else {
-                outcomeMessage = "Unable to submit a bid for this player right now."
+            answer = gameState.negotiateTransferFee(playerId: player.id, fee: Int(bidFee), installments: installments,
+                                                    sellOnPercent: sellOnPercent, addOn: Int(addOn))
+            if answer.kind == .feeAgreed {
+                // On to personal terms: start from what he earns now.
+                wage = Double(max(player.wage, 1_000))
             }
         }
-        showOutcome = true
+        withAnimation { reply = answer }
+        AccessibilityNotification.Announcement(answer.message).post()
+        if answer.kind == .completed || answer.kind == .walkedAway {
+            outcomeMessage = answer.message
+            showOutcome = true
+        }
         try? SaveManager.shared.autoSave(gameState: gameState)
     }
 }

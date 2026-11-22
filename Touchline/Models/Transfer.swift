@@ -45,6 +45,9 @@ public struct TransferOffer: Codable, Identifiable, Hashable {
     public var sellOnYears: Int
     /// Bonus if add-ons triggered (e.g. appearances).
     public var addOnAmount: Int
+    /// The weekly wage the player first asked for in personal-terms talks;
+    /// his counters come down from it. `demandedWage` is his latest figure.
+    public var baseWageDemand: Int? = nil
 
     public init(
         id: UUID = UUID(),
@@ -116,7 +119,7 @@ public struct TransferOffer: Codable, Identifiable, Hashable {
         case id, playerId, fromClubId, toClubId, fee, isLoan, loanWeeks, status
         case offeredWage, contractYears, askingPrice, counterFee, demandedWage
         case isIncoming, negotiationRound, createdDate, weeksUntilResponse
-        case installments, sellOnPercent, sellOnYears, addOnAmount
+        case installments, sellOnPercent, sellOnYears, addOnAmount, baseWageDemand
     }
 
     public init(from decoder: Decoder) throws {
@@ -142,6 +145,63 @@ public struct TransferOffer: Codable, Identifiable, Hashable {
         sellOnPercent = max(0, min(50, try c.decodeIfPresent(Int.self, forKey: .sellOnPercent) ?? 0))
         sellOnYears = max(0, try c.decodeIfPresent(Int.self, forKey: .sellOnYears) ?? 0)
         addOnAmount = max(0, try c.decodeIfPresent(Int.self, forKey: .addOnAmount) ?? 0)
+        baseWageDemand = try c.decodeIfPresent(Int.self, forKey: .baseWageDemand)
+    }
+}
+
+// MARK: - Transfer Installment
+
+/// A transfer payment still to be made: a later installment of the fee, or
+/// an add-on that is paid only if the player is still at the buying club when
+/// it falls due.
+public struct TransferInstallment: Codable, Identifiable, Hashable {
+    public var id: UUID
+    public var playerId: UUID
+    public var playerName: String
+    public var payerClubId: UUID
+    public var payeeClubId: UUID
+    public var amount: Int
+    /// "YYYY-MM-DD": paid on the first week on or after this date.
+    public var dueDate: String
+    /// An add-on: paid only if the player is still at the payer club.
+    public var isConditionalAddOn: Bool
+
+    public init(id: UUID = UUID(), playerId: UUID, playerName: String, payerClubId: UUID, payeeClubId: UUID,
+                amount: Int, dueDate: String, isConditionalAddOn: Bool = false) {
+        self.id = id
+        self.playerId = playerId
+        self.playerName = playerName
+        self.payerClubId = payerClubId
+        self.payeeClubId = payeeClubId
+        self.amount = amount
+        self.dueDate = dueDate
+        self.isConditionalAddOn = isConditionalAddOn
+    }
+}
+
+/// How the other side answered in an instant negotiation.
+public struct NegotiationReply: Equatable {
+    public enum Kind: Equatable {
+        /// The selling club accepts the fee: personal terms are next.
+        case feeAgreed
+        /// The other side names a price you can accept or beat.
+        case countered
+        /// This offer is refused, but talks go on.
+        case rejected
+        /// Talks are over.
+        case walkedAway
+        /// The deal is done.
+        case completed
+    }
+    public var kind: Kind
+    public var message: String
+    /// The counter figure (fee or weekly wage), when countered.
+    public var counter: Int?
+
+    public init(_ kind: Kind, _ message: String, counter: Int? = nil) {
+        self.kind = kind
+        self.message = message
+        self.counter = counter
     }
 }
 

@@ -197,6 +197,12 @@ public final class GameState: Codable {
     public var sponsorAgencyCooldown: Int = 0
     /// The owner has sold the club and is choosing which club to buy next.
     public var awaitingClubPurchase: Bool = false
+    /// Transfer fees still to be paid: later installments and conditional
+    /// add-ons, settled as their dates come round.
+    public var transferInstallments: [TransferInstallment] = []
+    /// Rounds of contract-renewal talks with each of the user's players this
+    /// session. A player tires of haggling after a few.
+    var renewalRounds: [UUID: Int] = [:]
     
     // MARK: - Initializer
     
@@ -420,6 +426,8 @@ public final class GameState: Codable {
         pendingSponsorOffers = other.pendingSponsorOffers
         sponsorAgencyCooldown = other.sponsorAgencyCooldown
         awaitingClubPurchase = other.awaitingClubPurchase
+        transferInstallments = other.transferInstallments
+        renewalRounds = [:]
     }
 
     /// An independent copy of the whole state. Every stored property is a value
@@ -479,6 +487,7 @@ public final class GameState: Codable {
         snapshot.pendingSponsorOffers = pendingSponsorOffers
         snapshot.sponsorAgencyCooldown = sponsorAgencyCooldown
         snapshot.awaitingClubPurchase = awaitingClubPurchase
+        snapshot.transferInstallments = transferInstallments
         return snapshot
     }
 
@@ -619,9 +628,9 @@ public final class GameState: Codable {
     
     /// Every player in the world except the user's own squad, paired with their club
     /// (nil for free agents). Used by the transfer search screen.
-    public func transferSearchCandidates() -> [(player: Player, club: Club?)] {
+    public func transferSearchCandidates(includeOwnPlayers: Bool = false) -> [(player: Player, club: Club?)] {
         var results: [(Player, Club?)] = []
-        for club in clubs where !club.isUserClub {
+        for club in clubs where includeOwnPlayers || !club.isUserClub {
             for player in club.players where !player.isOnLoan {
                 results.append((player, club))
             }
@@ -639,9 +648,10 @@ public final class GameState: Codable {
         minOverall: Int = 0,
         maxAge: Int = 99,
         maxFee: Int? = nil,
-        includeFreeAgents: Bool = true
+        includeFreeAgents: Bool = true,
+        includeOwnPlayers: Bool = false
     ) -> [(player: Player, club: Club?)] {
-        transferSearchCandidates().filter { entry in
+        transferSearchCandidates(includeOwnPlayers: includeOwnPlayers).filter { entry in
             let player = entry.player
             if let category = positionCategory,
                !player.positions.contains(where: { $0.category == category }) {
@@ -954,6 +964,9 @@ public final class GameState: Codable {
         // Draw the next round of any cup whose current round has finished.
         progressDomesticCups()
         
+        // Transfer installments and add-ons that have fallen due.
+        if !isCupNight { payDueInstallments() }
+
         // 3. AI manager autonomous dealings and transfer negotiation resolution
         processAITransfers()
         processAILoans()
@@ -2326,14 +2339,18 @@ public final class GameState: Codable {
         
         // European ties are two-legged: a first leg is an ordinary match, a
         // second leg level on aggregate goes to extra time and penalties.
+        // Play-off semi-finals work the same way.
         let carry = fixture.europeanFixtureId.flatMap { europeanSecondLegCarry(tieId: $0) }
+            ?? playOffSecondLegCarry(fixture)
+        let isPlayOffFirstLeg = fixture.cupRound == Self.playOffFirstLeg
         var config = MatchEngine.SimulationConfig(
             // A play-off final is played at a neutral ground.
             neutralVenue: fixture.cupRound == "Final" && fixture.competition.hasSuffix(Self.playOffSuffix),
             matchWeek: fixture.matchWeek,
             competition: fixture.competition,
             date: fixture.date,
-            isKnockout: fixture.isCupTie && (!fixture.isEuropean || fixture.cupRound == "Final" || carry != nil),
+            isKnockout: fixture.isCupTie && !isPlayOffFirstLeg
+                && (!fixture.isEuropean || fixture.cupRound == "Final" || carry != nil),
             derbyIntensity: rivalry(between: fixture.homeClubId, and: fixture.awayClubId)?.intensity ?? 0,
             homeCoachingMultiplier: coachingMultiplier(for: fixture.homeClubId),
             awayCoachingMultiplier: coachingMultiplier(for: fixture.awayClubId)
@@ -2728,7 +2745,7 @@ public final class GameState: Codable {
 
     /// Realistic asking price: market value adjusted for the seller's need and
     /// reputation, with a premium for players on long, secure contracts.
-    private func sellingValuation(for player: Player, at seller: Club?, buyerReputation: Int) -> Int {
+    func sellingValuation(for player: Player, at seller: Club?, buyerReputation: Int) -> Int {
         var value = Double(player.value)
         // Long contracts mean the seller can demand a premium; expiring deals a discount.
         let years = Double(player.contract?.yearsRemaining ?? 1)
@@ -2747,7 +2764,7 @@ public final class GameState: Codable {
 
     /// The wage a player will demand to sign, scaling with their valuation and the
     /// gap between the buyer and seller's stature.
-    private func wageDemand(for player: Player, buyer: Club, seller: Club?) -> Int {
+    func wageDemand(for player: Player, buyer: Club, seller: Club?) -> Int {
         let base = max(player.wage, player.value / 250)
         var demand = Double(base)
         if let seller = seller, seller.reputation > buyer.reputation {
@@ -2779,10 +2796,13 @@ public final class GameState: Codable {
         return max(500, Int(Double(base) * multiplier))
     }
 
-    /// Offers a new contract to a player already at the user's club. The club
-    /// must be able to absorb any wage increase within its existing wage budget.
+    /// Offers a new contract to a player already at the user's club. He has
+    /// an asking wage but will come down to a limit that depends on his
+    /// mood, his place in the squad, his age and the length of the deal. Offer
+    /// less and he counters (coming down a little each round) until he tires
+    /// of the talks. A signing-on bonus counts towards what he gets.
     @discardableResult
-    public func renewContract(playerId: UUID, wage: Int, years: Int) -> ContractRenewalResult {
+    public func renewContract(playerId: UUID, wage: Int, years: Int, signingBonus: Int = 0) -> ContractRenewalResult {
         guard let clubIdx = clubs.firstIndex(where: { $0.isUserClub }) else {
             return ContractRenewalResult(accepted: false, message: "You do not currently control a club.")
         }
@@ -2799,12 +2819,33 @@ public final class GameState: Codable {
 
         let player = clubs[clubIdx].players[playerIdx]
         let demand = contractRenewalWage(for: player)
-        guard wage >= demand else {
+        let bonus = max(0, signingBonus)
+        let floor = Double(demand) * renewalFlexibility(player: player, club: clubs[clubIdx], years: years)
+        let effective = Double(wage) + Double(bonus) / Double(52 * years) * 0.85
+        if effective < floor {
+            var rounds = (renewalRounds[playerId] ?? 0) + 1
+            if effective < floor * 0.7 { rounds += 1 }
+            renewalRounds[playerId] = rounds
+            // He comes down from his asking wage toward his limit as talks go on.
+            let progress = min(1.0, Double(rounds) / 4.0)
+            let counter = max(wage + 1, Self.roundedWage(Int((Double(demand) - (Double(demand) - floor) * progress).rounded(.up))))
+            if rounds > 4 {
+                return ContractRenewalResult(
+                    accepted: false,
+                    demandedWage: counter,
+                    message: "\(player.fullName) is tired of haggling. His final word: \(Player.formatCurrency(counter))/w over \(years) year\(years == 1 ? "" : "s"), or he will run his contract down."
+                )
+            }
             return ContractRenewalResult(
                 accepted: false,
-                demandedWage: demand,
-                message: "\(player.fullName) wants at least \(Player.formatCurrency(demand))/w to extend. Your offer of \(Player.formatCurrency(wage))/w was not enough."
+                demandedWage: counter,
+                message: "\(player.fullName) turns down \(Player.formatCurrency(wage))/w. He would sign for \(Player.formatCurrency(counter))/w over \(years) year\(years == 1 ? "" : "s")."
             )
+        }
+        renewalRounds[playerId] = nil
+        if bonus > 0 {
+            clubs[clubIdx].finances.balance -= bonus
+            seasonLedger?.wages += bonus
         }
 
         // The wage budget is the board's guidance, not a wall: keeping your
@@ -2824,14 +2865,14 @@ public final class GameState: Codable {
 
         addNews(
             headline: "\(player.fullName) Signs New Contract",
-            body: "\(player.fullName) has committed to \(clubs[clubIdx].name) on a \(years)-year deal worth \(Player.formatCurrency(wage))/w.",
+            body: "\(player.fullName) has committed to \(clubs[clubIdx].name) on a \(years)-year deal worth \(Player.formatCurrency(wage))/w\(bonus > 0 ? " plus a \(Player.formatCurrency(bonus)) signing-on bonus" : "").",
             category: .contractExpiry,
             sender: "Director of Football"
         )
 
         return ContractRenewalResult(
             accepted: true,
-            message: "\(player.fullName) has signed a new \(years)-year contract at \(Player.formatCurrency(wage))/w.\(budgetNote)"
+            message: "\(player.fullName) has signed a new \(years)-year contract at \(Player.formatCurrency(wage))/w\(bonus > 0 ? " plus a \(Player.formatCurrency(bonus)) signing-on bonus" : "").\(budgetNote)"
         )
     }
 
@@ -3393,14 +3434,22 @@ public final class GameState: Codable {
     /// Executes the movement of a player between clubs (or free agency) and records it.
     /// Returns `false` when the buyer can no longer afford the fee or the wage, so
     /// stale negotiations cannot push a club into debt.
+    ///
+    /// The fee can be paid in yearly `installments` (the first now), the
+    /// selling club can keep a `sellOnPercent` share of the next sale, and an
+    /// `addOn` is paid after a year if the player is still at the buyer.
     @discardableResult
-    private func completeSigning(
+    func completeSigning(
         player: Player,
         buyerIdx: Int,
         sellerIdx: Int?,
         fee: Int,
         wage: Int,
-        years: Int
+        years: Int,
+        installments: Int = 1,
+        sellOnPercent: Int = 0,
+        addOn: Int = 0,
+        signingBonus: Int = 0
     ) -> Bool {
         guard buyerIdx >= 0, buyerIdx < clubs.count else { return false }
         if let sellerIdx = sellerIdx, sellerIdx == buyerIdx { return false }
@@ -3418,7 +3467,10 @@ public final class GameState: Codable {
         // Budgets may have changed since the bid was submitted, so validate the
         // whole deal again at the moment of completion.
         let buyer = clubs[buyerIdx]
-        guard fee <= buyer.finances.transferBudget else { return false }
+        let parts = max(1, min(4, installments))
+        // Only the first installment is due now; the rest come out of future budgets.
+        let upfront = parts == 1 ? fee : fee - (fee / parts) * (parts - 1)
+        guard upfront + signingBonus <= buyer.finances.transferBudget else { return false }
         guard buyer.totalWeeklyWageBill + wage <= wageCeiling(for: buyer) else { return false }
 
         var signed = player
@@ -3426,11 +3478,13 @@ public final class GameState: Codable {
         let previousContract = player.contract
 
         // Any sell-on attached to the old contract is settled by this transfer.
-        // The buying club starts with a clean contract rather than inheriting a
-        // clause that would wrongly make the seller its beneficiary next time.
+        // The new contract carries the sell-on agreed in this deal, if any,
+        // in favour of the club selling him now.
         signed.contract = Contract(
             wage: wage,
             yearsRemaining: years,
+            sellOnPercentage: sellerIdx != nil && sellOnPercent > 0 ? Double(sellOnPercent) / 100.0 : nil,
+            formerClubId: sellOnPercent > 0 ? sellerIdx.map { clubs[$0].id } : nil,
             signingDate: season.currentDate
         )
         
@@ -3442,16 +3496,43 @@ public final class GameState: Codable {
             fromClubId = clubs[sellerIdx].id
             _ = clubs[sellerIdx].removePlayer(withId: player.id)
 
-            // The seller receives the fee minus any sell-on share owed to the
-            // club that previously developed/transferred the player.
-            var sellerProceeds = fee
+            // The seller receives the fee (now, the first installment) minus
+            // any sell-on share owed to the club that sold the player before.
+            var sellerProceeds = upfront
             if let sellOn = previousContract?.sellOnPercentage, sellOn > 0,
                let entitledClubId = previousContract?.formerClubId,
                entitledClubId != clubs[sellerIdx].id,
                let entitledIdx = clubs.firstIndex(where: { $0.id == entitledClubId }) {
-                let owed = max(0, Int(Double(fee) * sellOn))
-                sellerProceeds = max(0, fee - owed)
+                let owed = min(sellerProceeds, max(0, Int(Double(fee) * sellOn)))
+                sellerProceeds = max(0, sellerProceeds - owed)
                 clubs[entitledIdx].finances.transferBudget += owed
+                clubs[entitledIdx].finances.balance += owed
+                if clubs[entitledIdx].isUserClub {
+                    seasonLedger?.playerSales += owed
+                    addNews(
+                        headline: "Sell-On Fee for \(player.fullName)",
+                        body: "\(player.fullName) has moved from \(clubs[sellerIdx].name) for \(Player.formatCurrency(fee)). Our \(Int(sellOn * 100))% sell-on clause earns us \(Player.formatCurrency(owed)).",
+                        category: .transfer,
+                        sender: "Director of Football"
+                    )
+                }
+            }
+            // Later installments and any add-on are paid when due.
+            let sellerId = clubs[sellerIdx].id
+            if parts > 1 {
+                for n in 1..<parts {
+                    transferInstallments.append(TransferInstallment(
+                        playerId: player.id, playerName: player.fullName,
+                        payerClubId: clubs[buyerIdx].id, payeeClubId: sellerId,
+                        amount: fee / parts, dueDate: Self.dateAdding(years: n, to: season.currentDate)))
+                }
+            }
+            if addOn > 0 {
+                transferInstallments.append(TransferInstallment(
+                    playerId: player.id, playerName: player.fullName,
+                    payerClubId: clubs[buyerIdx].id, payeeClubId: sellerId,
+                    amount: addOn, dueDate: Self.dateAdding(years: 1, to: season.currentDate),
+                    isConditionalAddOn: true))
             }
             clubs[sellerIdx].finances.transferBudget += sellerProceeds
             // The fee is real money: it lands in the seller's bank account.
@@ -3461,9 +3542,11 @@ public final class GameState: Codable {
             freeAgents.removeAll { $0.id == player.id }
         }
         
-        clubs[buyerIdx].finances.transferBudget -= fee
-        clubs[buyerIdx].finances.balance -= fee
-        if clubs[buyerIdx].isUserClub { seasonLedger?.transfers += fee; checkTransferAchievements(fee: fee, userBought: true) }
+        // A free agent's fee is always zero; a signing-on bonus goes to the player.
+        let paidNow = (sellerIdx == nil ? 0 : upfront) + signingBonus
+        clubs[buyerIdx].finances.transferBudget -= paidNow
+        clubs[buyerIdx].finances.balance -= paidNow
+        if clubs[buyerIdx].isUserClub { seasonLedger?.transfers += paidNow; checkTransferAchievements(fee: fee, userBought: true) }
         if let sellerIdx, clubs[sellerIdx].isUserClub { checkTransferAchievements(fee: fee, userBought: false) }
         clubs[buyerIdx].addPlayer(signed)
         clubs[buyerIdx].finances.currentWageBill = clubs[buyerIdx].totalWeeklyWageBill
@@ -5406,17 +5489,20 @@ public final class GameState: Codable {
         }
     }
     
-    /// Resolves a four-team play-off by seeded single-elimination, favouring the club
-    /// that finished higher in the league table while still allowing upsets.
     // MARK: - Promotion Play-Offs
 
     static let playOffSuffix = " Play-Offs"
+    static let playOffFirstLeg = "Semi-Final, leg 1"
+    static let playOffSecondLeg = "Semi-Final, leg 2"
 
-    /// Promotion play-offs are real matches. Once all of a division's league
-    /// games are played, the four clubs below the automatic places meet in
-    /// one-off semi-finals at the higher seed's ground (3rd v 6th, 4th v 5th
-    /// in a three-up league), then the winners meet in a final at a neutral
-    /// ground the week after. Ties are decided by extra time and penalties.
+    /// Promotion play-offs are real matches, run as in the English Football
+    /// League. Once all of a division's league games are played, the four
+    /// clubs below the automatic places meet in two-legged semi-finals (the
+    /// higher seed plays the lowest, the middle two each other). The lower
+    /// seed hosts the first leg; the second leg, at the higher seed's ground,
+    /// goes to extra time and penalties if the tie is level on aggregate
+    /// (there are no away goals). The winners meet in a one-off final at a
+    /// neutral ground, with extra time and penalties if needed.
     private func progressLeaguePlayOffs() {
         let existingTiers = Set(leagues.map { $0.tier })
         // Runs every slot: skip divisions still playing without rescanning
@@ -5437,8 +5523,9 @@ public final class GameState: Codable {
                 guard contenders.count >= 2 else { continue }
                 let slot = nextSaturdaySlot(after: season.currentWeek)
                 if contenders.count == 4 {
-                    addPlayOffFixture(home: contenders[0], away: contenders[3], round: "Semi-Final", competition: name, slot: slot)
-                    addPlayOffFixture(home: contenders[1], away: contenders[2], round: "Semi-Final", competition: name, slot: slot)
+                    // First legs at the lower seed's ground.
+                    addPlayOffFixture(home: contenders[3], away: contenders[0], round: Self.playOffFirstLeg, competition: name, slot: slot)
+                    addPlayOffFixture(home: contenders[2], away: contenders[1], round: Self.playOffFirstLeg, competition: name, slot: slot)
                 } else {
                     addPlayOffFixture(home: contenders[0], away: contenders[1], round: "Final", competition: name, slot: slot)
                 }
@@ -5446,9 +5533,12 @@ public final class GameState: Codable {
                    let tie = season.fixtures.last(where: { $0.competition == name && $0.involves(clubId: uid) }),
                    let opponent = tie.opponentId(for: uid) {
                     let position = automatic + seed + 1
+                    let format = tie.cupRound == "Final"
+                        ? "in the play-off final at a neutral ground"
+                        : "in the play-off semi-final, first leg \(tie.homeClubId == uid ? "at home" : "away") and the return leg a week later"
                     addNews(
                         headline: "Into the \(tier.displayName) Play-Offs",
-                        body: "We finished \(position)\(standingRankSuffix(position)) and play \(clubName(for: opponent)) \(tie.homeClubId == uid ? "at home" : "away") in the play-off \(tie.cupRound?.lowercased() ?? "semi-final") on \(Self.longDateText(tie.date)). Win through to the final and we are promoted.",
+                        body: "We finished \(position)\(standingRankSuffix(position)) and face \(clubName(for: opponent)) \(format), starting \(Self.longDateText(tie.date)). Get through to the final and win it, and we are promoted.",
                         category: .promotion,
                         sender: "The Board"
                     )
@@ -5456,16 +5546,38 @@ public final class GameState: Codable {
                 continue
             }
 
-            // Both semi-finals played: draw up the final.
-            let semis = playOffs.filter { $0.cupRound == "Semi-Final" }
-            guard semis.count == 2, semis.allSatisfy({ $0.isPlayed }),
-                  !playOffs.contains(where: { $0.cupRound == "Final" }) else { continue }
-            let winners = semis.map { $0.winnerClubId ?? $0.homeClubId }
-                .sorted { (order.firstIndex(of: $0) ?? 99) < (order.firstIndex(of: $1) ?? 99) }
+            // First legs played: the return legs, at the higher seed's ground.
+            let firstLegs = playOffs.filter { $0.cupRound == Self.playOffFirstLeg }
+            let secondLegs = playOffs.filter { $0.cupRound == Self.playOffSecondLeg }
+            if !firstLegs.isEmpty && secondLegs.isEmpty {
+                guard firstLegs.allSatisfy({ $0.isPlayed }) else { continue }
+                let slot = nextSaturdaySlot(after: season.currentWeek)
+                for leg in firstLegs {
+                    addPlayOffFixture(home: leg.awayClubId, away: leg.homeClubId, round: Self.playOffSecondLeg, competition: name, slot: slot)
+                }
+                continue
+            }
+
+            // Both semi-finals decided: draw up the final.
+            guard !playOffs.contains(where: { $0.cupRound == "Final" }) else { continue }
+            let semis: [Fixture]
+            let winners: [UUID]
+            if !secondLegs.isEmpty {
+                guard secondLegs.allSatisfy({ $0.isPlayed }) else { continue }
+                semis = firstLegs + secondLegs
+                winners = secondLegs.map { leg in playOffAggregateWinner(secondLeg: leg, firstLegs: firstLegs) }
+            } else {
+                // A single-match semi-final from an older save.
+                semis = playOffs.filter { $0.cupRound == "Semi-Final" }
+                guard semis.count == 2, semis.allSatisfy({ $0.isPlayed }) else { continue }
+                winners = semis.map { $0.winnerClubId ?? $0.homeClubId }
+            }
+            guard winners.count == 2 else { continue }
+            let seeded = winners.sorted { (order.firstIndex(of: $0) ?? 99) < (order.firstIndex(of: $1) ?? 99) }
             let slot = nextSaturdaySlot(after: season.currentWeek)
-            addPlayOffFixture(home: winners[0], away: winners[1], round: "Final", competition: name, slot: slot)
+            addPlayOffFixture(home: seeded[0], away: seeded[1], round: "Final", competition: name, slot: slot)
             if let uid = userClubId {
-                if let opponent = winners.first(where: { $0 != uid }), winners.contains(uid) {
+                if let opponent = seeded.first(where: { $0 != uid }), seeded.contains(uid) {
                     addNews(
                         headline: "Play-Off Final!",
                         body: "We are one game from promotion. \(clubName(for: opponent)) stand in the way in the \(tier.displayName) play-off final at a neutral ground on \(Self.longDateText(dateForWeek(slot))).",
@@ -5482,6 +5594,29 @@ public final class GameState: Codable {
                 }
             }
         }
+    }
+
+    /// Who went through a two-legged play-off semi-final: aggregate score
+    /// (a second-leg shootout is recorded as a one-goal win), and the
+    /// higher seed, at home in the second leg, if it is somehow still level.
+    private func playOffAggregateWinner(secondLeg: Fixture, firstLegs: [Fixture]) -> UUID {
+        let higher = secondLeg.homeClubId, lower = secondLeg.awayClubId
+        guard let second = secondLeg.result else { return higher }
+        let first = firstLegs.first { $0.homeClubId == lower && $0.awayClubId == higher }?.result
+        let higherGoals = second.homeGoals + (first?.awayGoals ?? 0)
+        let lowerGoals = second.awayGoals + (first?.homeGoals ?? 0)
+        return lowerGoals > higherGoals ? lower : higher
+    }
+
+    /// For the second leg of a play-off semi-final: the goals tonight's home
+    /// and away sides scored in the first leg.
+    func playOffSecondLegCarry(_ fixture: Fixture) -> (home: Int, away: Int)? {
+        guard fixture.cupRound == Self.playOffSecondLeg,
+              let first = season.fixtures.first(where: {
+                  $0.competition == fixture.competition && $0.cupRound == Self.playOffFirstLeg
+                      && $0.homeClubId == fixture.awayClubId && $0.awayClubId == fixture.homeClubId
+              }), let result = first.result else { return nil }
+        return (home: result.awayGoals, away: result.homeGoals)
     }
 
     /// The first Saturday on the calendar after the given slot.
@@ -5956,6 +6091,7 @@ public final class GameState: Codable {
         case pendingSponsorOffers
         case sponsorAgencyCooldown
         case awaitingClubPurchase
+        case transferInstallments
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -6011,6 +6147,7 @@ public final class GameState: Codable {
         try container.encode(pendingSponsorOffers, forKey: .pendingSponsorOffers)
         try container.encode(sponsorAgencyCooldown, forKey: .sponsorAgencyCooldown)
         try container.encode(awaitingClubPurchase, forKey: .awaitingClubPurchase)
+        try container.encode(transferInstallments, forKey: .transferInstallments)
     }
     
     public required init(from decoder: Decoder) throws {
@@ -6067,6 +6204,7 @@ public final class GameState: Codable {
         self.pendingSponsorOffers = try container.decodeIfPresent([SponsorOffer].self, forKey: .pendingSponsorOffers) ?? []
         self.sponsorAgencyCooldown = try container.decodeIfPresent(Int.self, forKey: .sponsorAgencyCooldown) ?? 0
         self.awaitingClubPurchase = try container.decodeIfPresent(Bool.self, forKey: .awaitingClubPurchase) ?? false
+        self.transferInstallments = try container.decodeIfPresent([TransferInstallment].self, forKey: .transferInstallments) ?? []
         // Saves written before this flag existed: any save with a user club, or
         // a manager career (possibly between jobs), is a real career.
         // (Re-decoded into locals: reading `self` properties is not allowed until
