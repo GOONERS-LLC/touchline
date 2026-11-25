@@ -552,10 +552,21 @@ public struct PostMatchView: View {
         }
     }
 
-    /// The league table around the user's club after a league match.
+    /// The table around the user's club after a league match, or after a
+    /// European league-phase match.
     @ViewBuilder
     private func tableCard(fixture: Fixture) -> some View {
-        if let league = gameState.currentLeague, fixture.competition == league.name, let uid = gameState.userClubId {
+        if let tieId = fixture.europeanFixtureId, let uid = gameState.userClubId,
+           let state = gameState.europeanCompetitions.first(where: { $0.fixtures.contains { $0.id == tieId } }),
+           let tie = state.fixtures.first(where: { $0.id == tieId }), tie.stage == "League Phase" {
+            // Tonight's result counts straight away; the rest of the
+            // matchweek is still to be played.
+            let rows = gameState.europeanTable(state, including: tie.isPlayed ? nil : fixture)
+            if !rows.isEmpty {
+                EuropeanTableAround(title: state.competition.displayName, rows: rows, userClubId: uid,
+                                    note: tie.isPlayed ? nil : "Other matches in this matchweek are still to be played.")
+            }
+        } else if let league = gameState.currentLeague, fixture.competition == league.name, let uid = gameState.userClubId {
             let table = gameState.currentLeagueStandings
             if let mine = table.firstIndex(where: { $0.clubId == uid }) {
                 let lower = max(0, min(mine - 2, table.count - 5))

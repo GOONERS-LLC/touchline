@@ -4733,6 +4733,15 @@ public struct EuropeanCompetitionsView: View {
                     }
                 }
 
+                // Your club and the clubs around it, as for the domestic table.
+                if let uid = gameState.userClubId, state.table().contains(where: { $0.clubId == uid }) {
+                    Section {
+                        EuropeanTableAround(title: state.competition.displayName, rows: state.table(), userClubId: uid)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets())
+                    }
+                }
+
                 Section(header: leaguePhaseHeader) {
                     let rows = state.table()
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
