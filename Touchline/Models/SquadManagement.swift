@@ -195,15 +195,21 @@ extension GameState {
     /// Whether the current lineup is a one-off for the next match.
     public var hasMatchOnlyLineup: Bool { matchOnlyLineupBackup != nil }
 
-    /// Remembers the usual lineup before one-off changes for the next match.
-    /// Called at kick-off: remembers the lineup the manager picked, so the
-    /// substitutions made during the match are undone afterwards and his
-    /// eleven is back as he set it. (Lineup changes made before the match
-    /// used to be treated as one-off and reverted too, so lineups seemed to
-    /// change by themselves.)
+    /// Remembers the usual lineup before changes made for the next match.
+    /// Called when the manager opens the match-day lineup and at kick-off.
+    /// Everything changed after this (on match day or during the match) is
+    /// for that match only and is undone afterwards, unless he taps
+    /// "Keep as my lineup". An existing snapshot is never replaced, so the
+    /// usual lineup is the one from before match day.
     public func beginMatchOnlyLineup() {
-        guard let idx = userClubIndex else { return }
+        guard let idx = userClubIndex, matchOnlyLineupBackup == nil else { return }
         matchOnlyLineupBackup = clubs[idx].tactics
+    }
+
+    /// Whether the lineup for the next match differs from the usual one.
+    public var matchLineupDiffersFromUsual: Bool {
+        guard let backup = matchOnlyLineupBackup, let club = userClub else { return false }
+        return backup != club.tactics
     }
 
     /// Restores the usual lineup (after the match, or if the manager cancels).
@@ -217,9 +223,11 @@ extension GameState {
         matchOnlyLineupBackup = nil
     }
 
-    /// Keeps the one-off lineup as the usual one.
+    /// Makes the current lineup the usual one. Later changes for this match
+    /// are still undone afterwards, back to this lineup.
     public func keepMatchLineup() {
-        matchOnlyLineupBackup = nil
+        guard let idx = userClubIndex, matchOnlyLineupBackup != nil else { return }
+        matchOnlyLineupBackup = clubs[idx].tactics
     }
 }
 

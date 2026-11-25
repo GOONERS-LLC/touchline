@@ -2458,8 +2458,8 @@ public final class GameState: Codable {
         liveMatch = LiveMatchSession(fixtureId: fixtureId, paused: paused, home: prepared.home, away: prepared.away,
                                      homeSuspensions: prepared.homeSuspensions, awaySuspensions: prepared.awaySuspensions,
                                      config: prepared.config)
-        // Changes during the match are for this match only; the usual lineup
-        // returns afterwards.
+        // Changes for this match are for this match only; the usual lineup
+        // returns afterwards unless the manager keeps it.
         if prepared.config.userClubId != nil {
             beginMatchOnlyLineup()
             syncUserLineupToPitch()

@@ -293,6 +293,9 @@ public struct LiveMatchView: View {
                         Label(substitutionRules, systemImage: "info.circle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if gameState.gameMode != .createClub {
+                            KeepLineupBar(allowRevert: false)
+                        }
                         LineupEditorView()
                     }
                     .padding()

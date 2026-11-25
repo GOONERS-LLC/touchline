@@ -1087,6 +1087,9 @@ public struct SquadView: View {
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         lineupBar(club)
+                        if gameState.matchLineupDiffersFromUsual && gameState.liveMatch == nil {
+                            KeepLineupBar()
+                        }
                         LineupEditorView(onProfile: { gameState.openProfile($0) })
                     case .players:
                         fullSquad(club)
@@ -2677,10 +2680,7 @@ public struct MatchDayView: View {
             NavigationStack {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        Label("Your lineup stays as you set it. Substitutions made during a match are undone afterwards.",
-                              systemImage: "info.circle")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        KeepLineupBar()
                         LineupEditorView()
                     }
                     .padding()
@@ -2802,6 +2802,8 @@ public struct MatchDayView: View {
             VStack(spacing: 12) {
                 teamSheet(club)
                 Button {
+                    // Changes from here on are for this match only.
+                    gameState.beginMatchOnlyLineup()
                     editingLineup = true
                 } label: {
                     Label("Manage Lineup", systemImage: "arrow.left.arrow.right")
