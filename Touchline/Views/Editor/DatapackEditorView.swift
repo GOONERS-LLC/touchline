@@ -177,11 +177,26 @@ struct DatapackEditView: View {
                                 } label: {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(league.name).font(.headline)
-                                        Text("\(league.clubs.count) clubs").font(.caption).foregroundStyle(.secondary)
+                                        Text("\(LeagueTier(rawValue: league.tier).map { "\($0.country.displayName), division \($0.level) · " } ?? "")\(league.clubs.count) clubs")
+                                            .font(.caption).foregroundStyle(.secondary)
                                     }
                                 }
                             }
                         }
+                        .onDelete { offsets in
+                            pack?.leagues.remove(atOffsets: offsets)
+                            dirty = true
+                        }
+                    }
+                    Section(footer: Text("A new league starts with four placeholder clubs; edit them, or move clubs in from other leagues.")) {
+                        Menu {
+                            ForEach(availableTiers, id: \.rawValue) { tier in
+                                Button("\(tier.country.displayName): \(tier.displayName)") { addLeague(tier) }
+                            }
+                        } label: {
+                            Label("Add a League", systemImage: "plus.circle.fill")
+                        }
+                        .disabled(availableTiers.isEmpty)
                     }
                 }
                 .searchable(text: $search, prompt: "League or club")
@@ -201,6 +216,22 @@ struct DatapackEditView: View {
                 Button("Save", action: save).disabled(!dirty)
             }
         }
+    }
+
+    /// Divisions not yet in the pack (in countries whose leagues are in the game).
+    private var availableTiers: [LeagueTier] {
+        let used = Set((pack?.leagues ?? []).map(\.tier))
+        return LeagueTier.allCases.filter { $0.country.hasClubLeagues && !used.contains($0.rawValue) }
+    }
+
+    private func addLeague(_ tier: LeagueTier) {
+        let clubs = (1...4).map { n in
+            RawClubData(name: "New Club \(n)", shortName: "NC\(n)", stadium: "New Stadium", stadiumCapacity: 10_000,
+                        primaryColor: "#1565C0", secondaryColor: "#FFFFFF", city: "City", manager: "Head Coach",
+                        reputation: 50, budget: 0, wageBudget: 0, players: [])
+        }
+        pack?.leagues.append(RawLeagueData(name: tier.displayName, tier: tier.rawValue, clubs: clubs))
+        dirty = true
     }
 
     private func save() {
@@ -245,6 +276,9 @@ struct LeagueEditView: View {
                     .onDelete { offsets in
                         pack.leagues[leagueIndex].clubs.remove(atOffsets: offsets)
                     }
+                    .onMove { from, to in
+                        pack.leagues[leagueIndex].clubs.move(fromOffsets: from, toOffset: to)
+                    }
                     Button {
                         let n = pack.leagues[leagueIndex].clubs.count + 1
                         pack.leagues[leagueIndex].clubs.append(RawClubData(
@@ -258,7 +292,61 @@ struct LeagueEditView: View {
         .stadiumBackground()
         .navigationTitle(valid ? pack.leagues[leagueIndex].name : "League")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
     }
+}
+
+// MARK: - Sliders
+
+/// A labelled slider for a whole number, with its value shown and spoken.
+/// VoiceOver swipes up or down to change it a step at a time.
+struct EditorSlider: View {
+    let title: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    var step: Int = 1
+    var format: (Int) -> String = { "\($0)" }
+    var note: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(format(value))
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Slider(
+                value: Binding(
+                    get: { Double(min(max(value, range.lowerBound), range.upperBound)) },
+                    set: { value = Int(($0 / Double(step)).rounded()) * step }
+                ),
+                in: Double(range.lowerBound)...Double(range.upperBound),
+                step: Double(step)
+            )
+            if let note {
+                Text(note).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(format(value))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: value = min(range.upperBound, value + step)
+            case .decrement: value = max(range.lowerBound, value - step)
+            @unknown default: break
+            }
+        }
+    }
+}
+
+/// Amounts in the editor are kept in pounds.
+private func editorMoney(_ amount: Int) -> String {
+    if amount >= 1_000_000 { return String(format: "£%.1fM", Double(amount) / 1_000_000) }
+    if amount >= 1_000 { return "£\(amount / 1_000)K" }
+    return "£\(amount)"
 }
 
 // MARK: - Club
@@ -267,6 +355,8 @@ struct ClubEditView: View {
     @Binding var pack: Datapack
     let leagueIndex: Int
     let clubIndex: Int
+    @State private var movingLeague = false
+    @Environment(\.dismiss) private var dismiss
 
     private var valid: Bool {
         pack.leagues.indices.contains(leagueIndex) && pack.leagues[leagueIndex].clubs.indices.contains(clubIndex)
@@ -276,6 +366,14 @@ struct ClubEditView: View {
         Binding(
             get: { Color(hex: pack.leagues[leagueIndex].clubs[clubIndex][keyPath: keyPath]) },
             set: { pack.leagues[leagueIndex].clubs[clubIndex][keyPath: keyPath] = $0.hexString }
+        )
+    }
+
+    /// An optional whole number shown with a default until it is set.
+    private func optional(_ keyPath: WritableKeyPath<RawClubData, Int?>, default value: Int) -> Binding<Int> {
+        Binding(
+            get: { pack.leagues[leagueIndex].clubs[clubIndex][keyPath: keyPath] ?? value },
+            set: { pack.leagues[leagueIndex].clubs[clubIndex][keyPath: keyPath] = $0 }
         )
     }
 
@@ -291,11 +389,29 @@ struct ClubEditView: View {
                     }
                     LabeledContent("City") { TextField("City", text: club.city).multilineTextAlignment(.trailing) }
                     LabeledContent("Manager") { TextField("Manager", text: club.manager).multilineTextAlignment(.trailing) }
-                    Stepper("Reputation: \(club.wrappedValue.reputation)", value: club.reputation, in: 1...99)
+                    EditorSlider(title: "Reputation", value: club.reputation, range: 1...99,
+                                 note: "How big the club is: crowds, money, which players will join.")
                 }
                 Section("Stadium") {
                     LabeledContent("Name") { TextField("Stadium", text: club.stadium).multilineTextAlignment(.trailing) }
-                    Stepper("Capacity: \(club.wrappedValue.stadiumCapacity.formatted())", value: club.stadiumCapacity, in: 500...150_000, step: 500)
+                    EditorSlider(title: "Capacity", value: club.stadiumCapacity, range: 500...120_000, step: 500,
+                                 format: { $0.formatted() })
+                }
+                Section(header: Text("Money"), footer: Text("Left at zero, the game sets them from the club's size.")) {
+                    EditorSlider(title: "Transfer budget", value: optional(\.budget, default: 0),
+                                 range: 0...400_000_000, step: 250_000,
+                                 format: { $0 == 0 ? "Automatic" : editorMoney($0) })
+                    EditorSlider(title: "Weekly wage budget", value: optional(\.wageBudget, default: 0),
+                                 range: 0...6_000_000, step: 5_000,
+                                 format: { $0 == 0 ? "Automatic" : editorMoney($0) + "/w" })
+                    EditorSlider(title: "Bank balance", value: optional(\.balance, default: 0),
+                                 range: 0...1_000_000_000, step: 1_000_000,
+                                 format: { $0 == 0 ? "Automatic" : editorMoney($0) })
+                }
+                Section(header: Text("Facilities"), footer: Text("1 is basic, 5 is the best in the world.")) {
+                    EditorSlider(title: "Training ground", value: optional(\.trainingLevel, default: 2), range: 1...5)
+                    EditorSlider(title: "Youth academy", value: optional(\.academyLevel, default: 2), range: 1...5)
+                    EditorSlider(title: "Medical department", value: optional(\.medicalLevel, default: 2), range: 1...5)
                 }
                 Section("Colours") {
                     ColorPicker("Primary", selection: colorBinding(\.primaryColor), supportsOpacity: false)
@@ -332,11 +448,43 @@ struct ClubEditView: View {
                             wage: nil, contractYears: nil, specialties: nil))
                     } label: { Label("Add Player", systemImage: "plus.circle.fill") }
                 }
+                Section(footer: Text("Moving a club takes its whole squad with it.")) {
+                    Button { movingLeague = true } label: {
+                        Label("Move to Another League", systemImage: "arrow.up.arrow.down")
+                    }
+                    Button {
+                        var copy = pack.leagues[leagueIndex].clubs[clubIndex]
+                        copy.name += " (copy)"
+                        pack.leagues[leagueIndex].clubs.append(copy)
+                    } label: {
+                        Label("Duplicate Club", systemImage: "plus.square.on.square")
+                    }
+                }
             }
         }
         .stadiumBackground()
         .navigationTitle(valid ? pack.leagues[leagueIndex].clubs[clubIndex].name : "Club")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $movingLeague) {
+            NavigationStack {
+                List {
+                    ForEach(Array(pack.leagues.enumerated()), id: \.offset) { li, league in
+                        if li != leagueIndex {
+                            Button("\(league.name) (\(league.clubs.count) clubs)") {
+                                guard valid else { return }
+                                let club = pack.leagues[leagueIndex].clubs.remove(at: clubIndex)
+                                pack.leagues[li].clubs.append(club)
+                                movingLeague = false
+                                dismiss()
+                            }
+                        }
+                    }
+                }
+                .navigationTitle("Move To")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { movingLeague = false } } }
+            }
+        }
     }
 }
 
@@ -356,6 +504,23 @@ struct PlayerEditView: View {
             && pack.leagues[leagueIndex].clubs[clubIndex].players.indices.contains(playerIndex)
     }
 
+    /// Every attribute, grouped as on the player screen. The key is how
+    /// the datapack stores it (see DataLoader's specialties).
+    private static let attributeGroups: [(String, [(String, String)])] = [
+        ("Technical", [("Passing", "passing"), ("Shooting", "shooting"), ("Dribbling", "dribbling"),
+                       ("First touch", "firsttouch"), ("Crossing", "crossing"), ("Free kicks", "freekicks"),
+                       ("Penalties", "penalties"), ("Heading", "heading"), ("Long shots", "longshots"),
+                       ("Tackling", "tackling"), ("Marking", "marking")]),
+        ("Physical", [("Pace", "pace"), ("Stamina", "stamina"), ("Strength", "strength"), ("Agility", "agility"),
+                      ("Jumping", "jumping"), ("Balance", "balance")]),
+        ("Mental", [("Vision", "vision"), ("Composure", "composure"), ("Decisions", "decisions"),
+                    ("Work rate", "workrate"), ("Aggression", "aggression"), ("Leadership", "leadership"),
+                    ("Teamwork", "teamwork"), ("Positioning", "positioning"), ("Off the ball", "offtheball"),
+                    ("Concentration", "concentration")]),
+        ("Goalkeeping", [("Reflexes", "reflexes"), ("Handling", "handling"), ("Positioning (GK)", "gkpositioning"),
+                         ("One on ones", "oneonones"), ("Kicking", "kicking"), ("Command of area", "commandofarea")])
+    ]
+
     var body: some View {
         List {
             if valid {
@@ -364,7 +529,7 @@ struct PlayerEditView: View {
                     LabeledContent("First name") { TextField("First name", text: player.firstName).multilineTextAlignment(.trailing) }
                     LabeledContent("Last name") { TextField("Last name", text: player.lastName).multilineTextAlignment(.trailing) }
                     LabeledContent("Nationality") { TextField("Nationality", text: player.nationality).multilineTextAlignment(.trailing) }
-                    Stepper("Age: \(player.wrappedValue.age)", value: player.age, in: 15...45)
+                    EditorSlider(title: "Age", value: player.age, range: 15...45)
                     Picker("Preferred foot", selection: Binding(
                         get: { player.wrappedValue.preferredFoot ?? "right" },
                         set: { player.wrappedValue.preferredFoot = $0 })) {
@@ -372,6 +537,12 @@ struct PlayerEditView: View {
                         Text("Left").tag("left")
                         Text("Both").tag("both")
                     }
+                    EditorSlider(title: "Height", value: Binding(
+                        get: { player.wrappedValue.height ?? 181 },
+                        set: { player.wrappedValue.height = $0 }), range: 155...210, format: { "\($0) cm" })
+                    EditorSlider(title: "Weight", value: Binding(
+                        get: { player.wrappedValue.weight ?? 76 },
+                        set: { player.wrappedValue.weight = $0 }), range: 50...110, format: { "\($0) kg" })
                 }
                 Section("Position") {
                     Picker("Main position", selection: Binding(
@@ -394,14 +565,53 @@ struct PlayerEditView: View {
                     }
                 }
                 Section(header: Text("Ability"), footer: Text("Rating is how good he is now; potential is how good he can become.")) {
-                    Stepper("Rating: \(player.wrappedValue.overall)", value: Binding(
+                    EditorSlider(title: "Rating", value: Binding(
                         get: { player.wrappedValue.overall },
-                        set: { player.wrappedValue.overall = $0; if player.wrappedValue.potential < $0 { player.wrappedValue.potential = $0 } }), in: 30...99)
-                    Stepper("Potential: \(player.wrappedValue.potential)", value: Binding(
+                        set: { player.wrappedValue.overall = $0; if player.wrappedValue.potential < $0 { player.wrappedValue.potential = $0 } }),
+                                 range: 30...99)
+                    EditorSlider(title: "Potential", value: Binding(
                         get: { player.wrappedValue.potential },
-                        set: { player.wrappedValue.potential = max($0, player.wrappedValue.overall) }), in: 30...99)
+                        set: { player.wrappedValue.potential = max($0, player.wrappedValue.overall) }), range: 30...99)
+                }
+                Section(header: Text("Contract"), footer: Text("Left at zero, wage and value are worked out from his rating and age.")) {
+                    EditorSlider(title: "Weekly wage", value: Binding(
+                        get: { player.wrappedValue.wage ?? 0 },
+                        set: { player.wrappedValue.wage = $0 == 0 ? nil : $0 }),
+                                 range: 0...600_000, step: 500,
+                                 format: { $0 == 0 ? "Automatic" : editorMoney($0) + "/w" })
+                    EditorSlider(title: "Years left", value: Binding(
+                        get: { player.wrappedValue.contractYears ?? 3 },
+                        set: { player.wrappedValue.contractYears = $0 }), range: 1...6)
+                    EditorSlider(title: "Market value", value: Binding(
+                        get: { player.wrappedValue.value ?? 0 },
+                        set: { player.wrappedValue.value = $0 == 0 ? nil : $0 }),
+                                 range: 0...250_000_000, step: 250_000,
+                                 format: { $0 == 0 ? "Automatic" : editorMoney($0) })
+                }
+                ForEach(Self.attributeGroups, id: \.0) { group in
+                    Section(header: Text(group.0),
+                            footer: group.0 == "Technical"
+                                ? Text("Attributes left on Automatic are generated from his rating and position. Move a slider to set one exactly.")
+                                : nil) {
+                        ForEach(group.1, id: \.1) { attribute in
+                            let key = attribute.1
+                            EditorSlider(title: attribute.0, value: Binding(
+                                get: { player.wrappedValue.specialties?[key] ?? 0 },
+                                set: { new in
+                                    var specs = player.wrappedValue.specialties ?? [:]
+                                    specs[key] = new == 0 ? nil : new
+                                    player.wrappedValue.specialties = specs.isEmpty ? nil : specs
+                                }), range: 0...99, format: { $0 == 0 ? "Automatic" : "\($0)" })
+                        }
+                    }
                 }
                 Section {
+                    Button("Reset All Attributes to Automatic") { player.wrappedValue.specialties = nil }
+                    Button {
+                        var copy = player.wrappedValue
+                        copy.lastName += " II"
+                        pack.leagues[leagueIndex].clubs[clubIndex].players.append(copy)
+                    } label: { Label("Duplicate Player", systemImage: "plus.square.on.square") }
                     Button { choosingClub = true } label: { Label("Move to Another Club", systemImage: "arrow.left.arrow.right") }
                 }
             }

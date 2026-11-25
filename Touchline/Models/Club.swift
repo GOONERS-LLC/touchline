@@ -190,10 +190,11 @@ public struct Club: Codable, Identifiable, Hashable {
     
     /// Clubs budget around the wages they already pay. A starting wage budget
     /// below the existing bill left a club unable to sign anyone (78 of 688
-    /// clubs, including all of League Two), so keep about 12% headroom.
+    /// clubs, including all of League Two). Budgets now leave about 35%
+    /// headroom above the bill, so there is real room to sign and renew.
     public mutating func ensureWageHeadroom() {
         finances.currentWageBill = totalWeeklyWageBill
-        let minimum = Int(Double(totalWeeklyWageBill) * 1.12)
+        let minimum = Int(Double(totalWeeklyWageBill) * 1.35)
         if finances.wageBudget < minimum {
             finances.wageBudget = minimum
         }
@@ -791,6 +792,8 @@ public struct Club: Codable, Identifiable, Hashable {
         // headroom must reflect the club's real stadium and current squad.
         finances.stadiumCapacity = stadiumCapacity
         finances.currentWageBill = totalWeeklyWageBill
+        // Older saves get the larger wage budgets too.
+        ensureWageHeadroom()
     }
 }
 
@@ -975,7 +978,7 @@ public struct ClubFinances: Codable, Hashable {
         let perGameMatchday = max(120_000, matchdayAnnual / gamesPerSeason)
 
         // Wage budget is roughly 55% of turnover; transfer budget a third of it.
-        let wageBudgetAnnual = Int(Double(turnover) * 0.55)
+        let wageBudgetAnnual = Int(Double(turnover) * 0.70)
         let wageBudget = max(6_000, wageBudgetAnnual / 52)
         let currentWageBill = Int(Double(wageBudget) * 0.72)
         let transferBudget = baseTransferBudget(reputation: reputation, tier: tier, capacity: capacity)

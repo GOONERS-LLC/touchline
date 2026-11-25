@@ -182,8 +182,10 @@ extension GameState {
 
         let asking = Double(max(1, offer.askingPrice))
         let value = bidValue(fee: fee, installments: parts, sellOnPercent: sellOn, addOn: addOn, player: player)
-        // A club comes down a little as talks go on, to 6% under its price.
-        let target = asking * (1.0 - 0.02 * Double(min(max(0, offer.negotiationRound - 1), 3)))
+        // The club will take as little as 85% of its price in the end, but
+        // starts firmer and gives ground a round at a time (3% a round).
+        let floorValue = asking * 0.85
+        let target = max(floorValue, asking * (1.0 - 0.03 * Double(max(0, offer.negotiationRound - 1))))
         let structure = Self.dealStructureText(fee: fee, installments: parts, sellOnPercent: sellOn, addOn: addOn)
 
         if value >= target {
@@ -200,17 +202,22 @@ extension GameState {
         // Insulting bids use up their patience twice as fast.
         let insulting = value < asking * 0.6
         if insulting { offer.negotiationRound += 1 }
-        if offer.negotiationRound > 5 {
+        if offer.negotiationRound > 7 {
             offer.status = .rejected
             offer.weeksUntilResponse = 0
             pendingTransferOffers[idx] = offer
             return NegotiationReply(.walkedAway, "\(seller.name) have had enough and ended talks for \(player.fullName).")
         }
 
-        // Their counter: the fee that meets their price on your structure.
+        // Their counter meets you part of the way: from their last figure,
+        // they come about 40% of the way towards your bid (much less if the
+        // bid is insulting), but never below the price they would take.
         let perPound = bidValue(fee: 1_000_000, installments: parts, sellOnPercent: sellOn, addOn: 0, player: player) / 1_000_000
-        let needed = (target - Double(addOn) * 0.5) / max(0.5, perPound)
-        let counter = max(fee + 1, Self.roundedFee(Int(needed.rounded(.up))))
+        let lastValue = offer.counterFee.map { Double($0) * perPound + Double(addOn) * 0.5 } ?? asking
+        let movedValue = max(target, lastValue - (lastValue - value) * (insulting ? 0.1 : 0.4))
+        let needed = (movedValue - Double(addOn) * 0.5) / max(0.5, perPound)
+        var counter = max(fee + 1, Self.roundedFee(Int(needed.rounded(.up))))
+        if let last = offer.counterFee { counter = min(counter, last) }   // never goes back up
         offer.counterFee = counter
         offer.status = .counterOffer
         pendingTransferOffers[idx] = offer
@@ -331,16 +338,19 @@ extension GameState {
         }
 
         if effective < floor * 0.7 { offer.negotiationRound += 1 }
-        if offer.negotiationRound > 4 {
+        if offer.negotiationRound > 7 {
             offer.status = .withdrawn
             offer.weeksUntilResponse = 0
             pendingTransferOffers[i] = offer
             return NegotiationReply(.walkedAway, "\(player.fullName) has walked away from talks. He felt the offers were not serious.")
         }
-        // He comes down from his first figure toward his limit as talks go on.
-        let progress = min(1.0, Double(offer.negotiationRound) / 4.0)
-        let ask = Double(demand) - (Double(demand) - floor) * progress
-        let counter = max(wage + 1, Self.roundedWage(Int(ask.rounded(.up))))
+        // He meets you part of the way: from his last figure he comes about
+        // 40% of the way towards your offer (much less for a lowball), never
+        // below what he would really sign for, and never back up.
+        let lastAsk = Double(offer.demandedWage ?? demand)
+        let give = effective < floor * 0.7 ? 0.1 : 0.4
+        let ask = max(floor, lastAsk - (lastAsk - effective) * give)
+        let counter = min(Int(lastAsk), max(wage + 1, Self.roundedWage(Int(ask.rounded(.up)))))
         offer.demandedWage = counter
         pendingTransferOffers[i] = offer
         return NegotiationReply(.countered, "\(player.fullName)'s agent says \(Player.formatCurrency(wage))/w is not enough. He would sign a \(years)-year deal for \(Player.formatCurrency(counter))/w.", counter: counter)

@@ -94,6 +94,15 @@ public struct ContentView: View {
         // Text only, everywhere: every row and button label shows its words
         // without an icon, so VoiceOver never reads an image name.
         .labelStyle(.titleOnly)
+        // Titles, promotions and trophies get their cutscene on the Home
+        // screen (after any awards night).
+        .fullScreenCover(item: Binding(get: {
+            if case .dashboard = gameState.currentScreen, gameState.ceremonyToShow == nil { return gameState.celebrationToShow }
+            return nil
+        }, set: { gameState.celebrationToShow = $0 })) { celebration in
+            CelebrationView(celebration: celebration)
+                .environment(gameState)
+        }
         .groupBoxStyle(GFGroupBoxStyle())
         .environment(\.stadiumTheme, stadiumTheme)
         .preferredColorScheme(stadiumTheme ? .dark : nil)

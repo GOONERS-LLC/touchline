@@ -210,11 +210,18 @@ public final class GameState: Codable {
     public var nationalTactics: Tactics? = nil
     /// Where the manager was before opening a player's profile screen.
     var screenBeforeProfile: AppScreen? = nil
+    /// Titles and promotions already decided this season (so each is
+    /// announced once).
+    public var clinchedHonours: [String] = []
+    /// A trophy or promotion for the user's club, waiting to be celebrated.
+    public var celebrationToShow: Celebration? = nil
     /// The last international match the user managed.
     public var lastInternationalReport: InternationalReport? = nil
     /// Rounds of contract-renewal talks with each of the user's players this
     /// session. A player tires of haggling after a few.
     var renewalRounds: [UUID: Int] = [:]
+    /// Each player's latest counter in renewal talks this session.
+    var renewalCounters: [UUID: Int] = [:]
     
     // MARK: - Initializer
     
@@ -367,9 +374,16 @@ public final class GameState: Codable {
             // academy level raises every prospect's ceiling, and level-5
             // academies at all the big clubs flooded the world with stars.
             // The user can still build to level 5 for an edge.
-            state.clubs[idx].trainingFacilityLevel = max(1, min(4, base + Int.random(in: -1...0)))
-            state.clubs[idx].youthAcademyLevel = max(1, min(3, base + Int.random(in: -1...0)))
-            state.clubs[idx].medicalFacilityLevel = max(1, min(5, base + Int.random(in: -1...0)))
+            // A level set in a datapack (anything but the default 2) is kept.
+            if state.clubs[idx].trainingFacilityLevel == 2 {
+                state.clubs[idx].trainingFacilityLevel = max(1, min(4, base + Int.random(in: -1...0)))
+            }
+            if state.clubs[idx].youthAcademyLevel == 2 {
+                state.clubs[idx].youthAcademyLevel = max(1, min(3, base + Int.random(in: -1...0)))
+            }
+            if state.clubs[idx].medicalFacilityLevel == 2 {
+                state.clubs[idx].medicalFacilityLevel = max(1, min(5, base + Int.random(in: -1...0)))
+            }
         }
         for idx in state.clubs.indices {
             state.applyWageInflation(clubIdx: idx, maximumRise: 3.0, targetShare: 0.55)
@@ -443,6 +457,8 @@ public final class GameState: Codable {
         ceremonyToShow = other.ceremonyToShow
         showingSeasonReview = false
         nationalTactics = other.nationalTactics
+        clinchedHonours = other.clinchedHonours
+        celebrationToShow = other.celebrationToShow
         lastInternationalReport = other.lastInternationalReport
         renewalRounds = [:]
     }
@@ -508,6 +524,8 @@ public final class GameState: Codable {
         snapshot.pendingCeremonies = pendingCeremonies
         snapshot.ceremonyToShow = ceremonyToShow
         snapshot.nationalTactics = nationalTactics
+        snapshot.clinchedHonours = clinchedHonours
+        snapshot.celebrationToShow = celebrationToShow
         snapshot.lastInternationalReport = lastInternationalReport
         return snapshot
     }
@@ -1029,6 +1047,8 @@ public final class GameState: Codable {
 
         // 5d. Promotion play-offs follow the last league round, as real matches.
         progressLeaguePlayOffs()
+        // 5e. Titles and promotion are decided as soon as nobody can catch up.
+        checkClinches()
 
         // 6. Check if season has completed
         if season.isSeasonFinished && season.currentPhase != .endOfSeason {
@@ -1125,7 +1145,11 @@ public final class GameState: Codable {
                     category: .award,
                     sender: champ == userClubId ? "The Board" : NewsItem.newsDesk
                 )
-                if champ == userClubId { unlockOwnerMilestone(id: "cup_winner") }
+                if champ == userClubId {
+                    unlockOwnerMilestone(id: "cup_winner")
+                    celebrate(.europe, clubId: champ, title: "EUROPEAN CHAMPIONS!",
+                              subtitle: "\(competition.competition.displayName) \(season.year)")
+                }
             }
 
             europeanCompetitions[idx] = competition
@@ -2148,6 +2172,8 @@ public final class GameState: Codable {
                     )
                     if champion == userClubId {
                         unlockOwnerMilestone(id: "cup_winner")
+                        celebrate(.cup, clubId: champion, title: "CUP WINNERS!",
+                                  subtitle: "\(cup.name) \(season.year)")
                     }
                 }
             } else {
@@ -2863,10 +2889,16 @@ public final class GameState: Codable {
             var rounds = (renewalRounds[playerId] ?? 0) + 1
             if effective < floor * 0.7 { rounds += 1 }
             renewalRounds[playerId] = rounds
-            // He comes down from his asking wage toward his limit as talks go on.
-            let progress = min(1.0, Double(rounds) / 4.0)
-            let counter = max(wage + 1, Self.roundedWage(Int((Double(demand) - (Double(demand) - floor) * progress).rounded(.up))))
-            if rounds > 4 {
+            // He meets you part of the way: from his last figure he comes
+            // about 40% of the way towards your offer (much less for a
+            // lowball), never below what he would really sign for, and
+            // never back up.
+            let lastAsk = Double(renewalCounters[playerId] ?? demand)
+            let give = effective < floor * 0.7 ? 0.1 : 0.4
+            let ask = max(floor, lastAsk - (lastAsk - effective) * give)
+            let counter = min(Int(lastAsk), max(wage + 1, Self.roundedWage(Int(ask.rounded(.up)))))
+            renewalCounters[playerId] = counter
+            if rounds > 7 {
                 return ContractRenewalResult(
                     accepted: false,
                     demandedWage: counter,
@@ -2880,6 +2912,7 @@ public final class GameState: Codable {
             )
         }
         renewalRounds[playerId] = nil
+        renewalCounters[playerId] = nil
         if bonus > 0 {
             clubs[clubIdx].finances.balance -= bonus
             seasonLedger?.wages += bonus
@@ -4483,6 +4516,7 @@ public final class GameState: Codable {
         returnLoanedPlayers()
         // Older saves: leagues no longer in the game leave between seasons.
         pruneLeaguesOutsideTheGame()
+        clinchedHonours = []
         ageManagerContract()
         // Keep three seasons of world transfer history (and all of the user's).
         if let startYear = Int(season.year.prefix(4)) {
@@ -5060,6 +5094,10 @@ public final class GameState: Codable {
                         let winner = playedPlayOffWinner(for: tier, contenders: playOffClubs)
                             ?? simulatePlayOffFinal(for: tier, contenders: playOffClubs)
                         playOffPromotions[tier] = [winner.clubId]
+                        if winner.clubId == userClubId {
+                            celebrate(.promotion, clubId: winner.clubId, title: "PROMOTED!",
+                                      subtitle: "\(tier.displayName) play-off winners \(season.year)")
+                        }
                         addNews(
                             headline: "\(clubName(for: winner.clubId)) Win the \(tier.displayName) Play-Off Final!",
                             body: "\(clubName(for: winner.clubId)) have secured promotion via the play-offs.",
@@ -6267,6 +6305,8 @@ public final class GameState: Codable {
         case pendingCeremonies
         case ceremonyToShow
         case nationalTactics
+        case clinchedHonours
+        case celebrationToShow
         case lastInternationalReport
     }
 
@@ -6327,6 +6367,8 @@ public final class GameState: Codable {
         try container.encode(pendingCeremonies, forKey: .pendingCeremonies)
         try container.encodeIfPresent(ceremonyToShow, forKey: .ceremonyToShow)
         try container.encodeIfPresent(nationalTactics, forKey: .nationalTactics)
+        try container.encode(clinchedHonours, forKey: .clinchedHonours)
+        try container.encodeIfPresent(celebrationToShow, forKey: .celebrationToShow)
         try container.encodeIfPresent(lastInternationalReport, forKey: .lastInternationalReport)
     }
     
@@ -6388,6 +6430,8 @@ public final class GameState: Codable {
         self.pendingCeremonies = try container.decodeIfPresent([AwardCeremony].self, forKey: .pendingCeremonies) ?? []
         self.ceremonyToShow = try container.decodeIfPresent(AwardCeremony.self, forKey: .ceremonyToShow)
         self.nationalTactics = try container.decodeIfPresent(Tactics.self, forKey: .nationalTactics)
+        self.clinchedHonours = try container.decodeIfPresent([String].self, forKey: .clinchedHonours) ?? []
+        self.celebrationToShow = try container.decodeIfPresent(Celebration.self, forKey: .celebrationToShow)
         self.lastInternationalReport = try container.decodeIfPresent(InternationalReport.self, forKey: .lastInternationalReport)
         // Saves written before this flag existed: any save with a user club, or
         // a manager career (possibly between jobs), is a real career.

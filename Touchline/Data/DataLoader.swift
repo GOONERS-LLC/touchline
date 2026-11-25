@@ -31,6 +31,12 @@ public struct RawClubData: Codable {
     public var budget: Int?
     public var wageBudget: Int?
     public var players: [RawPlayerData]
+    /// Editor extras (absent in the bundled data): facilities 1-5 and the
+    /// bank balance.
+    public var trainingLevel: Int? = nil
+    public var academyLevel: Int? = nil
+    public var medicalLevel: Int? = nil
+    public var balance: Int? = nil
 }
 
 public struct RawPlayerData: Codable {
@@ -244,7 +250,7 @@ public final class DataLoader {
             transferBudget: (raw.budget ?? 0) > 0 ? raw.budget! : baseFinances.transferBudget,
             wageBudget: (raw.wageBudget ?? 0) > 0 ? raw.wageBudget! : baseFinances.wageBudget,
             currentWageBill: 0,
-            balance: baseFinances.balance,
+            balance: raw.balance ?? baseFinances.balance,
             tvIncome: baseFinances.tvIncome,
             matchdayIncome: baseFinances.matchdayIncome,
             sponsorshipIncome: baseFinances.sponsorshipIncome,
@@ -276,6 +282,9 @@ public final class DataLoader {
             manager: raw.manager,
             finances: finances
         )
+        if let level = raw.trainingLevel { club.trainingFacilityLevel = max(1, min(5, level)) }
+        if let level = raw.academyLevel { club.youthAcademyLevel = max(1, min(5, level)) }
+        if let level = raw.medicalLevel { club.medicalFacilityLevel = max(1, min(5, level)) }
         club.ensureWageHeadroom()
         return club
     }
