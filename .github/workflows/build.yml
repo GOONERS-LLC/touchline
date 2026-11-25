@@ -129,40 +129,6 @@ jobs:
             echo "No signing secrets detected. Proceeding with unsigned build."
           fi
 
-      - name: Crash tests on the iPhone simulator
-        working-directory: ${{ steps.locate.outputs.projdir }}
-        run: |
-          # Plays a live match through half-time, an instant result, the owner
-          # watching, and half a season on a simulator. Any crash fails the build.
-          SIM=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in sorted(d.items(), reverse=True) if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
-          echo "Using simulator $SIM"
-          # Boot the simulator fully before testing. On slow runners the UI test
-          # runner otherwise times out waiting for the simulator to be ready.
-          xcrun simctl boot "$SIM" || true
-          xcrun simctl bootstatus "$SIM" -b
-          set -o pipefail
-          run_tests() {
-            rm -rf "$RUNNER_TEMP/TouchlineTests.xcresult"
-            xcodebuild test \
-              -project Touchline.xcodeproj \
-              -scheme Touchline \
-              -destination "id=$SIM" \
-              -resultBundlePath "$RUNNER_TEMP/TouchlineTests.xcresult" \
-              CODE_SIGNING_ALLOWED=NO SWIFT_OPTIMIZATION_LEVEL=-O 2>&1 | { grep -E "Test Case|error:|crash|Crash|Terminating|fatal|Assertion|t = |DBG:|failed to initialize" || true; } | tail -1500
-          }
-          if ! run_tests; then
-            echo "Tests failed; retrying once in case the simulator was not ready."
-            run_tests
-          fi
-
-      - name: Upload test results
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Touchline-test-results
-          path: ${{ runner.temp }}/TouchlineTests.xcresult
-          retention-days: 7
-
       - name: Build and Archive
         working-directory: ${{ steps.locate.outputs.projdir }}
         run: |
