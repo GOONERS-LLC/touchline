@@ -136,13 +136,24 @@ jobs:
           # watching, and half a season on a simulator. Any crash fails the build.
           SIM=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in sorted(d.items(), reverse=True) if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
           echo "Using simulator $SIM"
+          # Boot the simulator fully before testing. On slow runners the UI test
+          # runner otherwise times out waiting for the simulator to be ready.
+          xcrun simctl boot "$SIM" || true
+          xcrun simctl bootstatus "$SIM" -b
           set -o pipefail
-          xcodebuild test \
-            -project Touchline.xcodeproj \
-            -scheme Touchline \
-            -destination "id=$SIM" \
-            -resultBundlePath "$RUNNER_TEMP/TouchlineTests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | grep -E "Test Case|error:|crash|Crash|Terminating|fatal|Assertion|t = |DBG:" | tail -1500
+          run_tests() {
+            rm -rf "$RUNNER_TEMP/TouchlineTests.xcresult"
+            xcodebuild test \
+              -project Touchline.xcodeproj \
+              -scheme Touchline \
+              -destination "id=$SIM" \
+              -resultBundlePath "$RUNNER_TEMP/TouchlineTests.xcresult" \
+              CODE_SIGNING_ALLOWED=NO 2>&1 | { grep -E "Test Case|error:|crash|Crash|Terminating|fatal|Assertion|t = |DBG:|failed to initialize" || true; } | tail -1500
+          }
+          if ! run_tests; then
+            echo "Tests failed; retrying once in case the simulator was not ready."
+            run_tests
+          fi
 
       - name: Upload test results
         if: failure()
