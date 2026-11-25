@@ -215,6 +215,9 @@ public final class GameState: Codable {
     public var clinchedHonours: [String] = []
     /// A trophy or promotion for the user's club, waiting to be celebrated.
     public var celebrationToShow: Celebration? = nil
+    /// The season's accounts at the last monthly finance report, so the
+    /// next report can show the month's movements.
+    public var lastFinanceSnapshot: FinanceLedger? = nil
     /// The last international match the user managed.
     public var lastInternationalReport: InternationalReport? = nil
     /// Rounds of contract-renewal talks with each of the user's players this
@@ -459,6 +462,7 @@ public final class GameState: Codable {
         nationalTactics = other.nationalTactics
         clinchedHonours = other.clinchedHonours
         celebrationToShow = other.celebrationToShow
+        lastFinanceSnapshot = other.lastFinanceSnapshot
         lastInternationalReport = other.lastInternationalReport
         renewalRounds = [:]
     }
@@ -526,6 +530,7 @@ public final class GameState: Codable {
         snapshot.nationalTactics = nationalTactics
         snapshot.clinchedHonours = clinchedHonours
         snapshot.celebrationToShow = celebrationToShow
+        snapshot.lastFinanceSnapshot = lastFinanceSnapshot
         snapshot.lastInternationalReport = lastInternationalReport
         return snapshot
     }
@@ -1028,7 +1033,10 @@ public final class GameState: Codable {
         season.currentWeek += 1
 
         // A new month: a month's work on every training ground.
-        if String(season.currentDate.prefix(7)) != monthBefore { applyMonthlyTraining() }
+        if String(season.currentDate.prefix(7)) != monthBefore {
+            applyMonthlyTraining()
+            sendMonthlyFinanceReport()
+        }
 
         // 5b. Advance European competitions (one European matchweek from domestic week 3).
         advanceEuropeanCompetitions()
@@ -6307,6 +6315,7 @@ public final class GameState: Codable {
         case nationalTactics
         case clinchedHonours
         case celebrationToShow
+        case lastFinanceSnapshot
         case lastInternationalReport
     }
 
@@ -6369,6 +6378,7 @@ public final class GameState: Codable {
         try container.encodeIfPresent(nationalTactics, forKey: .nationalTactics)
         try container.encode(clinchedHonours, forKey: .clinchedHonours)
         try container.encodeIfPresent(celebrationToShow, forKey: .celebrationToShow)
+        try container.encodeIfPresent(lastFinanceSnapshot, forKey: .lastFinanceSnapshot)
         try container.encodeIfPresent(lastInternationalReport, forKey: .lastInternationalReport)
     }
     
@@ -6432,6 +6442,7 @@ public final class GameState: Codable {
         self.nationalTactics = try container.decodeIfPresent(Tactics.self, forKey: .nationalTactics)
         self.clinchedHonours = try container.decodeIfPresent([String].self, forKey: .clinchedHonours) ?? []
         self.celebrationToShow = try container.decodeIfPresent(Celebration.self, forKey: .celebrationToShow)
+        self.lastFinanceSnapshot = try? container.decodeIfPresent(FinanceLedger.self, forKey: .lastFinanceSnapshot)
         self.lastInternationalReport = try container.decodeIfPresent(InternationalReport.self, forKey: .lastInternationalReport)
         // Saves written before this flag existed: any save with a user club, or
         // a manager career (possibly between jobs), is a real career.

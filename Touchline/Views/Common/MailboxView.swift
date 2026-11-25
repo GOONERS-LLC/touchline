@@ -37,18 +37,27 @@ public struct MailboxView: View {
                     .disabled(gameState.unreadMailCount == 0)
                     .accessibilityLabel("Mark all messages as read")
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        filterChip(nil, label: "All")
-                        unreadChip
+                // One dropdown for what to show, instead of a row of chips.
+                Menu {
+                    Picker("Show", selection: $filter) {
+                        Text("All messages").tag(NewsCategory?.none)
                         ForEach(NewsCategory.allCases) { category in
-                            filterChip(category, label: category.displayName)
+                            Text(category.displayName).tag(NewsCategory?.some(category))
                         }
                     }
-                    .padding(.vertical, 4)
+                    Toggle("Unread only", isOn: $unreadOnly)
+                } label: {
+                    HStack {
+                        Text("Show: \(filter?.displayName ?? "All messages")\(unreadOnly ? ", unread only" : "")")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down").accessibilityHidden(true)
+                    }
+                    .contentShape(Rectangle())
                 }
+                .accessibilityLabel("Filter messages")
+                .accessibilityValue("\(filter?.displayName ?? "All messages")\(unreadOnly ? ", unread only" : "")")
             }
-            .listRowInsets(EdgeInsets())
 
             if items.isEmpty {
                 ContentUnavailableView(

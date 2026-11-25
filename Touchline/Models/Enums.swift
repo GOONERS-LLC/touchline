@@ -1335,6 +1335,7 @@ public enum NewsCategory: String, Codable, CaseIterable, Identifiable, Hashable 
     case award
     case board
     case general
+    case finance
     
     public var id: String { rawValue }
     
@@ -1349,6 +1350,7 @@ public enum NewsCategory: String, Codable, CaseIterable, Identifiable, Hashable 
         case .award: return "Awards & Accolades"
         case .board: return "Board & Management"
         case .general: return "Club News"
+        case .finance: return "Finances"
         }
     }
     
@@ -1363,6 +1365,7 @@ public enum NewsCategory: String, Codable, CaseIterable, Identifiable, Hashable 
         case .award: return "trophy.fill"
         case .board: return "person.badge.shield.checkmark.fill"
         case .general: return "newspaper.fill"
+        case .finance: return "sterlingsign.circle.fill"
         }
     }
 }

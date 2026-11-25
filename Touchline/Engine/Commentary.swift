@@ -61,8 +61,14 @@ public struct Commentary {
         let type = goalType ?? pickGoalType(scorer: scorer, hasAssist: assister != nil)
         let shortText = "GOAL! \(scorer.displayName) (\(club.name)) \(minute)' [\(homeGoals)-\(awayGoals)]"
         let keeper = opponent.startingXIPlayers.first { $0.primaryPosition == .GK }?.lastName ?? "the keeper"
-        let body = GoalLines.body(type: type, scorer: scorer, assister: assister, keeper: keeper,
+        var body = GoalLines.body(type: type, scorer: scorer, assister: assister, keeper: keeper,
                                   club: club, opponent: opponent, minute: minute)
+        // Free kicks and penalties draw on bigger pools of their own.
+        if type == .curlingFreeKick && Double.random(in: 0..<1) < 0.7 {
+            body = CommentaryLines.freeKickGoal(taker: scorer, keeper: keeper).randomElement()!
+        } else if type == .clinicalPenalty && Double.random(in: 0..<1) < 0.7 {
+            body = CommentaryLines.penaltyGoal(taker: scorer, keeper: keeper).randomElement()!
+        }
         let teamGoals = isHome ? homeGoals : awayGoals
         let oppGoals = isHome ? awayGoals : homeGoals
         let situation = GoalLines.situation(club: club, opponent: opponent, minute: minute,

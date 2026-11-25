@@ -204,6 +204,8 @@ public struct LiveMatchView: View {
     @State private var ticker: Timer?
     @State private var goalFlash: MatchEvent?
     @State private var pane: Pane = .commentary
+    /// Set once Skip / Continue is pressed, so the match is finished once.
+    @State private var finishing = false
     /// Why the match is stopped for the manager (half-time, an injury, or
     /// his own call); nil while it is running.
     @State private var touchline: String?
@@ -526,6 +528,17 @@ public struct LiveMatchView: View {
     private func controls(fixture: Fixture) -> some View {
         VStack(spacing: 10) {
         stopStrip
+        if !inProgress && minute >= finalMinute {
+            // The final whistle has gone: one button, Continue.
+            Button {
+                finish(fixture: fixture)
+            } label: {
+                Text("Continue").font(.headline).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.gfPrimary)
+            .disabled(finishing)
+            .padding(.horizontal, 24)
+        } else {
         HStack(spacing: 10) {
             Menu {
                 ForEach(MatchSettings.Speed.allCases) { speed in
@@ -579,9 +592,11 @@ public struct LiveMatchView: View {
                     .font(.title3.weight(.bold))
             }
             .buttonStyle(.gfOutline)
+            .disabled(finishing)
             .accessibilityLabel("Skip to full time")
         }
         .padding(.horizontal, 24)
+        }
         }
     }
 
@@ -886,10 +901,17 @@ public struct LiveMatchView: View {
         }
     }
 
+    /// Finishes the match once. Simulating the rest can take a moment, and a
+    /// second tap in that time used to finish the match (and the matchweek)
+    /// twice, jumping straight to the player of the match or crashing.
     private func finish(fixture: Fixture) {
+        guard !finishing else { return }
+        finishing = true
         stopTicker()
         touchline = nil
-        if gameState.season.fixtures.contains(where: { $0.id == fixture.id }) {
+        // Let the button show as pressed first; the work follows on the next pass.
+        DispatchQueue.main.async {
+            guard gameState.season.fixtures.contains(where: { $0.id == fixture.id }) else { return }
             gameState.simulateFixture(id: fixture.id)
             minute = finalMinute
             gameState.finishMatchweekAfterUserMatch()

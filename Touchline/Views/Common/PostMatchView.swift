@@ -34,6 +34,10 @@ public struct PostMatchView: View {
                     switch step {
                     case .report:
                         scoreboard(fixture: fixture, res: res, home: home, away: away)
+                            // Read as one line, first: "Full time. Arsenal 2, Chelsea 1. Victory."
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(fullTimeSummary(res: res, home: home, away: away))
+                            .accessibilityAddTraits(.isHeader)
                             .accessibilityFocused($headingFocused)
                         matchFactsCard(res: res, home: home, away: away)
                         ratingsCard(res: res)
@@ -90,6 +94,8 @@ public struct PostMatchView: View {
             }
         }
         .onAppear {
+            // VoiceOver starts on the full-time score at the top.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { headingFocused = true }
             guard !playedVerdict,
                   let fixture = gameState.activeMatchFixture,
                   let res = fixture.result,
@@ -111,6 +117,21 @@ public struct PostMatchView: View {
     }
 
     // MARK: - Scoreboard
+
+    /// "Full time. Arsenal 2, Chelsea 1. Victory. Goals: Saka 23', Havertz 61'; Palmer 80'."
+    private func fullTimeSummary(res: MatchResult, home: Club, away: Club) -> String {
+        let outcome = gameState.userClubId.map { res.outcomeLetter(for: $0) } ?? "-"
+        let verdict = outcome == "W" ? " Victory." : outcome == "D" ? " Draw." : outcome == "L" ? " Defeat." : ""
+        func scorers(_ home: Bool) -> String {
+            res.goalEvents.filter { $0.isHomeTeam == home }
+                .map { "\($0.playerId.flatMap { gameState.player(withId: $0)?.player.lastName } ?? "Goal") \($0.minute)'" }
+                .joined(separator: ", ")
+        }
+        let goals = res.homeGoals + res.awayGoals > 0
+            ? " Goals: \([scorers(true), scorers(false)].filter { !$0.isEmpty }.joined(separator: "; "))."
+            : ""
+        return "Full time. \(home.name) \(res.homeGoals), \(away.name) \(res.awayGoals).\(verdict)\(goals)"
+    }
 
     /// Crests and names either side of a big score, with each side's scorers
     /// listed under its name.
@@ -630,15 +651,7 @@ public struct PostMatchView: View {
                     .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .foregroundStyle(.white)
             }
-            Button {
-                gameState.closeFinishedMatch()
-                gameState.currentScreen = .matchHistory
-            } label: {
-                Label("Fixtures & Results", systemImage: "calendar")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(12)
-            }
+            // Just one button once the match is over: Continue.
         }
         .padding(.top, 4)
     }

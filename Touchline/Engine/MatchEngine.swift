@@ -881,6 +881,16 @@ public struct MatchEngine {
 
         if Double.random(in: 0..<1) < Tuning.offsidePerMinute * offsideMod {
             if attackerIsHome { state.home.offsides += 1 } else { state.away.offsides += 1 }
+            // Some offsides are worth a line of commentary.
+            let side = attackerIsHome ? state.home : state.away
+            if Double.random(in: 0..<1) < 0.3,
+               let runner = side.active.filter({ $0.isOnPitch && $0.slot.category != .goalkeeper && $0.slot.category != .defender }).randomElement() {
+                let club = attackerIsHome ? homeClub : awayClub
+                state.events.append(MatchEvent(minute: minute, type: .commentary, clubId: club.id, playerId: runner.player.id,
+                                               shortText: "Offside: \(runner.player.displayName) \(minute)'",
+                                               detailText: CommentaryLines.offside(attacker: runner.player, club: club).randomElement()!,
+                                               isHomeTeam: attackerIsHome))
+            }
         }
 
         // Counter-attack: a side committed forward leaves space behind.
@@ -1044,6 +1054,16 @@ public struct MatchEngine {
         let gkIdx = keeperIndex(defSide)
 
         if Double.random(in: 0..<1) < pGoal {
+            // VAR: now and then the goal is ruled out (offside, handball, a
+            // foul in the build-up).
+            if Double.random(in: 0..<1) < 0.05 {
+                attSide.shotsOnTarget += 1
+                let line = CommentaryLines.varGoalDisallowed(scorer: shooter, club: attackingClub).randomElement()!
+                state.events.append(MatchEvent(minute: minute, type: .varDecision, clubId: attackingClub.id, playerId: shooter.id,
+                                               shortText: "VAR: \(shooter.displayName)'s goal disallowed \(minute)'",
+                                               detailText: line, isHomeTeam: attackerIsHome))
+                return
+            }
             attSide.goals += 1
             attSide.shotsOnTarget += 1
             attSide.active[shooterIdx].goals += 1
@@ -1063,6 +1083,12 @@ public struct MatchEngine {
             state.events.append(MatchEvent(minute: minute, type: .goal, clubId: attackingClub.id, playerId: shooter.id,
                                            assistPlayerId: assister?.id, shortText: text.short, detailText: text.detail,
                                            isHomeTeam: attackerIsHome))
+            if Double.random(in: 0..<1) < 0.12 {
+                state.events.append(MatchEvent(minute: minute, type: .varDecision, clubId: attackingClub.id, playerId: shooter.id,
+                                               shortText: "VAR check: goal stands \(minute)'",
+                                               detailText: CommentaryLines.varGoalStands(scorer: shooter).randomElement()!,
+                                               isHomeTeam: attackerIsHome))
+            }
             return
         }
 
@@ -1123,7 +1149,16 @@ public struct MatchEngine {
         guard let takerIdx = onPitch.first(where: { attSide.active[$0].player.id == attackingClub.tactics.cornerTaker })
                 ?? onPitch.max(by: { attSide.active[$0].player.attributes.crossing < attSide.active[$1].player.attributes.crossing }) else { return }
         // Most corners come to nothing; about three in ten produce a shot.
-        guard Double.random(in: 0..<1) < 0.30, let headerIdx = pickShooter(attSide, header: true), headerIdx != takerIdx else { return }
+        guard Double.random(in: 0..<1) < 0.30, let headerIdx = pickShooter(attSide, header: true), headerIdx != takerIdx else {
+            if Double.random(in: 0..<1) < 0.3 {
+                let taker = attSide.active[takerIdx].player
+                state.events.append(MatchEvent(minute: minute, type: .corner, clubId: attackingClub.id, playerId: taker.id,
+                                               shortText: "Corner: \(attackingClub.name) \(minute)'",
+                                               detailText: CommentaryLines.cornerCleared(taker: taker, defending: defendingClub).randomElement()!,
+                                               isHomeTeam: attackerIsHome))
+            }
+            return
+        }
         let taker = attSide.active[takerIdx].player
         let target = attSide.active[headerIdx].player
         let delivery = Double(taker.attributes.crossing) / 70.0
@@ -1272,7 +1307,23 @@ public struct MatchEngine {
         if defendingIsHome { state.home = side } else { state.away = side }
 
         if isPenalty {
-            penalty(kickerIsHome: !defendingIsHome, state: &state, homeClub: homeClub, awayClub: awayClub, minute: minute)
+            // VAR looks at most penalties: some are overturned, some confirmed.
+            let roll = Double.random(in: 0..<1)
+            let kickers = defendingIsHome ? awayClub : homeClub
+            if roll < 0.15 {
+                state.events.append(MatchEvent(minute: minute, type: .varDecision, clubId: kickers.id, playerId: victim?.id,
+                                               shortText: "VAR: penalty overturned \(minute)'",
+                                               detailText: CommentaryLines.varPenaltyOverturned(victim: victim, club: foulingClub).randomElement()!,
+                                               isHomeTeam: !defendingIsHome))
+            } else {
+                if roll < 0.4 {
+                    state.events.append(MatchEvent(minute: minute, type: .varDecision, clubId: kickers.id, playerId: victim?.id,
+                                                   shortText: "VAR: penalty confirmed \(minute)'",
+                                                   detailText: CommentaryLines.varPenaltyConfirmed(victim: victim).randomElement()!,
+                                                   isHomeTeam: !defendingIsHome))
+                }
+                penalty(kickerIsHome: !defendingIsHome, state: &state, homeClub: homeClub, awayClub: awayClub, minute: minute)
+            }
         } else if isDangerousFreeKick {
             directFreeKick(attackerIsHome: !defendingIsHome, state: &state, homeClub: homeClub, awayClub: awayClub, minute: minute, keeper: keeper)
         }
@@ -1304,6 +1355,12 @@ public struct MatchEngine {
                                    victim: victim)
         events.append(MatchEvent(minute: minute, type: secondYellow ? .secondYellow : .redCard, clubId: club.id, playerId: player.id,
                                  shortText: text.short, detailText: text.detail, isHomeTeam: isHome))
+        if !secondYellow && Double.random(in: 0..<1) < 0.35 {
+            events.append(MatchEvent(minute: minute, type: .varDecision, clubId: club.id, playerId: player.id,
+                                     shortText: "VAR: red card confirmed \(minute)'",
+                                     detailText: CommentaryLines.varRedConfirmed(player: player).randomElement()!,
+                                     isHomeTeam: isHome))
+        }
     }
 
     private static func bookForTimeWasting(_ side: inout SideState, club: Club, isHome: Bool, minute: Int, events: inout [MatchEvent]) {
@@ -1358,8 +1415,8 @@ public struct MatchEngine {
             let shortText = saved ? "PENALTY SAVED! \(gk.displayName) denies \(taker.displayName)! \(minute)'"
                                   : "PENALTY MISSED! \(taker.displayName) puts it wide! \(minute)'"
             let detail = saved
-                ? "\(taker.fullName) goes to the bottom corner, but \(gk.fullName) guesses right and keeps it out!"
-                : "\(taker.fullName) leans back and drags the spot kick past the post. A huge let-off for \(defendingClub.name)."
+                ? CommentaryLines.penaltySaved(taker: taker, keeper: gk).randomElement()!
+                : CommentaryLines.penaltyMissed(taker: taker, club: kickingClub).randomElement()! + " A huge let-off for \(defendingClub.name)."
             state.events.append(MatchEvent(minute: minute, type: .penaltyMissed, clubId: kickingClub.id, playerId: taker.id,
                                            shortText: shortText, detailText: detail, isHomeTeam: kickerIsHome))
         }

@@ -65,6 +65,72 @@ extension GameState {
         )
     }
 
+    // MARK: - Monthly finance report
+
+    /// A statement for the month just gone: every line of income and
+    /// spending, the season so far, and where the club stands now.
+    func sendMonthlyFinanceReport() {
+        guard let club = userClub, let ledger = seasonLedger else { return }
+        // A new season's accounts start again from zero.
+        let previous = lastFinanceSnapshot.flatMap { $0.startingBalance == ledger.startingBalance ? $0 : nil }
+            ?? FinanceLedger(startingBalance: ledger.startingBalance)
+        lastFinanceSnapshot = ledger
+
+        func money(_ v: Int) -> String { Player.formatCurrency(v) }
+        func line(_ name: String, _ now: Int, _ before: Int) -> String? {
+            let month = now - before
+            return month == 0 ? nil : "\(name): \(money(month))"
+        }
+        let income = [
+            line("Broadcasting", ledger.broadcasting, previous.broadcasting),
+            line("Commercial", ledger.commercial, previous.commercial),
+            line("Merchandise", ledger.merchandise, previous.merchandise),
+            line("Matchday", ledger.matchday, previous.matchday),
+            line("Prize money", ledger.prizeMoney, previous.prizeMoney),
+            line("Player sales", ledger.playerSales, previous.playerSales),
+            line("Owner investment", ledger.ownerInvestment, previous.ownerInvestment),
+            line("Loans received", ledger.loansReceived, previous.loansReceived)
+        ].compactMap { $0 }
+        let spending = [
+            line("Wages", ledger.wages, previous.wages),
+            line("Transfers and facilities", ledger.transfers, previous.transfers),
+            line("Loan repayments", ledger.loanRepayments, previous.loanRepayments)
+        ].compactMap { $0 }
+        let monthIncome = ledger.recordedIncome - previous.recordedIncome
+        let monthSpending = ledger.recordedExpenses - previous.recordedExpenses
+        let net = monthIncome - monthSpending
+
+        let f = club.finances
+        let wageShare = f.wageBudget > 0 ? Int(Double(f.currentWageBill) / Double(f.wageBudget) * 100) : 0
+        var body: [String] = []
+        body.append("INCOME THIS MONTH: \(money(monthIncome))")
+        body.append(contentsOf: income.map { "• \($0)" })
+        body.append("")
+        body.append("SPENDING THIS MONTH: \(money(monthSpending))")
+        body.append(contentsOf: spending.map { "• \($0)" })
+        body.append("")
+        body.append("NET FOR THE MONTH: \(net >= 0 ? "+" : "")\(money(net))")
+        body.append("")
+        body.append("SEASON SO FAR")
+        body.append("• Income: \(money(ledger.recordedIncome))")
+        body.append("• Spending: \(money(ledger.recordedExpenses))")
+        body.append("• Operating profit (football income less wages): \(money(ledger.operatingProfit))")
+        body.append("")
+        body.append("WHERE WE STAND")
+        body.append("• Bank balance: \(money(f.balance)) (\(money(ledger.startingBalance)) at the start of the season)")
+        body.append("• Transfer budget: \(money(f.transferBudget))")
+        body.append("• Wage bill: \(money(f.currentWageBill))/w, \(wageShare)% of the recommended \(money(f.wageBudget))/w")
+        if userInstallmentsOwed > 0 {
+            body.append("• Transfer installments still to pay: \(money(userInstallmentsOwed))")
+        }
+        addNews(
+            headline: "Monthly Finance Report: \(net >= 0 ? "Up" : "Down") \(money(abs(net)))",
+            body: body.joined(separator: "\n"),
+            category: .finance,
+            sender: "Finance Director"
+        )
+    }
+
     // MARK: - Facilities
 
     public func facilityLevel(_ kind: FacilityKind) -> Int {

@@ -209,7 +209,6 @@ public struct DashboardView: View {
                         tile("News", "newspaper.fill", .news)
                         tile("Jobs", "briefcase.fill", .jobOffers)
                         tile("Settings", "gearshape.fill", .settings)
-                        tile("Menu", "house.fill", .mainMenu)
                     }
                 } else {
                     NextMatchLine(verb: "Play")
@@ -245,6 +244,17 @@ public struct DashboardView: View {
         .stadiumBackground()
         .navigationTitle(gameState.userClub?.name ?? "Home")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // The main menu lives at the top left.
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    gameState.currentScreen = .mainMenu
+                } label: {
+                    Label("Main Menu", systemImage: "line.3.horizontal")
+                }
+                .accessibilityLabel("Main menu")
+            }
+        }
         .fullScreenCover(isPresented: Binding(get: { gameState.showingSeasonReview },
                                               set: { gameState.showingSeasonReview = $0 })) {
             if let review = gameState.lastSeasonReview {
@@ -300,31 +310,39 @@ public struct DashboardView: View {
         }
     }
 
+    /// A compact Home: the everyday screens, with the rest grouped under
+    /// Competitions, Club and Manager.
     private var managerTiles: some View {
         HubGrid {
             Group {
                 tile("Inbox", "tray.full.fill", .mailbox, badge: gameState.unreadMailCount)
-                tile("News", "newspaper.fill", .news)
                 tile("Squad", "person.3.fill", .squad)
-                tile("Training", "figure.run", .training)
-                tile("Table", "list.number", .standings)
-                tile("Fixtures", "calendar", .matchHistory)
                 tile("Transfers", "arrow.left.arrow.right", .transferHub)
-            }
-            Group {
-                tile("Finances", "sterlingsign.circle.fill", .finances)
-                tile("Staff", "person.2.badge.gearshape.fill", .staff)
-                tile("Youth", "figure.and.child.holdinghands", .youthAcademy)
-                NavigationLink { ManagerStatusView() } label: { HubTile(title: "Board", icon: "building.columns.fill") }
-                // Europe can be followed whether or not your club is in it.
-                if !gameState.europeanCompetitions.isEmpty { tile("Europe", "star.circle.fill", .europeanCompetitions) }
-                tile("History", "trophy.fill", .history)
-                tile("Profile", "person.crop.circle", .managerProfile)
-            }
-            Group {
-                tile(gameState.jobOffers.isEmpty ? "Jobs" : "Jobs (\(gameState.jobOffers.count))", "briefcase.fill", .jobOffers)
-                tile("Settings", "gearshape.fill", .settings)
-                tile("Menu", "house.fill", .mainMenu)
+                tile("Training", "figure.run", .training)
+                NavigationLink {
+                    HubGroupView(title: "Competitions", rows: [
+                        .screen("League Table", "list.number", .standings),
+                        .screen("Fixtures & Results", "calendar", .matchHistory),
+                        .screen("Europe", "star.circle.fill", .europeanCompetitions),
+                        .screen("News", "newspaper.fill", .news),
+                        .screen("History", "trophy.fill", .history)
+                    ])
+                } label: { HubTile(title: "Competitions", icon: "list.number") }
+                NavigationLink {
+                    HubGroupView(title: "Club", rows: [
+                        .screen("Finances", "sterlingsign.circle.fill", .finances),
+                        .screen("Staff", "person.2.badge.gearshape.fill", .staff),
+                        .screen("Youth Academy", "figure.and.child.holdinghands", .youthAcademy),
+                        .board
+                    ])
+                } label: { HubTile(title: "Club", icon: "building.2.fill") }
+                NavigationLink {
+                    HubGroupView(title: "Manager", rows: [
+                        .screen("My Profile", "person.crop.circle", .managerProfile),
+                        .screen(gameState.jobOffers.isEmpty ? "Job Offers" : "Job Offers (\(gameState.jobOffers.count))", "briefcase.fill", .jobOffers),
+                        .screen("Settings", "gearshape.fill", .settings)
+                    ])
+                } label: { HubTile(title: "Manager", icon: "person.crop.circle", badge: gameState.jobOffers.count) }
             }
         }
     }
@@ -460,6 +478,43 @@ struct ManagerStatusView: View {
         }
         .stadiumBackground()
         .navigationTitle("Board")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// A short list of related screens, opened from a Home tile.
+struct HubGroupView: View {
+    @Environment(GameState.self) private var gameState
+
+    enum Row {
+        case screen(String, String, AppScreen)
+        case board
+    }
+
+    let title: String
+    let rows: [Row]
+
+    var body: some View {
+        List {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                switch row {
+                case .screen(let name, let icon, let screen):
+                    Button {
+                        gameState.currentScreen = screen
+                    } label: {
+                        Label(name, systemImage: icon)
+                    }
+                case .board:
+                    NavigationLink {
+                        ManagerStatusView()
+                    } label: {
+                        Label("Board", systemImage: "building.columns.fill")
+                    }
+                }
+            }
+        }
+        .stadiumBackground()
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
     }
 }
